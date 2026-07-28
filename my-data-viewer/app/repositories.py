@@ -120,8 +120,13 @@ class DatasourceRepository:
     def list_indexes(self, datasource: Datasource, table: str) -> List[IndexInfo]:
         return drivers.get_driver(datasource).list_indexes(table)
 
-    def execute_sql(self, datasource: Datasource, sql: str) -> QueryResult:
-        return drivers.get_driver(datasource).execute_sql(sql)
+    def test_connection(self, datasource: Datasource) -> None:
+        drivers.get_driver(datasource).test_connection()
+
+    def execute_sql(
+        self, datasource: Datasource, sql: str, params: Optional[list] = None
+    ) -> QueryResult:
+        return drivers.get_driver(datasource).execute_sql(sql, params)
 
 
 class ProfileRepository:

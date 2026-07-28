@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Sequence
 
 import duckdb
 
@@ -54,10 +54,15 @@ class CsvDriver:
     def list_indexes(self, table: str) -> List[IndexInfo]:
         return []  # a CSV file has no indexes
 
-    def execute_sql(self, sql: str) -> QueryResult:
+    def test_connection(self) -> None:
+        """Raises if the CSV can't be opened/parsed by DuckDB."""
+        con = self._connect()
+        con.close()
+
+    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
         con = self._connect()
         try:
-            cursor = con.execute(sql)
+            cursor = con.execute(sql, params or [])
             columns = [col[0] for col in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
             return QueryResult(columns=columns, rows=rows)

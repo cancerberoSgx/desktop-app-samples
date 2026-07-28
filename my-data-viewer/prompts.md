@@ -143,8 +143,41 @@ add .github/workflows/my-data-viewer-build.yml so I can build my-data-viewer bin
 
 
 
+# typing
+in my-data-viewer
+make sure all code function declarations arguments are well typed
+
+
+# data-explore view
+in my-data-viewer
+ * in the  datasources screen, there's a "connect" action button which will connect with the datasource and then display the data-explore screen if connection is successful or an error modal if connection fails. 
+ * for csv datasources the connection is checking it can be loaded using duckdb
+ * the data-explore screen displays: 
+   * tables defined in the datasource, in the case of a csv file is just the file name as unique table
+   * when the table is clicked, it displays a screen with three tabs: 
+      * table fields (display a table with selected table's fields and their type and constraints). For csv , display columns as fields all with type "text"
+      * table data view: it displays the results of executing a select columns... from table selected_table WHERE... limit .. offset..
+        * the table data view displays the table's rows, column names, in a data-table widget similar to this implementation wxwidgets-test1/app/pages.py class TablePage
+        * user can sort by column clicking the columns
+        * user can filter by column, support exact match sql value match (=) and sql text %like% match
+        * user can paginate data (page size, current page, total records) in a pagination component displayed both ath the top and bottom of the data-table
+
+
 
 FUTURE
-p2
- * in my-data-viewer datasources table have an action column with an icon button "connect"
- * when clicked the main datasource-inspector screen 
+
+
+when the app starts, it will remembers the last profile and connection used and will automatically display that data-explore view if any. you should use the settings table to maintain this status this: my-data-viewer/app/db/migrations/0004_create_settings.sql
+
+when creating a new csv datasource, the name is automatically filled from the csv file name if not defined. the creation dialog It should never fail because of "datasource name is mandatory"
+
+
+
+
+copy paste data table
+copy & paste from Edit menu
+in data-table, if I click any place of a row I can select the entire row and in that situation If I eight click 
+
+modularize drivers
+ideally: distribute smaller binaries without ducjkdb for people who just need postgres and vs versa
+actual: make sure we don't load duckdb in memory / speed if not needed and same with other drivers.

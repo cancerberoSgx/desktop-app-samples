@@ -30,6 +30,7 @@ class Profile:
 class ColumnInfo:
     name: str
     type: str
+    constraints: str = ""
 
 
 @dataclass

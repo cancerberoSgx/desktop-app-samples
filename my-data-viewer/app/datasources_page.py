@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import wx
 
@@ -19,10 +19,17 @@ def _details_for(datasource: Datasource) -> str:
 class DatasourcesPage(wx.Panel):
     """CRUD screen for datasources: filter by name/type, create, edit, delete."""
 
-    def __init__(self, parent: wx.Window, repository: DatasourceRepository, profile_id: int) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        repository: DatasourceRepository,
+        profile_id: int,
+        on_connected: Callable[[Datasource], None],
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
         self._profile_id = profile_id
+        self._on_connected = on_connected
         self._datasources: List[Datasource] = []
 
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -44,9 +51,11 @@ class DatasourcesPage(wx.Panel):
         self._new_btn = wx.Button(self, label="New...")
         self._edit_btn = wx.Button(self, label="Edit...")
         self._delete_btn = wx.Button(self, label="Delete")
+        self._connect_btn = wx.Button(self, label="Connect")
         toolbar.Add(self._new_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._edit_btn, 0, wx.RIGHT, 8)
-        toolbar.Add(self._delete_btn, 0)
+        toolbar.Add(self._delete_btn, 0, wx.RIGHT, 8)
+        toolbar.Add(self._connect_btn, 0)
 
         outer.Add(toolbar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
@@ -64,6 +73,7 @@ class DatasourcesPage(wx.Panel):
         self._new_btn.Bind(wx.EVT_BUTTON, self._on_new)
         self._edit_btn.Bind(wx.EVT_BUTTON, self._on_edit)
         self._delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
+        self._connect_btn.Bind(wx.EVT_BUTTON, self._on_connect)
         self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_edit)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
@@ -101,6 +111,7 @@ class DatasourcesPage(wx.Panel):
         has_selection = self._selected_datasource() is not None
         self._edit_btn.Enable(has_selection)
         self._delete_btn.Enable(has_selection)
+        self._connect_btn.Enable(has_selection)
 
     def _on_filter_changed(self, event: wx.CommandEvent) -> None:
         self.reload()
@@ -141,3 +152,19 @@ class DatasourcesPage(wx.Panel):
         if confirm == wx.YES:
             self._repository.delete(datasource.id)
             self.reload()
+
+    def _on_connect(self, event: wx.CommandEvent) -> None:
+        datasource = self._selected_datasource()
+        if datasource is None:
+            return
+        try:
+            self._repository.test_connection(datasource)
+        except Exception as exc:
+            wx.MessageBox(
+                f'Could not connect to "{datasource.name}":\n\n{exc}',
+                "Connection failed",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+            return
+        self._on_connected(datasource)

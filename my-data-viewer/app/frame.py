@@ -1,15 +1,18 @@
 import wx
 
+from app.data_explore_page import DataExplorePage
 from app.datasources_page import DatasourcesPage
 from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
+from app.models import Datasource
 from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
 from app.repositories import DatasourceRepository, ProfileRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
 
 DEFAULT_PROFILE_NAME = "default"
+DATASOURCES_SIDEBAR_INDEX = 1
 
 
 class MainFrame(wx.Frame):
@@ -43,11 +46,21 @@ class MainFrame(wx.Frame):
             on_profiles_changed=self._on_profiles_changed,
         )
         self.datasources_page = DatasourcesPage(
-            self.book, self.datasource_repository, self.active_profile_id
+            self.book,
+            self.datasource_repository,
+            self.active_profile_id,
+            on_connected=self._on_datasource_connected,
         )
         self.book.AddPage(self.profiles_page, "Profiles")
         self.book.AddPage(self.datasources_page, "Datasources")
         self.book.AddPage(AboutPage(self.book), "About")
+
+        # Not a sidebar destination - reached only via "Connect" on Datasources.
+        self.data_explore_page = DataExplorePage(
+            self.book, self.datasource_repository, on_back=self._go_to_datasources
+        )
+        self.book.AddPage(self.data_explore_page, "Data Explore")
+        self.data_explore_page_index = self.book.GetPageCount() - 1
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
 
@@ -91,6 +104,19 @@ class MainFrame(wx.Frame):
             self._on_activate_profile(profiles[0].id)
         else:
             self.profiles_page.reload()
+
+    # ------------------------------------------------------------------
+    # Datasource connect / Data Explore navigation
+    # ------------------------------------------------------------------
+    def _on_datasource_connected(self, datasource: Datasource) -> None:
+        self.data_explore_page.load_datasource(datasource)
+        self.book.ChangeSelection(self.data_explore_page_index)
+        self.SetStatusText(f"Connected to: {datasource.name}")
+
+    def _go_to_datasources(self) -> None:
+        self.sidebar.select(DATASOURCES_SIDEBAR_INDEX)
+        self.book.ChangeSelection(DATASOURCES_SIDEBAR_INDEX)
+        self.SetStatusText("Viewing: Datasources")
 
     # ------------------------------------------------------------------
     # Menu bar
