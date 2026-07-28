@@ -134,6 +134,11 @@ tasks:
  * in the UI, at the top of the sidebar add a "profiles" option, which will show a "profiles" screen which, list all profiles, allow to delete, update and create new profiles. Also allow to "activate" a profile, in which case the app will only display connections of that profile.
 
 
+
+
+FUTURE:
+add .github/workflows/my-data-viewer-build.yml so I can build my-data-viewer binaries. Use the existing .github/workflows/wxwidgets-test1-build.yml as a template since it's working fine
+
 p2
  * in my-data-viewer datasources table have an action column with an icon button "connect"
  * when clicked the main datasource-inspector screen 
