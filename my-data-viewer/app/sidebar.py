@@ -2,7 +2,6 @@ import wx
 
 # (label, wx.ArtProvider stock art id, page index)
 SIDEBAR_ITEMS = [
-    ("Home", wx.ART_GO_HOME),
     ("Datasources", wx.ART_HARDDISK),
     ("About", wx.ART_INFORMATION),
 ]

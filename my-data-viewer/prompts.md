@@ -75,5 +75,65 @@ its operations behave as: list all tables -> just the csv file name; list column
 
 
 
-
 ---
+
+# building mydataviewer exec issues
+
+i'm having trouble executing dataviewer executable /home/sg/sources/desktop-apps-samples/my-data-viewer
+
+I've tried to build it using these commands but executables won't work
+
+pyinstaller --noconfirm --windowed --name mydataviewer main.py
+
+pyinstaller --noconfirm mydataviewer.spec
+
+the error I'm having is:
+
+executing wxwidgets-test1/build/wxdemo/mydataviewer errs with:
+
+[PYI-1643785:ERROR] Failed to load Python shared library '/home/sg/sources/desktop-apps-samples/my-data-viewer/build/mydataviewer/_internal/libpython3.14.so.1.0': /home/sg/sources/desktop-apps-samples/my-data-viewer/build/mydataviewer/_internal/libpython3.14.so.1.0: cannot open shared object file: No such file or directory
+
+
+executing my-data-viewer/dist/mydataviewer/mydataviewer gives error:
+Traceback (most recent call last):
+  File "main.py", line 3, in <module>
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "app/frame.py", line 3, in <module>
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "app/datasources_page.py", line 5, in <module>
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "app/repositories.py", line 4, in <module>
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "app/drivers.py", line 4, in <module>
+ModuleNotFoundError: No module named 'duckdb'
+[PYI-1646256:ERROR] Failed to execute script 'main' due to unhandled exception!
+
+
+can you help diagnosting and fixing the error?
+---
+
+
+# better UI
+ * in my-data-viewer/ unify current sidebar options "About" and "Home" into a single one  "About" which is the last one
+
+
+
+# profiles
+
+context:
+in my-data-viewer
+end users can pick a profile, a profile contains all the funcitonlaity like its own datasources, scripts, etc (all the concepts "belong" to a profile).  At the beggining if there are no profiles in DB, user is asked to create a profile by giving a name.
+All their connections, views, queries, etc are associated to a profile
+
+tasks:
+ * in db: create profiles db table id, name, createdAt, updatedAt
+ * in db datasources table now have a FK to profiles
+ * create profileRepository with CRUD operations
+ * Create a settings DB table to store the current "profile" so when the app opens the last profile is automatically loaded.
+ * in the UI if there's no profile, automatically create a new profile named "default" and use that one
+ * in the UI, at the top of the sidebar add a "profiles" option, which will show a "profiles" screen which, list all profiles, allow to delete, update and create new profiles. Also allow to "activate" a profile, in which case the app will only display connections of that profile.
+
+
+p2
+ * in my-data-viewer datasources table have an action column with an icon button "connect"
+ * when clicked the main datasource-inspector screen 

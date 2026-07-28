@@ -86,7 +86,10 @@ pip install pyinstaller
 ```
 
 ```bash
-pyinstaller --noconfirm mydataviewer.spec
+pyinstaller --noconfirm --windowed --name mydataviewer main.py
+
+
+# pyinstaller --noconfirm mydataviewer.spec
 ```
 
 The spec file bundles `app/db/migrations/*.sql` as data files so the app can run

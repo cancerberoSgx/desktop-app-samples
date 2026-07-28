@@ -4,7 +4,7 @@ from app.datasources_page import DatasourcesPage
 from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
-from app.pages import AboutPage, HomePage
+from app.pages import AboutPage
 from app.repositories import DatasourceRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
 
@@ -28,7 +28,6 @@ class MainFrame(wx.Frame):
         root_sizer.Add(self.sidebar, 0, wx.EXPAND)
 
         self.book = wx.Simplebook(root_panel)
-        self.book.AddPage(HomePage(self.book), "Home")
         self.book.AddPage(DatasourcesPage(self.book, self.repository), "Datasources")
         self.book.AddPage(AboutPage(self.book), "About")
 
