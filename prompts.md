@@ -1,0 +1,1 @@
+I've just commited this parent folder as a github repository. Can you add a configuration for gitactions that builds the binaries for wxwidgets-test1 for platforms linux, windows and macos ? Is it possible ? 
