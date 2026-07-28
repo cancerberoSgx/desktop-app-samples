@@ -17,9 +17,10 @@ def _details_for(datasource):
 class DatasourcesPage(wx.Panel):
     """CRUD screen for datasources: filter by name/type, create, edit, delete."""
 
-    def __init__(self, parent, repository: DatasourceRepository):
+    def __init__(self, parent, repository: DatasourceRepository, profile_id: int):
         super().__init__(parent)
         self._repository = repository
+        self._profile_id = profile_id
         self._datasources = []
 
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -67,12 +68,18 @@ class DatasourcesPage(wx.Panel):
 
         self.reload()
 
+    def set_profile(self, profile_id: int):
+        self._profile_id = profile_id
+        self.reload()
+
     def reload(self):
         name_contains = self._name_filter.GetValue().strip() or None
         type_index = self._type_filter.GetSelection()
         type_ = None if type_index <= 0 else self._type_filter.GetString(type_index)
 
-        self._datasources = self._repository.list(name_contains=name_contains, type_=type_)
+        self._datasources = self._repository.list(
+            self._profile_id, name_contains=name_contains, type_=type_
+        )
 
         self._list.DeleteAllItems()
         for row, datasource in enumerate(self._datasources):
@@ -103,7 +110,9 @@ class DatasourcesPage(wx.Panel):
     def _on_new(self, event):
         dlg = DatasourceDialog(self)
         if dlg.ShowModal() == wx.ID_OK:
-            self._repository.create(dlg.get_datasource())
+            datasource = dlg.get_datasource()
+            datasource.profile_id = self._profile_id
+            self._repository.create(datasource)
             self.reload()
         dlg.Destroy()
 

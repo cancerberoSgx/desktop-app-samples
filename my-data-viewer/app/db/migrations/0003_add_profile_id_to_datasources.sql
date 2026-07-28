@@ -1,0 +1,1 @@
+ALTER TABLE datasources ADD COLUMN profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE;

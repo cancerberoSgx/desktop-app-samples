@@ -5,8 +5,11 @@ from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
 from app.pages import AboutPage
-from app.repositories import DatasourceRepository
+from app.profiles_page import ProfilesPage
+from app.repositories import DatasourceRepository, ProfileRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
+
+DEFAULT_PROFILE_NAME = "default"
 
 
 class MainFrame(wx.Frame):
@@ -15,7 +18,11 @@ class MainFrame(wx.Frame):
 
         conn = get_connection()
         run_migrations(conn, migrations_dir())
-        self.repository = DatasourceRepository(conn)
+        self.profile_repository = ProfileRepository(conn)
+        self.settings_repository = SettingsRepository(conn)
+        self.datasource_repository = DatasourceRepository(conn)
+
+        self.active_profile_id = self._bootstrap_active_profile()
 
         self._build_menu_bar()
         self.CreateStatusBar()
@@ -28,7 +35,18 @@ class MainFrame(wx.Frame):
         root_sizer.Add(self.sidebar, 0, wx.EXPAND)
 
         self.book = wx.Simplebook(root_panel)
-        self.book.AddPage(DatasourcesPage(self.book, self.repository), "Datasources")
+        self.profiles_page = ProfilesPage(
+            self.book,
+            self.profile_repository,
+            get_active_profile_id=lambda: self.active_profile_id,
+            on_activate=self._on_activate_profile,
+            on_profiles_changed=self._on_profiles_changed,
+        )
+        self.datasources_page = DatasourcesPage(
+            self.book, self.datasource_repository, self.active_profile_id
+        )
+        self.book.AddPage(self.profiles_page, "Profiles")
+        self.book.AddPage(self.datasources_page, "Datasources")
         self.book.AddPage(AboutPage(self.book), "About")
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
@@ -36,6 +54,43 @@ class MainFrame(wx.Frame):
         root_panel.SetSizer(root_sizer)
 
         self.Centre()
+
+    # ------------------------------------------------------------------
+    # Profile bootstrap / switching
+    # ------------------------------------------------------------------
+    def _bootstrap_active_profile(self) -> int:
+        """Ensure at least one profile exists, then resolve which one is
+        active: whatever was last stored in settings, falling back to the
+        first profile if that one no longer exists."""
+        profiles = self.profile_repository.list()
+        if not profiles:
+            profiles = [self.profile_repository.create(DEFAULT_PROFILE_NAME)]
+
+        stored_id = self.settings_repository.get_current_profile_id()
+        active = next((p for p in profiles if p.id == stored_id), None) or profiles[0]
+
+        self.settings_repository.set_current_profile_id(active.id)
+        return active.id
+
+    def _on_activate_profile(self, profile_id):
+        self.active_profile_id = profile_id
+        self.settings_repository.set_current_profile_id(profile_id)
+        self.datasources_page.set_profile(profile_id)
+        self.profiles_page.reload()
+        profile = self.profile_repository.get(profile_id)
+        self.SetStatusText(f"Active profile: {profile.name if profile else '?'}")
+
+    def _on_profiles_changed(self):
+        """Called after a profile is created/edited/deleted - re-validate
+        that the active profile still exists, falling back (and recreating
+        the default profile) if it was the one just deleted."""
+        profiles = self.profile_repository.list()
+        if not profiles:
+            self._on_activate_profile(self.profile_repository.create(DEFAULT_PROFILE_NAME).id)
+        elif not any(p.id == self.active_profile_id for p in profiles):
+            self._on_activate_profile(profiles[0].id)
+        else:
+            self.profiles_page.reload()
 
     # ------------------------------------------------------------------
     # Menu bar

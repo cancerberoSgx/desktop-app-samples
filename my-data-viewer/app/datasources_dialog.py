@@ -127,6 +127,7 @@ class DatasourceDialog(wx.Dialog):
             id=self._datasource.id if self._datasource else None,
             name=name,
             type=selected_type,
+            profile_id=self._datasource.profile_id if self._datasource else None,
             file_path=file_path,
             db_host=db_host,
             db_port=db_port,

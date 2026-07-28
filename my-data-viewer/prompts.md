@@ -136,9 +136,15 @@ tasks:
 
 
 
-FUTURE:
+# my-data-viewer-build github actions
+
 add .github/workflows/my-data-viewer-build.yml so I can build my-data-viewer binaries. Use the existing .github/workflows/wxwidgets-test1-build.yml as a template since it's working fine
 
+
+
+
+
+FUTURE
 p2
  * in my-data-viewer datasources table have an action column with an icon button "connect"
  * when clicked the main datasource-inspector screen 
