@@ -1,0 +1,1 @@
+These are collections of desktop apps of mine - just learning some native libraries to build GUIs for linux/win/macos desktop
