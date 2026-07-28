@@ -1,15 +1,6 @@
 name: wxwidgets-test1 build
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'wxwidgets-test1/**'
-      - '.github/workflows/wxwidgets-test1-build.yml'
-  pull_request:
-    paths:
-      - 'wxwidgets-test1/**'
-      - '.github/workflows/wxwidgets-test1-build.yml'
   workflow_dispatch: {}
 
 defaults:
