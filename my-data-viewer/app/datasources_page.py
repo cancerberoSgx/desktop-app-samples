@@ -1,11 +1,13 @@
+from typing import List, Optional
+
 import wx
 
 from .datasources_dialog import DatasourceDialog
-from .models import DATASOURCE_TYPES
+from .models import DATASOURCE_TYPES, Datasource
 from .repositories import DatasourceRepository
 
 
-def _details_for(datasource):
+def _details_for(datasource: Datasource) -> str:
     if datasource.type == "csv":
         return datasource.file_path or ""
     host = datasource.db_host or ""
@@ -17,11 +19,11 @@ def _details_for(datasource):
 class DatasourcesPage(wx.Panel):
     """CRUD screen for datasources: filter by name/type, create, edit, delete."""
 
-    def __init__(self, parent, repository: DatasourceRepository, profile_id: int):
+    def __init__(self, parent: wx.Window, repository: DatasourceRepository, profile_id: int) -> None:
         super().__init__(parent)
         self._repository = repository
         self._profile_id = profile_id
-        self._datasources = []
+        self._datasources: List[Datasource] = []
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Datasources"), 0, wx.ALL, 12)
@@ -68,11 +70,11 @@ class DatasourcesPage(wx.Panel):
 
         self.reload()
 
-    def set_profile(self, profile_id: int):
+    def set_profile(self, profile_id: int) -> None:
         self._profile_id = profile_id
         self.reload()
 
-    def reload(self):
+    def reload(self) -> None:
         name_contains = self._name_filter.GetValue().strip() or None
         type_index = self._type_filter.GetSelection()
         type_ = None if type_index <= 0 else self._type_filter.GetString(type_index)
@@ -89,25 +91,25 @@ class DatasourcesPage(wx.Panel):
 
         self._update_button_states(None)
 
-    def _selected_datasource(self):
+    def _selected_datasource(self) -> Optional[Datasource]:
         index = self._list.GetFirstSelected()
         if index == -1:
             return None
         return self._datasources[index]
 
-    def _update_button_states(self, event):
+    def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
         has_selection = self._selected_datasource() is not None
         self._edit_btn.Enable(has_selection)
         self._delete_btn.Enable(has_selection)
 
-    def _on_filter_changed(self, event):
+    def _on_filter_changed(self, event: wx.CommandEvent) -> None:
         self.reload()
 
-    def _on_filter_cancel(self, event):
+    def _on_filter_cancel(self, event: wx.CommandEvent) -> None:
         self._name_filter.SetValue("")
         self.reload()
 
-    def _on_new(self, event):
+    def _on_new(self, event: wx.CommandEvent) -> None:
         dlg = DatasourceDialog(self)
         if dlg.ShowModal() == wx.ID_OK:
             datasource = dlg.get_datasource()
@@ -116,7 +118,7 @@ class DatasourcesPage(wx.Panel):
             self.reload()
         dlg.Destroy()
 
-    def _on_edit(self, event):
+    def _on_edit(self, event: wx.CommandEvent) -> None:
         datasource = self._selected_datasource()
         if datasource is None:
             return
@@ -126,7 +128,7 @@ class DatasourcesPage(wx.Panel):
             self.reload()
         dlg.Destroy()
 
-    def _on_delete(self, event):
+    def _on_delete(self, event: wx.CommandEvent) -> None:
         datasource = self._selected_datasource()
         if datasource is None:
             return

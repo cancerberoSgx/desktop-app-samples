@@ -1,12 +1,13 @@
 import re
 from pathlib import Path
+from typing import List
 
 import duckdb
 
-from .models import ColumnInfo, QueryResult
+from .models import ColumnInfo, Datasource, IndexInfo, QueryResult
 
 
-def get_driver(datasource):
+def get_driver(datasource: Datasource) -> "CsvDriver":
     """Return the driver object able to run operations against `datasource`."""
     if datasource.type == "csv":
         return CsvDriver(datasource.file_path)
@@ -39,10 +40,10 @@ class CsvDriver:
         self.file_path = file_path
         self.table_name = _table_name_for(file_path)
 
-    def list_tables(self) -> list:
+    def list_tables(self) -> List[str]:
         return [self.table_name]
 
-    def list_columns(self, table: str) -> list:
+    def list_columns(self, table: str) -> List[ColumnInfo]:
         con = self._connect()
         try:
             description = con.execute(f'SELECT * FROM "{self.table_name}" LIMIT 0').description
@@ -50,7 +51,7 @@ class CsvDriver:
         finally:
             con.close()
 
-    def list_indexes(self, table: str) -> list:
+    def list_indexes(self, table: str) -> List[IndexInfo]:
         return []  # a CSV file has no indexes
 
     def execute_sql(self, sql: str) -> QueryResult:
@@ -63,7 +64,7 @@ class CsvDriver:
         finally:
             con.close()
 
-    def _connect(self):
+    def _connect(self) -> duckdb.DuckDBPyConnection:
         con = duckdb.connect(":memory:")
         # Registers the CSV as a view via DuckDB's relation API rather than
         # interpolating the file path into a SQL string.

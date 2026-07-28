@@ -13,7 +13,7 @@ DEFAULT_PROFILE_NAME = "default"
 
 
 class MainFrame(wx.Frame):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(None, title="My Data Viewer", size=(1024, 640))
 
         conn = get_connection()
@@ -72,7 +72,7 @@ class MainFrame(wx.Frame):
         self.settings_repository.set_current_profile_id(active.id)
         return active.id
 
-    def _on_activate_profile(self, profile_id):
+    def _on_activate_profile(self, profile_id: int) -> None:
         self.active_profile_id = profile_id
         self.settings_repository.set_current_profile_id(profile_id)
         self.datasources_page.set_profile(profile_id)
@@ -80,7 +80,7 @@ class MainFrame(wx.Frame):
         profile = self.profile_repository.get(profile_id)
         self.SetStatusText(f"Active profile: {profile.name if profile else '?'}")
 
-    def _on_profiles_changed(self):
+    def _on_profiles_changed(self) -> None:
         """Called after a profile is created/edited/deleted - re-validate
         that the active profile still exists, falling back (and recreating
         the default profile) if it was the one just deleted."""
@@ -95,7 +95,7 @@ class MainFrame(wx.Frame):
     # ------------------------------------------------------------------
     # Menu bar
     # ------------------------------------------------------------------
-    def _build_menu_bar(self):
+    def _build_menu_bar(self) -> None:
         menu_bar = wx.MenuBar()
 
         file_menu = wx.Menu()
@@ -115,15 +115,15 @@ class MainFrame(wx.Frame):
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
-    def _on_sidebar_select(self, index):
+    def _on_sidebar_select(self, index: int) -> None:
         self.book.ChangeSelection(index)
         label = SIDEBAR_ITEMS[index][0]
         self.SetStatusText(f"Viewing: {label}")
 
-    def _on_exit(self, event):
+    def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()
 
-    def _on_about(self, event):
+    def _on_about(self, event: wx.CommandEvent) -> None:
         wx.MessageBox(
             "My Data Viewer\n\n"
             "Explore databases and CSV files: create data sources, browse "

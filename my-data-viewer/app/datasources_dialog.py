@@ -1,3 +1,5 @@
+from typing import Optional
+
 import wx
 
 from .models import DATASOURCE_TYPES, Datasource
@@ -8,7 +10,7 @@ class DatasourceDialog(wx.Dialog):
     depending on the selected type (a file picker for csv, connection
     fields for postgres/mysql)."""
 
-    def __init__(self, parent, datasource: Datasource = None):
+    def __init__(self, parent: wx.Window, datasource: Optional[Datasource] = None) -> None:
         title = "Edit Datasource" if datasource else "New Datasource"
         super().__init__(parent, title=title, size=(460, 400))
         self._datasource = datasource
@@ -46,7 +48,7 @@ class DatasourceDialog(wx.Dialog):
 
         self._on_type_changed(None)
 
-    def _build_csv_panel(self, datasource):
+    def _build_csv_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
         panel = wx.Panel(self._book)
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(wx.StaticText(panel, label="CSV file:"), 0, wx.BOTTOM, 4)
@@ -61,12 +63,12 @@ class DatasourceDialog(wx.Dialog):
         panel.SetSizer(sizer)
         return panel
 
-    def _build_db_panel(self, datasource):
+    def _build_db_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
         panel = wx.Panel(self._book)
         grid = wx.FlexGridSizer(cols=2, gap=(8, 8))
         grid.AddGrowableCol(1, 1)
 
-        def add_field(label, value, password=False):
+        def add_field(label: str, value: str, password: bool = False) -> wx.TextCtrl:
             grid.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
             ctrl = wx.TextCtrl(panel, value=value, style=wx.TE_PASSWORD if password else 0)
             grid.Add(ctrl, 1, wx.EXPAND)
@@ -89,11 +91,11 @@ class DatasourceDialog(wx.Dialog):
         panel.SetSizer(grid)
         return panel
 
-    def _on_type_changed(self, event):
+    def _on_type_changed(self, event: Optional[wx.CommandEvent]) -> None:
         selected_type = self._type_choice.GetStringSelection()
         self._book.SetSelection(0 if selected_type == "csv" else 1)
 
-    def _on_ok(self, event):
+    def _on_ok(self, event: wx.CommandEvent) -> None:
         name = self._name_ctrl.GetValue().strip()
         selected_type = self._type_choice.GetStringSelection()
 
@@ -137,5 +139,5 @@ class DatasourceDialog(wx.Dialog):
         )
         self.EndModal(wx.ID_OK)
 
-    def get_datasource(self) -> Datasource:
+    def get_datasource(self) -> Optional[Datasource]:
         return self._result

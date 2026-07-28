@@ -2,7 +2,7 @@ import wx
 
 
 class AboutPage(wx.Panel):
-    def __init__(self, parent):
+    def __init__(self, parent: wx.Window) -> None:
         super().__init__(parent)
 
         sizer = wx.BoxSizer(wx.VERTICAL)

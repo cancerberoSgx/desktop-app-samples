@@ -1,3 +1,5 @@
+from typing import Callable, List, Optional
+
 import wx
 
 # (label, wx.ArtProvider stock art id, page index)
@@ -11,10 +13,10 @@ SIDEBAR_ITEMS = [
 class Sidebar(wx.Panel):
     """Left-hand navigation bar with icon buttons that switch the main page."""
 
-    def __init__(self, parent, on_select):
+    def __init__(self, parent: wx.Window, on_select: Callable[[int], None]) -> None:
         super().__init__(parent, style=wx.BORDER_NONE)
         self._on_select = on_select
-        self._buttons = []
+        self._buttons: List[wx.ToggleButton] = []
 
         self.SetBackgroundColour(wx.Colour(45, 51, 59))
 
@@ -46,7 +48,7 @@ class Sidebar(wx.Panel):
 
         self.select(0)
 
-    def _make_button(self, label, art_id, page_index):
+    def _make_button(self, label: str, art_id: str, page_index: Optional[int]) -> wx.ToggleButton:
         bitmap = wx.ArtProvider.GetBitmap(art_id, wx.ART_BUTTON, (20, 20))
         btn = wx.ToggleButton(self, label=f"  {label}")
         btn.SetBitmap(bitmap)
@@ -61,14 +63,14 @@ class Sidebar(wx.Panel):
 
         return btn
 
-    def _on_exit_clicked(self, event):
+    def _on_exit_clicked(self, event: wx.CommandEvent) -> None:
         self.GetTopLevelParent().Close()
 
-    def _on_button_clicked(self, index):
+    def _on_button_clicked(self, index: int) -> None:
         self.select(index)
         self._on_select(index)
 
-    def select(self, index):
+    def select(self, index: int) -> None:
         """Visually mark the button at `index` as active and release the rest."""
         for i, btn in enumerate(self._buttons):
             btn.SetValue(i == index)

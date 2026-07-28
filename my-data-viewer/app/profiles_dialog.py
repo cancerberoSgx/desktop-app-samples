@@ -1,3 +1,5 @@
+from typing import Optional
+
 import wx
 
 from .models import Profile
@@ -6,7 +8,7 @@ from .models import Profile
 class ProfileDialog(wx.Dialog):
     """Create/edit form for a Profile - just a name."""
 
-    def __init__(self, parent, profile: Profile = None):
+    def __init__(self, parent: wx.Window, profile: Optional[Profile] = None) -> None:
         title = "Edit Profile" if profile else "New Profile"
         super().__init__(parent, title=title, size=(360, 160))
         self._result = None
@@ -25,7 +27,7 @@ class ProfileDialog(wx.Dialog):
 
         self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
 
-    def _on_ok(self, event):
+    def _on_ok(self, event: wx.CommandEvent) -> None:
         name = self._name_ctrl.GetValue().strip()
         if not name:
             wx.MessageBox("Name is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
@@ -33,5 +35,5 @@ class ProfileDialog(wx.Dialog):
         self._result = name
         self.EndModal(wx.ID_OK)
 
-    def get_name(self) -> str:
+    def get_name(self) -> Optional[str]:
         return self._result

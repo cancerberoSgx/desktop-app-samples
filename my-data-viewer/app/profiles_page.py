@@ -1,5 +1,8 @@
+from typing import Callable, List, Optional
+
 import wx
 
+from .models import Profile
 from .profiles_dialog import ProfileDialog
 from .repositories import ProfileRepository
 
@@ -10,13 +13,20 @@ class ProfilesPage(wx.Panel):
     """List/CRUD screen for profiles, plus "Activate" to switch which
     profile's datasources the rest of the app currently shows."""
 
-    def __init__(self, parent, repository: ProfileRepository, get_active_profile_id, on_activate, on_profiles_changed):
+    def __init__(
+        self,
+        parent: wx.Window,
+        repository: ProfileRepository,
+        get_active_profile_id: Callable[[], Optional[int]],
+        on_activate: Callable[[int], None],
+        on_profiles_changed: Callable[[], None],
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
         self._get_active_profile_id = get_active_profile_id
         self._on_activate = on_activate
         self._on_profiles_changed = on_profiles_changed
-        self._profiles = []
+        self._profiles: List[Profile] = []
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Profiles"), 0, wx.ALL, 12)
@@ -52,7 +62,7 @@ class ProfilesPage(wx.Panel):
 
         self.reload()
 
-    def reload(self):
+    def reload(self) -> None:
         self._profiles = self._repository.list()
         active_id = self._get_active_profile_id()
 
@@ -65,13 +75,13 @@ class ProfilesPage(wx.Panel):
 
         self._update_button_states(None)
 
-    def _selected_profile(self):
+    def _selected_profile(self) -> Optional[Profile]:
         index = self._list.GetFirstSelected()
         if index == -1:
             return None
         return self._profiles[index]
 
-    def _update_button_states(self, event):
+    def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
         profile = self._selected_profile()
         has_selection = profile is not None
         self._edit_btn.Enable(has_selection)
@@ -79,14 +89,14 @@ class ProfilesPage(wx.Panel):
         is_active = has_selection and profile.id == self._get_active_profile_id()
         self._activate_btn.Enable(has_selection and not is_active)
 
-    def _on_new(self, event):
+    def _on_new(self, event: wx.CommandEvent) -> None:
         dlg = ProfileDialog(self)
         if dlg.ShowModal() == wx.ID_OK:
             self._repository.create(dlg.get_name())
             self._on_profiles_changed()
         dlg.Destroy()
 
-    def _on_edit(self, event):
+    def _on_edit(self, event: wx.CommandEvent) -> None:
         profile = self._selected_profile()
         if profile is None:
             return
@@ -97,7 +107,7 @@ class ProfilesPage(wx.Panel):
             self._on_profiles_changed()
         dlg.Destroy()
 
-    def _on_delete(self, event):
+    def _on_delete(self, event: wx.CommandEvent) -> None:
         profile = self._selected_profile()
         if profile is None:
             return
@@ -111,7 +121,7 @@ class ProfilesPage(wx.Panel):
             self._repository.delete(profile.id)
             self._on_profiles_changed()
 
-    def _on_activate_clicked(self, event):
+    def _on_activate_clicked(self, event: wx.CommandEvent) -> None:
         profile = self._selected_profile()
         if profile is None:
             return
