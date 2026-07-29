@@ -173,6 +173,18 @@ class DatasourceDialog(wx.Dialog):
         panel = wx.Panel(self._book)
         outer = wx.BoxSizer(wx.VERTICAL)
 
+        notebook = wx.Notebook(panel)
+        notebook.AddPage(self._build_db_connection_tab(notebook, datasource), "Connection")
+        notebook.AddPage(self._build_ssh_tunnel_tab(notebook, datasource), "SSH Tunnel")
+        outer.Add(notebook, 1, wx.EXPAND)
+
+        panel.SetSizer(outer)
+        return panel
+
+    def _build_db_connection_tab(self, parent: wx.Window, datasource: Optional[Datasource]) -> wx.Panel:
+        panel = wx.Panel(parent)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
         has_url = bool(datasource and datasource.url)
         mode_row = wx.BoxSizer(wx.HORIZONTAL)
         self._url_mode_radio = wx.RadioButton(panel, label="Connection URL", style=wx.RB_GROUP)
@@ -180,19 +192,84 @@ class DatasourceDialog(wx.Dialog):
         (self._url_mode_radio if has_url or not datasource else self._fields_mode_radio).SetValue(True)
         mode_row.Add(self._url_mode_radio, 0, wx.RIGHT, 16)
         mode_row.Add(self._fields_mode_radio, 0)
-        outer.Add(mode_row, 0, wx.BOTTOM, 12)
+        outer.Add(mode_row, 0, wx.ALL, 12)
 
         self._db_book = wx.Simplebook(panel)
         self._db_book.AddPage(self._build_db_url_panel(datasource), "url")
         self._db_book.AddPage(self._build_db_fields_panel(datasource), "fields")
         self._db_book.SetSelection(0 if self._url_mode_radio.GetValue() else 1)
-        outer.Add(self._db_book, 1, wx.EXPAND)
+        outer.Add(self._db_book, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         panel.SetSizer(outer)
 
         self._url_mode_radio.Bind(wx.EVT_RADIOBUTTON, self._on_db_mode_changed)
         self._fields_mode_radio.Bind(wx.EVT_RADIOBUTTON, self._on_db_mode_changed)
         return panel
+
+    def _build_ssh_tunnel_tab(self, parent: wx.Window, datasource: Optional[Datasource]) -> wx.Panel:
+        panel = wx.Panel(parent)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        self._ssh_enabled_check = wx.CheckBox(panel, label="Connect through an SSH tunnel")
+        self._ssh_enabled_check.SetValue(bool(datasource and datasource.ssh_tunnel_enabled))
+        outer.Add(self._ssh_enabled_check, 0, wx.ALL, 12)
+
+        self._ssh_fields_panel = wx.Panel(panel)
+        grid = wx.FlexGridSizer(cols=2, gap=(8, 8))
+        grid.AddGrowableCol(1, 1)
+
+        def add_field(label: str, value: str, password: bool = False) -> wx.TextCtrl:
+            grid.Add(wx.StaticText(self._ssh_fields_panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            ctrl = wx.TextCtrl(self._ssh_fields_panel, value=value, style=wx.TE_PASSWORD if password else 0)
+            grid.Add(ctrl, 1, wx.EXPAND)
+            return ctrl
+
+        self._ssh_host_ctrl = add_field(
+            "SSH host:", datasource.ssh_host if datasource and datasource.ssh_host else ""
+        )
+        self._ssh_port_ctrl = add_field(
+            "SSH port:", str(datasource.ssh_port) if datasource and datasource.ssh_port else "22"
+        )
+        self._ssh_user_ctrl = add_field(
+            "SSH user:", datasource.ssh_user if datasource and datasource.ssh_user else ""
+        )
+
+        grid.Add(wx.StaticText(self._ssh_fields_panel, label="Private key (.pem):"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._ssh_key_picker = wx.FilePickerCtrl(
+            self._ssh_fields_panel,
+            path=datasource.ssh_key_path if datasource and datasource.ssh_key_path else "",
+            wildcard="Private key files (*.pem)|*.pem|All files (*.*)|*.*",
+            style=wx.FLP_USE_TEXTCTRL | wx.FLP_OPEN | wx.FLP_FILE_MUST_EXIST,
+        )
+        grid.Add(self._ssh_key_picker, 1, wx.EXPAND)
+
+        self._ssh_passphrase_ctrl = add_field(
+            "Key passphrase:",
+            datasource.ssh_key_passphrase if datasource and datasource.ssh_key_passphrase else "",
+            password=True,
+        )
+
+        self._ssh_fields_panel.SetSizer(grid)
+        outer.Add(self._ssh_fields_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 12)
+
+        hint = wx.StaticText(
+            panel,
+            label=(
+                "The host/port on the Connection tab are used as the target reachable "
+                "from this SSH host (e.g. an internal VPC address)."
+            ),
+        )
+        hint.Wrap(480)
+        hint.SetForegroundColour(wx.Colour(120, 120, 120))
+        outer.Add(hint, 0, wx.ALL, 12)
+
+        panel.SetSizer(outer)
+        self._ssh_enabled_check.Bind(wx.EVT_CHECKBOX, self._on_ssh_enabled_changed)
+        self._ssh_fields_panel.Enable(self._ssh_enabled_check.GetValue())
+        return panel
+
+    def _on_ssh_enabled_changed(self, event: wx.CommandEvent) -> None:
+        self._ssh_fields_panel.Enable(self._ssh_enabled_check.GetValue())
 
     def _build_db_url_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
         panel = wx.Panel(self._db_book)
@@ -250,6 +327,9 @@ class DatasourceDialog(wx.Dialog):
         url = None
         db_host = db_name = db_user = db_password = None
         db_port = None
+        ssh_tunnel_enabled = False
+        ssh_host = ssh_user = ssh_key_path = ssh_key_passphrase = None
+        ssh_port = None
 
         if selected_type in ("csv", "json"):
             file_path = self._file_pickers[selected_type].GetPath().strip()
@@ -287,6 +367,27 @@ class DatasourceDialog(wx.Dialog):
                 wx.MessageBox("Name is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
                 return
 
+        if selected_type not in ("csv", "json") and self._ssh_enabled_check.GetValue():
+            ssh_tunnel_enabled = True
+            ssh_host = self._ssh_host_ctrl.GetValue().strip() or None
+            ssh_user = self._ssh_user_ctrl.GetValue().strip() or None
+            ssh_key_path = self._ssh_key_picker.GetPath().strip() or None
+            ssh_key_passphrase = self._ssh_passphrase_ctrl.GetValue() or None
+            if not ssh_host or not ssh_user or not ssh_key_path:
+                wx.MessageBox(
+                    "SSH tunnel requires a host, user, and private key file.",
+                    "Validation error",
+                    wx.OK | wx.ICON_WARNING,
+                    self,
+                )
+                return
+            port_text = self._ssh_port_ctrl.GetValue().strip()
+            try:
+                ssh_port = int(port_text) if port_text else 22
+            except ValueError:
+                wx.MessageBox("SSH port must be a number.", "Validation error", wx.OK | wx.ICON_WARNING, self)
+                return
+
         self._result = Datasource(
             id=self._datasource.id if self._datasource else None,
             name=name,
@@ -299,6 +400,12 @@ class DatasourceDialog(wx.Dialog):
             db_name=db_name,
             db_user=db_user,
             db_password=db_password,
+            ssh_tunnel_enabled=ssh_tunnel_enabled,
+            ssh_host=ssh_host,
+            ssh_port=ssh_port,
+            ssh_user=ssh_user,
+            ssh_key_path=ssh_key_path,
+            ssh_key_passphrase=ssh_key_passphrase,
             fields=self._grid_fields(self._fields_grids[selected_type]) if selected_type in ("csv", "json") else [],
         )
         self.EndModal(wx.ID_OK)

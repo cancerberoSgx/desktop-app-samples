@@ -30,6 +30,12 @@ class Datasource:
     db_name: Optional[str] = None
     db_user: Optional[str] = None
     db_password: Optional[str] = None
+    ssh_tunnel_enabled: bool = False
+    ssh_host: Optional[str] = None
+    ssh_port: Optional[int] = None
+    ssh_user: Optional[str] = None
+    ssh_key_path: Optional[str] = None
+    ssh_key_passphrase: Optional[str] = None
     fields: List[DatasourceField] = field(default_factory=list)
 
 

@@ -1,0 +1,6 @@
+ALTER TABLE datasources ADD COLUMN ssh_tunnel_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE datasources ADD COLUMN ssh_host TEXT DEFAULT NULL;
+ALTER TABLE datasources ADD COLUMN ssh_port INTEGER DEFAULT NULL;
+ALTER TABLE datasources ADD COLUMN ssh_user TEXT DEFAULT NULL;
+ALTER TABLE datasources ADD COLUMN ssh_key_path TEXT DEFAULT NULL;
+ALTER TABLE datasources ADD COLUMN ssh_key_passphrase TEXT DEFAULT NULL;

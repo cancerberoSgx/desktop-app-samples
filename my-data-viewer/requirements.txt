@@ -2,3 +2,7 @@ wxPython>=4.2.0
 duckdb>=1.0.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
+sshtunnel>=0.4.0
+# sshtunnel 0.4.0 (latest release) still references the removed paramiko.DSSKey
+# class when loading private keys - paramiko>=4.0 dropped it with DSA support.
+paramiko>=2.7.2,<4.0

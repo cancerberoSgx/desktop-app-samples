@@ -227,22 +227,99 @@ Warning: No files were found with the provided path: my-data-viewer/dist/mydatav
 ---
 
 
+
+
+# ssh tunnel (WIP)
+
+in datasource, I want users to be able to open an ssh tunnel to a database server which is in a VPC, using a local .pem file. Question (don't write code) is this possible to accomplish in a way is compatible with linux, windows and mac ? how would you open the ssh tunnel? using external tools or with a ssh-python-library ? 
+
+p2
+yes let's implement datasource supporting ssh tunnel
+in the database, add new columns in datasources table for the neccesary ssh tunnel connection. For example, I'm doing it locally like this:
+
+ssh -i $PROD_SSH_KEY -L $PORT:$DB_HOST:$PORT $PROD_SSH_USER@$EC2_INSTANCE
+so create columns for all the values ssh_key (.pem file) ssh_port, ssh_user, ssh_db_host, ssh_target_host, etc - please generalize and correct.
+
+In the UI create / edit datasource, there's a section in a separate tab
+
+p2
+it fails with 'module paramiko has no attribute DSSKey'
+
+
+p3
+now it fails with stdout console error: 
+ERROR   | Password is required for key /home/sg/.ssh/id_rsa
+and the application freezes. Why is asking for that id_rsa ? just in case I indicated another .pem file not that one
+
+
+p4
+now when I connect using ssh-tunnel the app freeze and there's no stdout error at all. Can you make sure errors are catched correctly and if possible print more logs to stdout to better diagnose the problem ? 
+
+
+p5
+I think I'm configuring datasource wrong. Explain me the following. Currently I'm opening an ssh tunnel with this script
+
+readonly PROD_DB_HOST="searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com"
+readonly PROD_EC2_INSTANCE="3.18.110.31"
+readonly PROD_SSH_USER="ec2-user"
+readonly PROD_SSH_KEY="$HOME/.ssh/devaiq-prod.pem"
+readonly PROD_DB_NAME="searchmindai"
+readonly PROD_DB_USER="postgres"
+readonly PROD_DB_PASSWORD="pssw"
+DB_HOST=$PROD_DB_HOST
+EC2_INSTANCE=$PROD_EC2_INSTANCE
+PORT=5432
+ssh -i $PROD_SSH_KEY -L $PORT:$DB_HOST:$PORT $PROD_SSH_USER@$EC2_INSTANCE
+
+
+and then accessing that database with 
+
+psql postgresql://$PROD_DB_USER:$PROD_DB_PASSWORD@localhost/$PROD_DB_NAME
+
+
+all from my local machine
+
+Explain me where in the UI should I fill all those variables 
+
+p4
+ok just did that, in the console stdout loops with this stdout. Doesn't fails with timeout and UI freezes.
+
+2026-07-29 11:04:18,715 INFO [mydataviewer.drivers] Opening SSH tunnel: ec2-user@3.18.110.31:22 -> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 (key=/home/sg/.ssh/devaiq-prod.pem)
+2026-07-29 11:02:45,005 INFO [mydataviewer.drivers] 0 key(s) loaded
+2026-07-29 11:02:45,032 INFO [mydataviewer.drivers] Connecting to gateway: 3.18.110.31:22 as user 'ec2-user'
+2026-07-29 11:02:46,383 INFO [mydataviewer.drivers] Opening tunnel: 0.0.0.0:43825 <> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432
+2026-07-29 11:02:46,384 INFO [mydataviewer.drivers] SSH tunnel up: 127.0.0.1:43825 -> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 (via 3.18.110.31)
+2026-07-29 11:02:50,902 INFO [mydataviewer.drivers] Closing SSH tunnel to 3.18.110.31
+2026-07-29 11:02:50,902 INFO [mydataviewer.drivers] Closing all open connections...
+2026-07-29 11:02:50,902 INFO [mydataviewer.drivers] Shutting down tunnel: 0.0.0.0:43825 <> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 (up)
+2026-07-29 11:02:50,903 INFO [mydataviewer.drivers] Tunnel: 0.0.0.0:43825 <> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 released
+2026-07-29 11:02:50,903 INFO [mydataviewer.drivers] Closing ssh transport
+2026-07-29 11:02:50,905 INFO [mydataviewer.drivers] Opening SSH tunnel: ec2-user@3.18.110.31:22 -> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 (key=/home/sg/.ssh/devaiq-prod.pem)
+2026-07-29 11:02:50,906 INFO [mydataviewer.drivers] 0 key(s) loaded
+2026-07-29 11:02:50,947 INFO [mydataviewer.drivers] Connecting to gateway: 3.18.110.31:22 as user 'ec2-user'
+2026-07-29 11:02:52,211 INFO [mydataviewer.drivers] Opening tunnel: 0.0.0.0:35713 <> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432
+2026-07-29 11:02:52,212 INFO [mydataviewer.drivers] SSH tunnel up: 127.0.0.1:35713 -> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 (via 3.18.110.31)
+2026-07-29 11:02:57,529 INFO [mydataviewer.drivers] Closing SSH tunnel to 3.18.110.31
+2026-07-29 11:02:57,529 INFO [mydataviewer.drivers] Closing all open connections...
+2026-07-29 11:02:57,529 INFO [mydataviewer.drivers] Shutting down tunnel: 0.0.0.0:35713 <> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 (up)
+2026-07-29 11:02:57,536 INFO [mydataviewer.drivers] Tunnel: 0.0.0.0:35713 <> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 released
+2026-07-29 11:02:57,537 INFO [mydataviewer.drivers] Closing ssh transport
+2026-07-29 11:02:57,539 INFO [mydataviewer.drivers] Opening SSH tunnel: ec2-user@3.18.110.31:22 -> searchmindai-prod.cntdxllkmaox.us-east-2.rds.amazonaws.com:5432 (key=/home/sg/.ssh/devaiq-prod.pem)
+2026-07-29 11:02:57,540 INFO [mydataviewer.drivers] 0 key(s) loaded
+2026-07-29 11:02:57,568 INFO [mydataviewer.drivers] Connecting to gateway: 3.18.110.31:22 as user 'ec2-user'
+2026-07-29 11:02:58,835 INFO [mydataviewer.drivers] Opening tunnel: 0.0.
+....
+
 # FUTURE
 
 
 
 
+# data table copy&paste
+in the data-table component, allow users to select an entire row, an entire column, a single or multiple cells. Once selection is done, user can copy the values to clipboard. Please suggest how to accomplish this visually before implementing. Ideally I would expect that:
+ * clicking a cell selects that single cell
+ * ctrl-click cells allows multiple selections
+ * there's a "row handler" like in excel or google spreadhsheet ,at the most-left of the columns that allows me to click it and select that row
+ * clicking a column name (or a small column handler on top of it) selects the entire column (like in excel or google spreadhsheet)
+before implementing, make sure you understand the ideal sulution described and if it's viable or you have other suggestions that simplifies on implementation or performance point of view.
 
-
-when the app starts, it will remembers the last profile and connection used and will automatically display that data-explore view if any. you should use the settings table to maintain this status this: my-data-viewer/app/db/migrations/0004_create_settings.sql
-
-
-
-
-# copy paste data table & values
-copy & paste from Edit menu
-in data-table, if I click any place of a row I can select the entire row and in that situation If I eight click 
-
-modularize drivers
-ideally: distribute smaller binaries without ducjkdb for people who just need postgres and vs versa
-actual: make sure we don't load duckdb in memory / speed if not needed and same with other drivers.

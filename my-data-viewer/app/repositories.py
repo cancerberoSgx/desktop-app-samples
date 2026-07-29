@@ -23,8 +23,9 @@ class DatasourceRepository:
         cursor = self._conn.execute(
             """
             INSERT INTO datasources
-                (name, type, profile_id, file_path, url, db_host, db_port, db_name, db_user, db_password)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (name, type, profile_id, file_path, url, db_host, db_port, db_name, db_user, db_password,
+                 ssh_tunnel_enabled, ssh_host, ssh_port, ssh_user, ssh_key_path, ssh_key_passphrase)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datasource.name,
@@ -37,6 +38,12 @@ class DatasourceRepository:
                 datasource.db_name,
                 datasource.db_user,
                 datasource.db_password,
+                int(datasource.ssh_tunnel_enabled),
+                datasource.ssh_host,
+                datasource.ssh_port,
+                datasource.ssh_user,
+                datasource.ssh_key_path,
+                datasource.ssh_key_passphrase,
             ),
         )
         self._conn.commit()
@@ -73,7 +80,8 @@ class DatasourceRepository:
             """
             UPDATE datasources
             SET name = ?, type = ?, file_path = ?, url = ?, db_host = ?, db_port = ?,
-                db_name = ?, db_user = ?, db_password = ?
+                db_name = ?, db_user = ?, db_password = ?, ssh_tunnel_enabled = ?, ssh_host = ?,
+                ssh_port = ?, ssh_user = ?, ssh_key_path = ?, ssh_key_passphrase = ?
             WHERE id = ?
             """,
             (
@@ -86,6 +94,12 @@ class DatasourceRepository:
                 datasource.db_name,
                 datasource.db_user,
                 datasource.db_password,
+                int(datasource.ssh_tunnel_enabled),
+                datasource.ssh_host,
+                datasource.ssh_port,
+                datasource.ssh_user,
+                datasource.ssh_key_path,
+                datasource.ssh_key_passphrase,
                 datasource.id,
             ),
         )
@@ -111,6 +125,12 @@ class DatasourceRepository:
             db_name=row["db_name"],
             db_user=row["db_user"],
             db_password=row["db_password"],
+            ssh_tunnel_enabled=bool(row["ssh_tunnel_enabled"]),
+            ssh_host=row["ssh_host"],
+            ssh_port=row["ssh_port"],
+            ssh_user=row["ssh_user"],
+            ssh_key_path=row["ssh_key_path"],
+            ssh_key_passphrase=row["ssh_key_passphrase"],
         )
 
     # ------------------------------------------------------------------
