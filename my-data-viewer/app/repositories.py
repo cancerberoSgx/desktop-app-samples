@@ -2,7 +2,7 @@ import sqlite3
 from typing import List, Optional
 
 from . import drivers
-from .models import ColumnInfo, Datasource, DatasourceField, IndexInfo, Profile, QueryResult
+from .models import ColumnInfo, Datasource, DatasourceField, IndexInfo, Profile, QueryResult, Script
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 
@@ -171,6 +171,57 @@ class DatasourceRepository:
         self, datasource: Datasource, sql: str, params: Optional[list] = None
     ) -> QueryResult:
         return self._driver_for(datasource).execute_sql(sql, params)
+
+
+class ScriptRepository:
+    """CRUD for `scripts` (pure SQL against SQLite), scoped to a datasource
+    (and, via it, a profile) - see DatasourceRepository for the equivalent
+    pattern this follows."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def create(self, script: Script) -> Script:
+        cursor = self._conn.execute(
+            "INSERT INTO scripts (profile_id, datasource_id, name, content) VALUES (?, ?, ?, ?)",
+            (script.profile_id, script.datasource_id, script.name, script.content),
+        )
+        self._conn.commit()
+        return self.get(cursor.lastrowid)
+
+    def list(self, datasource_id: int) -> List[Script]:
+        rows = self._conn.execute(
+            "SELECT * FROM scripts WHERE datasource_id = ? ORDER BY name", (datasource_id,)
+        ).fetchall()
+        return [self._row_to_script(row) for row in rows]
+
+    def get(self, script_id: int) -> Optional[Script]:
+        row = self._conn.execute("SELECT * FROM scripts WHERE id = ?", (script_id,)).fetchone()
+        return self._row_to_script(row) if row else None
+
+    def update(self, script: Script) -> Script:
+        self._conn.execute(
+            "UPDATE scripts SET name = ?, content = ?, updated_at = datetime('now') WHERE id = ?",
+            (script.name, script.content, script.id),
+        )
+        self._conn.commit()
+        return self.get(script.id)
+
+    def delete(self, script_id: int) -> None:
+        self._conn.execute("DELETE FROM scripts WHERE id = ?", (script_id,))
+        self._conn.commit()
+
+    @staticmethod
+    def _row_to_script(row: sqlite3.Row) -> Script:
+        return Script(
+            id=row["id"],
+            name=row["name"],
+            content=row["content"],
+            profile_id=row["profile_id"],
+            datasource_id=row["datasource_id"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
 
 
 class ProfileRepository:

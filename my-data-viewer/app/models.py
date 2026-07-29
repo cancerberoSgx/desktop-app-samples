@@ -34,6 +34,19 @@ class Datasource:
 
 
 @dataclass
+class Script:
+    """A saved SQL script belonging to one datasource (and its profile)."""
+
+    id: Optional[int]
+    name: str
+    content: str = ""
+    profile_id: Optional[int] = None
+    datasource_id: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@dataclass
 class Profile:
     id: Optional[int]
     name: str

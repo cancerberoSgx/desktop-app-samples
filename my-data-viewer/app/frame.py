@@ -8,7 +8,7 @@ from app.db.paths import migrations_dir
 from app.models import Datasource
 from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
-from app.repositories import DatasourceRepository, ProfileRepository, SettingsRepository
+from app.repositories import DatasourceRepository, ProfileRepository, ScriptRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
 
 DEFAULT_PROFILE_NAME = "default"
@@ -24,6 +24,7 @@ class MainFrame(wx.Frame):
         self.profile_repository = ProfileRepository(conn)
         self.settings_repository = SettingsRepository(conn)
         self.datasource_repository = DatasourceRepository(conn)
+        self.script_repository = ScriptRepository(conn)
 
         self.active_profile_id = self._bootstrap_active_profile()
 
@@ -57,7 +58,7 @@ class MainFrame(wx.Frame):
 
         # Not a sidebar destination - reached only via "Connect" on Datasources.
         self.data_explore_page = DataExplorePage(
-            self.book, self.datasource_repository, on_back=self._go_to_datasources
+            self.book, self.datasource_repository, self.script_repository, on_back=self._go_to_datasources
         )
         self.book.AddPage(self.data_explore_page, "Data Explore")
         self.data_explore_page_index = self.book.GetPageCount() - 1

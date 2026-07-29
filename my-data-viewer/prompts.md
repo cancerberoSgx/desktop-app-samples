@@ -181,6 +181,8 @@ If possible use a facade on top of the choosen postgresql driver, such as sqlalc
 
 
 
+# json DS
+support datasource type = json. handle it with duckdb so it can support array of objects, ndjson, etc. The "create datasource" for json works very similar to csv. User must select the filePath, DS name is automatically inferred from file name, and user is able to "infer field types", this time using duckdb sniff_json or similar. 
 
 
 ---
@@ -190,13 +192,15 @@ If possible use a facade on top of the choosen postgresql driver, such as sqlalc
 
 
 
-# json DS
-support datasource type = json. handle it with duckdb so it can support array of objects, ndjson, etc. The "create datasource" for json works very similar to csv. User must select the filePath, DS name is automatically inferred from file name, and user is able to "infer field types", this time using duckdb sniff_json or similar. 
 
 
 # scripts
 
-user can create one or more scripts associated to a profile and a datasource.
+user can create one or more scripts associated to a profile and a datasource. Scripts are saved in DB and have a name and text (content). User see the scripts in a new screen inside "data-explore" screen in a new "Scripts" tab. The scripts tab allows users to list all scripts associated to that datasource, add new script , delete a script and edit a script. To edit the script text (sql content) use a textarea and if possible a text editor which supports sql syntax highlighting. The user can execute the entire script against current datasource, or also select one statement and execute that only selected sql statement. When the script is executed, the execute execute_sql(9 -> QueryResult is displayed in a data-table - reuse the same current data-table component allowing user to sort by column and filter by)
+
+
+# ui enhs
+after creating a new datasource, it automatically connects to it and display the data-explore view.
 
 
 
