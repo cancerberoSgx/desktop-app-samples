@@ -230,19 +230,11 @@ Warning: No files were found with the provided path: my-data-viewer/dist/mydatav
 # FUTURE
 
 
+# data table copy&paste
+in the data-table component, allow users to select an entire row, an entire column, a single or multiple cells. Once selection is done, user can copy the values to clipboard. Please suggest how to accomplish this visually before implementing. Ideally I would expect that:
+ * clicking a cell selects that single cell
+ * ctrl-click cells allows multiple selections
+ * there's a "row handler" like in excel or google spreadhsheet ,at the most-left of the columns that allows me to click it and select that row
+ * clicking a column name (or a small column handler on top of it) selects the entire column (like in excel or google spreadhsheet)
+before implementing, make sure you understand the ideal sulution described and if it's viable or you have other suggestions that simplifies on implementation or performance point of view.
 
-
-
-
-when the app starts, it will remembers the last profile and connection used and will automatically display that data-explore view if any. you should use the settings table to maintain this status this: my-data-viewer/app/db/migrations/0004_create_settings.sql
-
-
-
-
-# copy paste data table & values
-copy & paste from Edit menu
-in data-table, if I click any place of a row I can select the entire row and in that situation If I eight click 
-
-modularize drivers
-ideally: distribute smaller binaries without ducjkdb for people who just need postgres and vs versa
-actual: make sure we don't load duckdb in memory / speed if not needed and same with other drivers.
