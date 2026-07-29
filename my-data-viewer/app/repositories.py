@@ -108,6 +108,17 @@ class DatasourceRepository:
         )
         self._conn.commit()
 
+    def find_by_file_path(self, profile_id: int, file_path: str) -> Optional[Datasource]:
+        """Look up a csv/json datasource in `profile_id` pointing at `file_path`
+        (used when a file is dropped onto the app) - paths are compared after
+        `abspath`/`normcase` so e.g. a relative path or Windows case
+        difference still matches an existing record."""
+        target = os.path.normcase(os.path.abspath(file_path))
+        for datasource in self.list(profile_id):
+            if datasource.file_path and os.path.normcase(os.path.abspath(datasource.file_path)) == target:
+                return datasource
+        return None
+
     @staticmethod
     def _row_to_datasource(row: sqlite3.Row) -> Datasource:
         return Datasource(

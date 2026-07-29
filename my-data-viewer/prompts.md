@@ -317,7 +317,7 @@ ok then, let's implement it. In the datasources screen, add a new main tab "Acti
 when these option buttons are clicked, the user is asked for an output file and the dump is written in there.
 
 p2
-support also export schema as sql
+support also "export schema as sql"
 
 
 
@@ -339,10 +339,30 @@ ideally users should be able to open a file in two ways:
 task: research this problem and report if this is possible, and alternatives using wxPython or some extension and how compatible will be in target OSs
 (don't write any code)
 
+p2
+When I drag and drop a .csv file, it only works when Im' on a particualr screen inside datasources but not in other screens.
+when it works, the "new datasource" modal is shown, I see it can infer the fields  correctly, but the CSV File field is empty and also the name. The CSV File field should be prefilled with the dragged file and the name defaulted to the file name.
+
+p3
+it works better now, and works perfectly but with the error that the "CSV File" field (filePath) is still empty both in the ui or after saving the new datasource (it's not even saved in DB). It does works for .json files droped but not for csv
+
+THIS BUG STILL REMAINS... help claude debugging it by printing the file path.
+
 
 
 # review async code
 in this project review if some calls like connecting to a postgres server, loading a big csv, making a sql query / script , exporting data , etc it doesn't blocks/freezes the UI. I suspect so, don't write code, just analyze and suggests options to solve this. While a long task is being executed, there should be a UI feedback/progress/spinner but most importantly, the UI shouldn't freeze and I shuold even trigger another async operation while there's currently one being executed.
+
+p2
+yes let's implement what you suggested (options 2 and 3). 
+
+User UX:
+ * The "progress"  wx.Gauge  should be on the existing bottom bar (which displays "Viewing: X") but at the bottom-right
+ * make sure only one process is run at a time
+ * clicking the gauge user can see the task name / description and also have the option of "cancel" the task.
+ * if the user tries to run another long run task while there's currently one running then there's an dialog saying "Currently running task "X"" and two  * button options "cancel current and run this one", "cancel"
+
+
 
 # review logs.
 sometimes the app freezes and I cannot access any logs

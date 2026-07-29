@@ -35,12 +35,19 @@ class DatasourceDialog(wx.Dialog):
         parent: wx.Window,
         datasource: Optional[Datasource] = None,
         fields: Optional[List[DatasourceField]] = None,
+        initial_file_path: Optional[str] = None,
+        initial_type: Optional[str] = None,
     ) -> None:
         title = "Edit Datasource" if datasource else "New Datasource"
         super().__init__(parent, title=title, size=(560, 560))
         self._datasource = datasource
         self._result = None
         self._initial_fields = fields or []
+        # Only meaningful when `datasource` is None (e.g. a file dropped onto
+        # the app that doesn't match any existing datasource yet) - prefills
+        # the file picker/type for a still-to-be-created record.
+        self._initial_file_path = initial_file_path
+        self._initial_type = initial_type
 
         outer = wx.BoxSizer(wx.VERTICAL)
 
@@ -48,13 +55,20 @@ class DatasourceDialog(wx.Dialog):
         grid.AddGrowableCol(1, 1)
 
         grid.Add(wx.StaticText(self, label="Name:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self._name_ctrl = wx.TextCtrl(self, value=datasource.name if datasource else "")
+        if datasource:
+            initial_name = datasource.name
+        elif self._initial_file_path:
+            initial_name = os.path.splitext(os.path.basename(self._initial_file_path))[0]
+        else:
+            initial_name = ""
+        self._name_ctrl = wx.TextCtrl(self, value=initial_name)
         grid.Add(self._name_ctrl, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(self, label="Type:"), 0, wx.ALIGN_CENTER_VERTICAL)
         self._type_choice = wx.Choice(self, choices=list(DATASOURCE_TYPES))
+        default_type = self._initial_type if (not datasource and self._initial_type) else "csv"
         self._type_choice.SetSelection(
-            DATASOURCE_TYPES.index(datasource.type) if datasource else DATASOURCE_TYPES.index("csv")
+            DATASOURCE_TYPES.index(datasource.type) if datasource else DATASOURCE_TYPES.index(default_type)
         )
         grid.Add(self._type_choice, 1, wx.EXPAND)
 
@@ -84,7 +98,12 @@ class DatasourceDialog(wx.Dialog):
         panel = wx.Panel(self._book)
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(wx.StaticText(panel, label=config["label"]), 0, wx.BOTTOM, 4)
-        initial = datasource.file_path if (datasource and datasource.type == kind and datasource.file_path) else ""
+        if datasource and datasource.type == kind and datasource.file_path:
+            initial = datasource.file_path
+        elif not datasource and self._initial_type == kind and self._initial_file_path:
+            initial = self._initial_file_path
+        else:
+            initial = ""
         file_picker = wx.FilePickerCtrl(
             panel,
             path=initial,

@@ -1,6 +1,9 @@
-from typing import List
+import os
+from typing import Callable, List
+from urllib.parse import unquote, urlparse
 
 import wx
+import wx.stc as stc
 
 from app.data_explore_page import DataExplorePage
 from app.datasources_page import DatasourcesPage
@@ -15,6 +18,36 @@ from app.sidebar import Sidebar, SIDEBAR_ITEMS
 
 DEFAULT_PROFILE_NAME = "default"
 DATASOURCES_SIDEBAR_INDEX = 1
+
+# Extensions droppable onto the app -> the datasource `type` they map to (see
+# DATASOURCE_TYPES / the file wildcards in datasources_dialog.py).
+_DROPPABLE_FILE_TYPES = {"csv": "csv", "json": "json", "ndjson": "json", "jsonl": "json"}
+
+# Controls with their own meaningful native drag/drop or text-drag behavior -
+# left alone by the recursive drop-target install below so dropping a file
+# onto e.g. the SQL editor still works like dropping it anywhere else, without
+# disturbing their own DnD semantics.
+_DROP_TARGET_EXCLUDED_TYPES = (wx.TextCtrl, stc.StyledTextCtrl)
+
+
+def _normalize_dropped_path(raw: str) -> str:
+    """Some drag sources hand over a `file://` URI (percent-encoded) rather
+    than a plain path, and/or pad it with stray whitespace - normalize both
+    before treating it as a filesystem path."""
+    path = raw.strip()
+    if path.startswith("file://"):
+        path = unquote(urlparse(path).path)
+    return path
+
+
+class _FileDropTarget(wx.FileDropTarget):
+    def __init__(self, on_files_dropped: Callable[[List[str]], None]) -> None:
+        super().__init__()
+        self._on_files_dropped = on_files_dropped
+
+    def OnDropFiles(self, x: int, y: int, filenames: List[str]) -> bool:
+        self._on_files_dropped(filenames)
+        return True
 
 
 class UnsavedScriptsDialog(wx.Dialog):
@@ -108,6 +141,7 @@ class MainFrame(wx.Frame):
         self.Centre()
 
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        self._install_drop_target(self)
 
     # ------------------------------------------------------------------
     # Profile bootstrap / switching
@@ -158,6 +192,49 @@ class MainFrame(wx.Frame):
         self.sidebar.select(DATASOURCES_SIDEBAR_INDEX)
         self.book.ChangeSelection(DATASOURCES_SIDEBAR_INDEX)
         self.SetStatusText("Viewing: Datasources")
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop: a .csv/.json file dropped anywhere in the app opens (and
+    # refreshes) the matching datasource in the current profile, or prefills
+    # "New Datasource" if none points at that file yet.
+    # ------------------------------------------------------------------
+    def _install_drop_target(self, window: wx.Window) -> None:
+        if not isinstance(window, _DROP_TARGET_EXCLUDED_TYPES):
+            window.SetDropTarget(_FileDropTarget(self._on_files_dropped))
+        for child in window.GetChildren():
+            self._install_drop_target(child)
+
+    def _on_files_dropped(self, filenames: List[str]) -> None:
+        # Deferred via CallAfter: showing a modal dialog (or otherwise
+        # reacting) synchronously from inside OnDropFiles runs while the
+        # platform's own drag-and-drop loop is still unwinding, which on GTK
+        # is known to produce dialogs that pop up but don't paint their
+        # initial content correctly. Running after that loop has fully
+        # returned avoids it.
+        for path in filenames:
+            wx.CallAfter(self._handle_dropped_file, path)
+
+    def _handle_dropped_file(self, path: str) -> None:
+        path = _normalize_dropped_path(path)
+        ext = os.path.splitext(path)[1].lower().lstrip(".")
+        type_ = _DROPPABLE_FILE_TYPES.get(ext)
+        if type_ is None:
+            wx.MessageBox(
+                f'Unsupported file type: "{os.path.basename(path)}".\n'
+                "Only CSV and JSON files can be opened this way.",
+                "Open file",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
+        existing = self.datasource_repository.find_by_file_path(self.active_profile_id, path)
+        if existing is not None:
+            self.datasources_page.open_existing_datasource(existing)
+            return
+
+        self._go_to_datasources()
+        self.datasources_page.open_new_datasource_for_file(path, type_)
 
     # ------------------------------------------------------------------
     # Menu bar

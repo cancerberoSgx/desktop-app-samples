@@ -121,7 +121,10 @@ class DatasourcesPage(wx.Panel):
         self.reload()
 
     def _on_new(self, event: wx.CommandEvent) -> None:
-        dlg = DatasourceDialog(self)
+        self._show_new_dialog()
+
+    def _show_new_dialog(self, initial_file_path: Optional[str] = None, initial_type: Optional[str] = None) -> None:
+        dlg = DatasourceDialog(self, initial_file_path=initial_file_path, initial_type=initial_type)
         if dlg.ShowModal() == wx.ID_OK:
             datasource = dlg.get_datasource()
             datasource.profile_id = self._profile_id
@@ -129,6 +132,17 @@ class DatasourcesPage(wx.Panel):
             self.reload()
             self._connect(created)
         dlg.Destroy()
+
+    # ------------------------------------------------------------------
+    # Entry points for a file dropped onto the app (see MainFrame) - either
+    # open+refresh the datasource already pointing at it, or prefill "New
+    # Datasource" with it so the user can create one.
+    # ------------------------------------------------------------------
+    def open_existing_datasource(self, datasource: Datasource) -> None:
+        self._connect(datasource)
+
+    def open_new_datasource_for_file(self, file_path: str, type_: str) -> None:
+        self._show_new_dialog(initial_file_path=file_path, initial_type=type_)
 
     def _on_edit(self, event: wx.CommandEvent) -> None:
         datasource = self._selected_datasource()
