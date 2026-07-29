@@ -1122,11 +1122,94 @@ class ScriptsTab(wx.Panel):
         self._result_panel.load(result)
 
 
+class ActionsTab(wx.Panel):
+    """Export actions for the current datasource - both go through
+    DatasourceRepository's export_to_parquet/export_schema_to_parquet, which
+    work the same way regardless of datasource type (csv, json, postgres,
+    ...)."""
+
+    def __init__(self, parent: wx.Window, repository: DatasourceRepository) -> None:
+        super().__init__(parent)
+        self._repository = repository
+        self._datasource: Optional[Datasource] = None
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(self, label="Export"), 0, wx.ALL, 12)
+
+        self._export_data_btn = wx.Button(self, label="Export as Parquet...")
+        self._export_schema_btn = wx.Button(self, label="Export schema as Parquet...")
+        outer.Add(self._export_data_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        outer.Add(self._export_schema_btn, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
+        self.SetSizer(outer)
+
+        self._export_data_btn.Bind(wx.EVT_BUTTON, self._on_export_data)
+        self._export_schema_btn.Bind(wx.EVT_BUTTON, self._on_export_schema)
+
+    def load_datasource(self, datasource: Datasource) -> None:
+        self._datasource = datasource
+
+    def _on_export_data(self, event: wx.CommandEvent) -> None:
+        if self._datasource is None:
+            return
+        dlg = wx.DirDialog(self, "Choose a folder to export Parquet files into")
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            output_dir = dlg.GetPath()
+        finally:
+            dlg.Destroy()
+
+        try:
+            written = self._repository.export_to_parquet(self._datasource, output_dir)
+        except Exception as exc:
+            wx.MessageBox(f"Export failed:\n\n{exc}", "Export as Parquet", wx.OK | wx.ICON_ERROR, self)
+            return
+        wx.MessageBox(
+            f"Exported {len(written)} table(s) to:\n\n{output_dir}",
+            "Export as Parquet",
+            wx.OK | wx.ICON_INFORMATION,
+            self,
+        )
+
+    def _on_export_schema(self, event: wx.CommandEvent) -> None:
+        if self._datasource is None:
+            return
+        dlg = wx.FileDialog(
+            self,
+            "Save schema as Parquet",
+            wildcard="Parquet files (*.parquet)|*.parquet",
+            defaultFile=f"{self._datasource.name}_schema.parquet",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            output_path = dlg.GetPath()
+        finally:
+            dlg.Destroy()
+        if not output_path.lower().endswith(".parquet"):
+            output_path += ".parquet"
+
+        try:
+            self._repository.export_schema_to_parquet(self._datasource, output_path)
+        except Exception as exc:
+            wx.MessageBox(f"Export failed:\n\n{exc}", "Export schema as Parquet", wx.OK | wx.ICON_ERROR, self)
+            return
+        wx.MessageBox(
+            f"Schema exported to:\n\n{output_path}",
+            "Export schema as Parquet",
+            wx.OK | wx.ICON_INFORMATION,
+            self,
+        )
+
+
 class DataExplorePage(wx.Panel):
     """Reached via "Connect" on the Datasources screen (not a sidebar
     destination): a "Tables" tab lists the connected datasource's tables on
     the left and shows the selected table's Fields/Data/Indexes on the
-    right, and a "Scripts" tab manages saved SQL scripts for it."""
+    right, a "Scripts" tab manages saved SQL scripts for it, and an
+    "Actions" tab exports it (data or schema) to Parquet."""
 
     def __init__(
         self,
@@ -1175,6 +1258,9 @@ class DataExplorePage(wx.Panel):
         self._scripts_tab = ScriptsTab(notebook, script_repository, repository)
         notebook.AddPage(self._scripts_tab, "Scripts")
 
+        self._actions_tab = ActionsTab(notebook, repository)
+        notebook.AddPage(self._actions_tab, "Actions")
+
         outer.Add(notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         self.SetSizer(outer)
 
@@ -1191,6 +1277,7 @@ class DataExplorePage(wx.Panel):
             self._tables_list.SetSelection(0)
             self._detail.load_table(datasource, self._tables[0])
         self._scripts_tab.load_datasource(datasource, self._tables)
+        self._actions_tab.load_datasource(datasource)
 
     def _on_table_selected(self, event: wx.CommandEvent) -> None:
         if self._datasource is None:

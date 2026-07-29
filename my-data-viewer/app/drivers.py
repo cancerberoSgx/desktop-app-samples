@@ -261,6 +261,41 @@ def _postgres_connection_target(datasource: Datasource) -> Union[str, sqlalchemy
     )
 
 
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def write_rows_to_parquet(
+    columns: Sequence[str], rows: Sequence[Sequence[object]], output_path: str
+) -> None:
+    """Write a plain (columns, rows) result - as returned by any driver's
+    `execute_sql` - to a single Parquet file, via a throwaway in-memory
+    DuckDB connection. This is the one shared path every datasource type's
+    export goes through: csv/json rows already came from DuckDB, and
+    postgres/mysql rows are a fetched result set, but by the time they reach
+    here it's just column names + row tuples either way, so there's nothing
+    type-specific left to do.
+    """
+    con = duckdb.connect(":memory:")
+    try:
+        quoted_columns = ", ".join(_quote_ident(c) for c in columns)
+        if rows:
+            row_placeholders = ", ".join(f"({', '.join(['?'] * len(columns))})" for _ in rows)
+            params = [value for row in rows for value in row]
+            con.execute(
+                f"CREATE TABLE export_data AS SELECT * FROM (VALUES {row_placeholders}) AS t({quoted_columns})",
+                params,
+            )
+        else:
+            # No rows to type-infer from - fall back to VARCHAR so the file
+            # still has the right column names.
+            column_defs = ", ".join(f"{_quote_ident(c)} VARCHAR" for c in columns)
+            con.execute(f"CREATE TABLE export_data ({column_defs})")
+        con.table("export_data").write_parquet(output_path)
+    finally:
+        con.close()
+
+
 def infer_csv_columns(file_path: str) -> List[ColumnInfo]:
     """Sniff a CSV's column names/types via DuckDB, without registering a
     view - used by the "Infer types" button in the datasource dialog, before

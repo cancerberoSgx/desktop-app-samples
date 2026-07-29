@@ -311,10 +311,17 @@ The `pg_dump`-specific SQL format is the one piece that doesn't fall out of Duck
 
 
 p2
-ok then, let's implement it. In the datasources screen, add a new main tab "Actions" which will contain:
+ok then, let's implement it. In the datasources screen, add a new main tab "Actions" right next to "Scripts" which will contain:
  * export as parket
  * export schema as parket
 when these option buttons are clicked, the user is asked for an output file and the dump is written in there.
+
+p2
+support also export schema as sql
+
+
+
+BUG: export to parket a postgres db takes too long app freezes. works for csv
 
 ---
 
@@ -333,4 +340,31 @@ task: research this problem and report if this is possible, and alternatives usi
 (don't write any code)
 
 
+
+# review async code
+in this project review if some calls like connecting to a postgres server, loading a big csv, making a sql query / script , exporting data , etc it doesn't blocks/freezes the UI. I suspect so, don't write code, just analyze and suggests options to solve this. While a long task is being executed, there should be a UI feedback/progress/spinner but most importantly, the UI shouldn't freeze and I shuold even trigger another async operation while there's currently one being executed.
+
+# review logs.
+sometimes the app freezes and I cannot access any logs
+Can we log to a .log file or to stdout only when the app runs in dev mode (python main.py) and not when it's bundled / bianries ? 
+
+
+
+# tests
+Let's add some tests using pytest 
+we don't want to test the UI, just some methods for example repositories
+put the tests on /test folder
+add a first_test.py which tests repositories.py
+creates a new profile
+creates a new csv datasource using the following input
+
+id,name,age
+1,seba,42
+2,laura,40
+3,mati,4
+
+call test_connection
+then, create a script "test1" with the query "select * from $table" and assert correct results
+
+finally delete all profile, datasources, scripts, etc.
 

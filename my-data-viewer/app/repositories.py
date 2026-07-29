@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from typing import List, Optional
 
@@ -5,6 +6,10 @@ from . import drivers
 from .models import ColumnInfo, Datasource, DatasourceField, IndexInfo, Profile, QueryResult, Script
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
 
 class DatasourceRepository:
@@ -178,6 +183,32 @@ class DatasourceRepository:
         self, datasource: Datasource, sql: str, params: Optional[list] = None
     ) -> QueryResult:
         return self._driver_for(datasource).execute_sql(sql, params)
+
+    # ------------------------------------------------------------------
+    # Export - same code path regardless of datasource type, since it's
+    # built entirely on list_tables/list_columns/execute_sql above.
+    # ------------------------------------------------------------------
+    def export_to_parquet(self, datasource: Datasource, output_dir: str) -> List[str]:
+        """Dump every table in `datasource` into its own '<table>.parquet'
+        file inside `output_dir`. Returns the paths written."""
+        written = []
+        for table in self.list_tables(datasource):
+            result = self.execute_sql(datasource, f"SELECT * FROM {_quote_ident(table)}")
+            output_path = os.path.join(output_dir, f"{table}.parquet")
+            drivers.write_rows_to_parquet(result.columns, result.rows, output_path)
+            written.append(output_path)
+        return written
+
+    def export_schema_to_parquet(self, datasource: Datasource, output_path: str) -> None:
+        """Dump one row per column across every table in `datasource`
+        (table_name, column_name, type, constraints) into a single Parquet
+        file - schema only, no data."""
+        rows = []
+        for table in self.list_tables(datasource):
+            for column in self.list_columns(datasource, table):
+                rows.append((table, column.name, column.type, column.constraints or ""))
+        columns = ["table_name", "column_name", "type", "constraints"]
+        drivers.write_rows_to_parquet(columns, rows, output_path)
 
 
 class ScriptRepository:
