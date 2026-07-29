@@ -42,3 +42,10 @@ coll = COLLECT(
     upx_exclude=[],
     name='mydataviewer',
 )
+
+app = BUNDLE(
+    coll,
+    name='mydataviewer.app',
+    icon=None,
+    bundle_identifier=None,
+)

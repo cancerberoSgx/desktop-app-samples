@@ -212,6 +212,18 @@ sqlite3.OperationalError: no such table: profiles
 It seems migrations are not running for some reason. Can you check and fix
 
 
+p2
+in macos build now it fails on the upload-artifacts step of  ../.github/workflows/my-data-viewer-build.yml  (it was working fine, with the latest change in that file now it fails.) . Seems the build was OK but upload-artifacts step cannot fin
+
+BUIld step  said:
+20098 INFO: Build complete! The results are available in: /Users/runner/work/desktop-app-samples/desktop-app-samples/my-data-viewer/dist
+
+but upload-artifact fails with:
+
+Run actions/upload-artifact@v4
+Warning: No files were found with the provided path: my-data-viewer/dist/mydataviewer.app. No artifacts will be uploaded.
+
+
 ---
 
 
