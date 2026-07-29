@@ -185,14 +185,6 @@ If possible use a facade on top of the choosen postgresql driver, such as sqlalc
 support datasource type = json. handle it with duckdb so it can support array of objects, ndjson, etc. The "create datasource" for json works very similar to csv. User must select the filePath, DS name is automatically inferred from file name, and user is able to "infer field types", this time using duckdb sniff_json or similar. 
 
 
----
-
-
-# FUTURE
-
-
-
-
 
 # scripts
 
@@ -200,7 +192,18 @@ user can create one or more scripts associated to a profile and a datasource. Sc
 
 
 # ui enhs
-after creating a new datasource, it automatically connects to it and display the data-explore view.
+ * after creating a new datasource, it automatically connects to it and display the data-explore view.
+ * when double-clicking clicking a datasource in the datasources table it will trigger "connect"
+
+
+
+
+---
+
+
+# FUTURE
+
+
 
 
 

@@ -74,7 +74,7 @@ class DatasourcesPage(wx.Panel):
         self._edit_btn.Bind(wx.EVT_BUTTON, self._on_edit)
         self._delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
         self._connect_btn.Bind(wx.EVT_BUTTON, self._on_connect)
-        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_edit)
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_connect)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
 
@@ -125,8 +125,9 @@ class DatasourcesPage(wx.Panel):
         if dlg.ShowModal() == wx.ID_OK:
             datasource = dlg.get_datasource()
             datasource.profile_id = self._profile_id
-            self._repository.create(datasource)
+            created = self._repository.create(datasource)
             self.reload()
+            self._connect(created)
         dlg.Destroy()
 
     def _on_edit(self, event: wx.CommandEvent) -> None:
@@ -158,6 +159,9 @@ class DatasourcesPage(wx.Panel):
         datasource = self._selected_datasource()
         if datasource is None:
             return
+        self._connect(datasource)
+
+    def _connect(self, datasource: Datasource) -> None:
         try:
             self._repository.test_connection(datasource)
         except Exception as exc:
