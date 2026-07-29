@@ -363,6 +363,13 @@ User UX:
  * if the user tries to run another long run task while there's currently one running then there's an dialog saying "Currently running task "X"" and two  * button options "cancel current and run this one", "cancel"
 
 
+p3
+it's working fine in most cases but in export as parket, if the database is big (postgres) it takes some minutes. And the UI is still blocked some seconds just after selecting the output. After those 5 seconds the UI becomes responsive again and shows the progress bar and I can click and cancel the task. Please review what happens on those first seconds, probably there's something running in the same UI thread.
+
+bug
+SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 140478345075648 and this is thread id 140477891753664.
+
+
 
 # review logs.
 sometimes the app freezes and I cannot access any logs

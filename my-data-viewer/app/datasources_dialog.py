@@ -5,6 +5,7 @@ import wx
 import wx.grid
 
 from . import drivers
+from .async_tasks import TaskManager
 from .models import DATASOURCE_TYPES, Datasource, DatasourceField
 
 # Config for the two file-based datasource types ("csv", "json"), which share
@@ -37,11 +38,13 @@ class DatasourceDialog(wx.Dialog):
         fields: Optional[List[DatasourceField]] = None,
         initial_file_path: Optional[str] = None,
         initial_type: Optional[str] = None,
+        task_manager: Optional[TaskManager] = None,
     ) -> None:
         title = "Edit Datasource" if datasource else "New Datasource"
         super().__init__(parent, title=title, size=(560, 560))
         self._datasource = datasource
         self._result = None
+        self._task_manager = task_manager
         self._initial_fields = fields or []
         # Only meaningful when `datasource` is None (e.g. a file dropped onto
         # the app that doesn't match any existing datasource yet) - prefills
@@ -173,19 +176,30 @@ class DatasourceDialog(wx.Dialog):
         if not file_path:
             wx.MessageBox(f"Pick a {kind.upper()} file first.", "Infer types", wx.OK | wx.ICON_WARNING, self)
             return
-        try:
-            columns = _FILE_KINDS[kind]["infer"](file_path)
-        except Exception as exc:
+
+        def work(handle):
+            return _FILE_KINDS[kind]["infer"](file_path)
+
+        def on_success(columns) -> None:
+            self._set_grid_fields(
+                self._fields_grids[kind],
+                [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)],
+            )
+
+        def on_error(exc: Exception) -> None:
             wx.MessageBox(
                 f"Could not infer types from this {kind.upper()} file:\n\n{exc}",
                 "Infer types",
                 wx.OK | wx.ICON_ERROR,
                 self,
             )
-            return
-        self._set_grid_fields(
-            self._fields_grids[kind],
-            [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)],
+
+        self._task_manager.start(
+            self,
+            f'Inferring types from "{os.path.basename(file_path)}"',
+            work,
+            on_success=on_success,
+            on_error=on_error,
         )
 
     def _build_db_panel(self, datasource: Optional[Datasource]) -> wx.Panel:

@@ -2,6 +2,7 @@ from typing import Callable, List, Optional
 
 import wx
 
+from .async_tasks import TaskManager
 from .datasources_dialog import DatasourceDialog
 from .models import DATASOURCE_TYPES, Datasource
 from .repositories import DatasourceRepository
@@ -25,11 +26,13 @@ class DatasourcesPage(wx.Panel):
         repository: DatasourceRepository,
         profile_id: int,
         on_connected: Callable[[Datasource], None],
+        task_manager: TaskManager,
     ) -> None:
         super().__init__(parent)
         self._repository = repository
         self._profile_id = profile_id
         self._on_connected = on_connected
+        self._task_manager = task_manager
         self._datasources: List[Datasource] = []
 
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -124,7 +127,9 @@ class DatasourcesPage(wx.Panel):
         self._show_new_dialog()
 
     def _show_new_dialog(self, initial_file_path: Optional[str] = None, initial_type: Optional[str] = None) -> None:
-        dlg = DatasourceDialog(self, initial_file_path=initial_file_path, initial_type=initial_type)
+        dlg = DatasourceDialog(
+            self, initial_file_path=initial_file_path, initial_type=initial_type, task_manager=self._task_manager
+        )
         if dlg.ShowModal() == wx.ID_OK:
             datasource = dlg.get_datasource()
             datasource.profile_id = self._profile_id
@@ -149,7 +154,7 @@ class DatasourcesPage(wx.Panel):
         if datasource is None:
             return
         fields = self._repository.list_fields(datasource.id) if datasource.type in ("csv", "json") else []
-        dlg = DatasourceDialog(self, datasource, fields=fields)
+        dlg = DatasourceDialog(self, datasource, fields=fields, task_manager=self._task_manager)
         if dlg.ShowModal() == wx.ID_OK:
             self._repository.update(dlg.get_datasource())
             self.reload()
@@ -176,14 +181,20 @@ class DatasourcesPage(wx.Panel):
         self._connect(datasource)
 
     def _connect(self, datasource: Datasource) -> None:
-        try:
+        def work(handle):
             self._repository.test_connection(datasource)
-        except Exception as exc:
+
+        def on_success(_result) -> None:
+            self._on_connected(datasource)
+
+        def on_error(exc: Exception) -> None:
             wx.MessageBox(
                 f'Could not connect to "{datasource.name}":\n\n{exc}',
                 "Connection failed",
                 wx.OK | wx.ICON_ERROR,
                 self,
             )
-            return
-        self._on_connected(datasource)
+
+        self._task_manager.start(
+            self, f'Connecting to "{datasource.name}"', work, on_success=on_success, on_error=on_error
+        )

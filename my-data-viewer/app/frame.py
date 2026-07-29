@@ -5,6 +5,7 @@ from urllib.parse import unquote, urlparse
 import wx
 import wx.stc as stc
 
+from app.async_tasks import TaskManager
 from app.data_explore_page import DataExplorePage
 from app.datasources_page import DatasourcesPage
 from app.db.connection import get_connection
@@ -15,6 +16,7 @@ from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
 from app.repositories import DatasourceRepository, ProfileRepository, ScriptRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
+from app.task_status_bar import TaskStatusBar
 
 DEFAULT_PROFILE_NAME = "default"
 DATASOURCES_SIDEBAR_INDEX = 1
@@ -98,9 +100,10 @@ class MainFrame(wx.Frame):
         self.script_repository = ScriptRepository(conn)
 
         self.active_profile_id = self._bootstrap_active_profile()
+        self.task_manager = TaskManager()
 
         self._build_menu_bar()
-        self.CreateStatusBar()
+        self.SetStatusBar(TaskStatusBar(self, self.task_manager))
         self.SetStatusText("Ready")
 
         root_panel = wx.Panel(self)
@@ -122,6 +125,7 @@ class MainFrame(wx.Frame):
             self.datasource_repository,
             self.active_profile_id,
             on_connected=self._on_datasource_connected,
+            task_manager=self.task_manager,
         )
         self.book.AddPage(self.profiles_page, "Profiles")
         self.book.AddPage(self.datasources_page, "Datasources")
@@ -129,7 +133,11 @@ class MainFrame(wx.Frame):
 
         # Not a sidebar destination - reached only via "Connect" on Datasources.
         self.data_explore_page = DataExplorePage(
-            self.book, self.datasource_repository, self.script_repository, on_back=self._go_to_datasources
+            self.book,
+            self.datasource_repository,
+            self.script_repository,
+            on_back=self._go_to_datasources,
+            task_manager=self.task_manager,
         )
         self.book.AddPage(self.data_explore_page, "Data Explore")
         self.data_explore_page_index = self.book.GetPageCount() - 1
@@ -215,6 +223,7 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self._handle_dropped_file, path)
 
     def _handle_dropped_file(self, path: str) -> None:
+        print('_handle_dropped_file', path)
         path = _normalize_dropped_path(path)
         ext = os.path.splitext(path)[1].lower().lstrip(".")
         type_ = _DROPPABLE_FILE_TYPES.get(ext)

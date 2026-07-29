@@ -1,9 +1,13 @@
 import os
 import sqlite3
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from . import drivers
+from .db.paths import db_path
 from .models import ColumnInfo, Datasource, DatasourceField, IndexInfo, Profile, QueryResult, Script
+
+if TYPE_CHECKING:
+    from .async_tasks import TaskHandle
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 
@@ -143,10 +147,22 @@ class DatasourceRepository:
     # with what the user picked).
     # ------------------------------------------------------------------
     def list_fields(self, datasource_id: int) -> List[DatasourceField]:
-        rows = self._conn.execute(
-            "SELECT * FROM datasources_fields WHERE datasource_id = ? ORDER BY position",
-            (datasource_id,),
-        ).fetchall()
+        """Uses its own short-lived connection rather than `self._conn`:
+        this is the one DatasourceRepository read reachable from a
+        background task thread (via `_driver_for`, called by async
+        query/export/connect operations), and a sqlite3.Connection can only
+        be used on the thread that created it - `self._conn` belongs to the
+        UI thread. A fresh connection per call sidesteps that, which SQLite
+        supports safely regardless of which thread opens it."""
+        conn = sqlite3.connect(db_path())
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM datasources_fields WHERE datasource_id = ? ORDER BY position",
+                (datasource_id,),
+            ).fetchall()
+        finally:
+            conn.close()
         return [self._row_to_field(row) for row in rows]
 
     def _save_fields(self, datasource_id: int, fields: List[DatasourceField]) -> None:
@@ -191,33 +207,52 @@ class DatasourceRepository:
         self._driver_for(datasource).test_connection()
 
     def execute_sql(
-        self, datasource: Datasource, sql: str, params: Optional[list] = None
+        self,
+        datasource: Datasource,
+        sql: str,
+        params: Optional[list] = None,
+        handle: Optional["TaskHandle"] = None,
     ) -> QueryResult:
-        return self._driver_for(datasource).execute_sql(sql, params)
+        return self._driver_for(datasource).execute_sql(sql, params, handle=handle)
 
     # ------------------------------------------------------------------
     # Export - same code path regardless of datasource type, since it's
     # built entirely on list_tables/list_columns/execute_sql above.
+    # `handle`, when given, is polled between tables so a cancel takes
+    # effect at the next table boundary even if the in-flight query itself
+    # can't be interrupted.
     # ------------------------------------------------------------------
-    def export_to_parquet(self, datasource: Datasource, output_dir: str) -> List[str]:
+    def export_to_parquet(
+        self, datasource: Datasource, output_dir: str, handle: Optional["TaskHandle"] = None
+    ) -> List[str]:
         """Dump every table in `datasource` into its own '<table>.parquet'
         file inside `output_dir`. Returns the paths written."""
         written = []
         for table in self.list_tables(datasource):
-            result = self.execute_sql(datasource, f"SELECT * FROM {_quote_ident(table)}")
+            if handle is not None and handle.is_cancelled():
+                break
+            result = self.execute_sql(datasource, f"SELECT * FROM {_quote_ident(table)}", handle=handle)
+            if handle is not None and handle.is_cancelled():
+                break
             output_path = os.path.join(output_dir, f"{table}.parquet")
             drivers.write_rows_to_parquet(result.columns, result.rows, output_path)
             written.append(output_path)
         return written
 
-    def export_schema_to_parquet(self, datasource: Datasource, output_path: str) -> None:
+    def export_schema_to_parquet(
+        self, datasource: Datasource, output_path: str, handle: Optional["TaskHandle"] = None
+    ) -> None:
         """Dump one row per column across every table in `datasource`
         (table_name, column_name, type, constraints) into a single Parquet
         file - schema only, no data."""
         rows = []
         for table in self.list_tables(datasource):
+            if handle is not None and handle.is_cancelled():
+                return
             for column in self.list_columns(datasource, table):
                 rows.append((table, column.name, column.type, column.constraints or ""))
+        if handle is not None and handle.is_cancelled():
+            return
         columns = ["table_name", "column_name", "type", "constraints"]
         drivers.write_rows_to_parquet(columns, rows, output_path)
 
