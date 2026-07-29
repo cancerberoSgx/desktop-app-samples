@@ -114,10 +114,10 @@ class DatasourceRepository:
         )
 
     # ------------------------------------------------------------------
-    # datasources_fields (1-N, csv only) - the name/type the user confirmed
-    # via "Infer types" in the dialog, reapplied every time the csv is
-    # queried so DuckDB doesn't have to re-guess (and can't disagree with
-    # what the user picked).
+    # datasources_fields (1-N, csv/json only) - the name/type the user
+    # confirmed via "Infer types" in the dialog, reapplied every time the
+    # file is queried so DuckDB doesn't have to re-guess (and can't disagree
+    # with what the user picked).
     # ------------------------------------------------------------------
     def list_fields(self, datasource_id: int) -> List[DatasourceField]:
         rows = self._conn.execute(
@@ -149,7 +149,7 @@ class DatasourceRepository:
     # ------------------------------------------------------------------
     def _driver_for(self, datasource: Datasource):
         column_types = None
-        if datasource.type == "csv" and datasource.id is not None:
+        if datasource.type in ("csv", "json") and datasource.id is not None:
             fields = self.list_fields(datasource.id)
             if fields:
                 column_types = {f.name: f.type for f in fields}

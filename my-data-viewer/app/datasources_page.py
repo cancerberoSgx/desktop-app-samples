@@ -8,7 +8,7 @@ from .repositories import DatasourceRepository
 
 
 def _details_for(datasource: Datasource) -> str:
-    if datasource.type == "csv":
+    if datasource.type in ("csv", "json"):
         return datasource.file_path or ""
     host = datasource.db_host or ""
     port = f":{datasource.db_port}" if datasource.db_port else ""
@@ -133,7 +133,7 @@ class DatasourcesPage(wx.Panel):
         datasource = self._selected_datasource()
         if datasource is None:
             return
-        fields = self._repository.list_fields(datasource.id) if datasource.type == "csv" else []
+        fields = self._repository.list_fields(datasource.id) if datasource.type in ("csv", "json") else []
         dlg = DatasourceDialog(self, datasource, fields=fields)
         if dlg.ShowModal() == wx.ID_OK:
             self._repository.update(dlg.get_datasource())

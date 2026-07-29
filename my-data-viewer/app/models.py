@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-DATASOURCE_TYPES = ("postgres", "mysql", "csv")
+DATASOURCE_TYPES = ("postgres", "mysql", "csv", "json")
 
 
 @dataclass

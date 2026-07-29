@@ -10,12 +10,14 @@ from .models import ColumnInfo, Datasource, IndexInfo, QueryResult
 
 def get_driver(
     datasource: Datasource, column_types: Optional[Dict[str, str]] = None
-) -> Union["CsvDriver", "PostgresDriver"]:
+) -> Union["CsvDriver", "JsonDriver", "PostgresDriver"]:
     """Return the driver object able to run operations against `datasource`.
     `column_types` (name -> DuckDB type) overrides auto-detection for csv -
     see DatasourceRepository, which loads them from `datasources_fields`."""
     if datasource.type == "csv":
         return CsvDriver(datasource.file_path, column_types=column_types)
+    if datasource.type == "json":
+        return JsonDriver(datasource.file_path, column_types=column_types)
     if datasource.type == "postgres":
         return PostgresDriver(datasource)
     if datasource.type == "mysql":
@@ -82,6 +84,57 @@ class CsvDriver:
         # Registers the CSV as a view via DuckDB's relation API rather than
         # interpolating the file path into a SQL string.
         con.read_csv(self.file_path, dtype=self.column_types).create_view(self.table_name)
+        return con
+
+
+class JsonDriver:
+    """Exposes a single JSON file as one queryable SQL table, via DuckDB's
+    JSON reader - handles a top-level array of objects and newline-delimited
+    JSON (ndjson) alike, since DuckDB auto-detects the layout (`format="auto"`
+    by default). Mirrors CsvDriver: each call opens its own in-memory DuckDB
+    connection and registers the file as a view via the relation API rather
+    than interpolating the file path into a SQL string. `column_types` (name
+    -> DuckDB type), when given, is passed through as the view's column-type
+    override instead of letting DuckDB auto-detect every column.
+    """
+
+    def __init__(self, file_path: str, column_types: Optional[Dict[str, str]] = None):
+        self.file_path = file_path
+        self.table_name = _table_name_for(file_path)
+        self.column_types = column_types or {}
+
+    def list_tables(self) -> List[str]:
+        return [self.table_name]
+
+    def list_columns(self, table: str) -> List[ColumnInfo]:
+        con = self._connect()
+        try:
+            description = con.execute(f'SELECT * FROM "{self.table_name}" LIMIT 0').description
+            return [ColumnInfo(name=col[0], type=str(col[1])) for col in description]
+        finally:
+            con.close()
+
+    def list_indexes(self, table: str) -> List[IndexInfo]:
+        return []  # a JSON file has no indexes
+
+    def test_connection(self) -> None:
+        """Raises if the JSON file can't be opened/parsed by DuckDB."""
+        con = self._connect()
+        con.close()
+
+    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
+        con = self._connect()
+        try:
+            cursor = con.execute(sql, params or [])
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+            return QueryResult(columns=columns, rows=rows)
+        finally:
+            con.close()
+
+    def _connect(self) -> duckdb.DuckDBPyConnection:
+        con = duckdb.connect(":memory:")
+        con.read_json(self.file_path, columns=self.column_types or None).create_view(self.table_name)
         return con
 
 
@@ -215,6 +268,22 @@ def infer_csv_columns(file_path: str) -> List[ColumnInfo]:
     con = duckdb.connect(":memory:")
     try:
         relation = con.read_csv(file_path)
+        return [
+            ColumnInfo(name=name, type=str(dtype))
+            for name, dtype in zip(relation.columns, relation.types)
+        ]
+    finally:
+        con.close()
+
+
+def infer_json_columns(file_path: str) -> List[ColumnInfo]:
+    """Sniff a JSON file's column names/types via DuckDB (array-of-objects or
+    ndjson alike), without registering a view - used by the "Infer types"
+    button in the datasource dialog, before the datasource (and its file
+    path) has necessarily been saved anywhere."""
+    con = duckdb.connect(":memory:")
+    try:
+        relation = con.read_json(file_path)
         return [
             ColumnInfo(name=name, type=str(dtype))
             for name, dtype in zip(relation.columns, relation.types)

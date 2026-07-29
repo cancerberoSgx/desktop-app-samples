@@ -7,10 +7,27 @@ import wx.grid
 from . import drivers
 from .models import DATASOURCE_TYPES, Datasource, DatasourceField
 
+# Config for the two file-based datasource types ("csv", "json"), which share
+# an (almost) identical dialog panel: a file picker, a name auto-filled from
+# the file's basename, and an "Infer types" button populating the same
+# name/type grid.
+_FILE_KINDS = {
+    "csv": {
+        "label": "CSV file:",
+        "wildcard": "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+        "infer": drivers.infer_csv_columns,
+    },
+    "json": {
+        "label": "JSON file:",
+        "wildcard": "JSON files (*.json;*.ndjson;*.jsonl)|*.json;*.ndjson;*.jsonl|All files (*.*)|*.*",
+        "infer": drivers.infer_json_columns,
+    },
+}
+
 
 class DatasourceDialog(wx.Dialog):
     """Create/edit form for a Datasource - shows a different set of fields
-    depending on the selected type (a file picker for csv, connection
+    depending on the selected type (a file picker for csv/json, connection
     fields for postgres/mysql)."""
 
     def __init__(
@@ -43,8 +60,13 @@ class DatasourceDialog(wx.Dialog):
 
         outer.Add(grid, 0, wx.EXPAND | wx.ALL, 16)
 
+        self._file_pickers = {}
+        self._fields_grids = {}
+        self._infer_btns = {}
+
         self._book = wx.Simplebook(self)
-        self._book.AddPage(self._build_csv_panel(datasource), "csv")
+        self._book.AddPage(self._build_file_panel(datasource, "csv"), "csv")
+        self._book.AddPage(self._build_file_panel(datasource, "json"), "json")
         self._book.AddPage(self._build_db_panel(datasource), "db")
         outer.Add(self._book, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 16)
 
@@ -57,44 +79,49 @@ class DatasourceDialog(wx.Dialog):
 
         self._on_type_changed(None)
 
-    def _build_csv_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
+    def _build_file_panel(self, datasource: Optional[Datasource], kind: str) -> wx.Panel:
+        config = _FILE_KINDS[kind]
         panel = wx.Panel(self._book)
         sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(wx.StaticText(panel, label="CSV file:"), 0, wx.BOTTOM, 4)
-        initial = datasource.file_path if (datasource and datasource.file_path) else ""
-        self._file_picker = wx.FilePickerCtrl(
+        sizer.Add(wx.StaticText(panel, label=config["label"]), 0, wx.BOTTOM, 4)
+        initial = datasource.file_path if (datasource and datasource.type == kind and datasource.file_path) else ""
+        file_picker = wx.FilePickerCtrl(
             panel,
             path=initial,
-            wildcard="CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            wildcard=config["wildcard"],
             style=wx.FLP_USE_TEXTCTRL | wx.FLP_OPEN | wx.FLP_FILE_MUST_EXIST,
         )
-        sizer.Add(self._file_picker, 0, wx.EXPAND | wx.BOTTOM, 12)
+        self._file_pickers[kind] = file_picker
+        sizer.Add(file_picker, 0, wx.EXPAND | wx.BOTTOM, 12)
 
         columns_row = wx.BoxSizer(wx.HORIZONTAL)
         columns_row.Add(wx.StaticText(panel, label="Columns:"), 0, wx.ALIGN_CENTER_VERTICAL)
         columns_row.AddStretchSpacer()
-        self._infer_types_btn = wx.Button(panel, label="Infer types")
-        columns_row.Add(self._infer_types_btn, 0)
+        infer_btn = wx.Button(panel, label="Infer types")
+        self._infer_btns[kind] = infer_btn
+        columns_row.Add(infer_btn, 0)
         sizer.Add(columns_row, 0, wx.EXPAND | wx.BOTTOM, 4)
 
-        self._fields_grid = wx.grid.Grid(panel)
-        self._fields_grid.CreateGrid(0, 2)
-        self._fields_grid.SetColLabelValue(0, "Column name")
-        self._fields_grid.SetColLabelValue(1, "Type")
-        self._fields_grid.HideRowLabels()
-        self._fields_grid.SetColSize(0, 220)
-        self._fields_grid.SetColSize(1, 180)
-        sizer.Add(self._fields_grid, 1, wx.EXPAND)
+        fields_grid = wx.grid.Grid(panel)
+        fields_grid.CreateGrid(0, 2)
+        fields_grid.SetColLabelValue(0, "Column name")
+        fields_grid.SetColLabelValue(1, "Type")
+        fields_grid.HideRowLabels()
+        fields_grid.SetColSize(0, 220)
+        fields_grid.SetColSize(1, 180)
+        self._fields_grids[kind] = fields_grid
+        sizer.Add(fields_grid, 1, wx.EXPAND)
 
         panel.SetSizer(sizer)
-        self._set_grid_fields(self._initial_fields)
+        if datasource and datasource.type == kind:
+            self._set_grid_fields(fields_grid, self._initial_fields)
 
-        self._file_picker.Bind(wx.EVT_FILEPICKER_CHANGED, self._on_csv_file_changed)
-        self._infer_types_btn.Bind(wx.EVT_BUTTON, self._on_infer_types)
+        file_picker.Bind(wx.EVT_FILEPICKER_CHANGED, self._on_file_changed)
+        infer_btn.Bind(wx.EVT_BUTTON, lambda evt, kind=kind: self._on_infer_types(kind))
         return panel
 
-    def _set_grid_fields(self, fields: List[DatasourceField]) -> None:
-        grid = self._fields_grid
+    @staticmethod
+    def _set_grid_fields(grid: wx.grid.Grid, fields: List[DatasourceField]) -> None:
         current_rows = grid.GetNumberRows()
         if current_rows:
             grid.DeleteRows(0, current_rows)
@@ -105,8 +132,8 @@ class DatasourceDialog(wx.Dialog):
             grid.SetReadOnly(row, 0, True)
             grid.SetCellValue(row, 1, field.type)
 
-    def _grid_fields(self) -> List[DatasourceField]:
-        grid = self._fields_grid
+    @staticmethod
+    def _grid_fields(grid: wx.grid.Grid) -> List[DatasourceField]:
         fields = []
         for row in range(grid.GetNumberRows()):
             name = grid.GetCellValue(row, 0).strip()
@@ -115,30 +142,31 @@ class DatasourceDialog(wx.Dialog):
                 fields.append(DatasourceField(name=name, type=type_, position=row))
         return fields
 
-    def _on_csv_file_changed(self, event: wx.FileDirPickerEvent) -> None:
+    def _on_file_changed(self, event: wx.FileDirPickerEvent) -> None:
         if not self._name_ctrl.GetValue().strip():
-            base = os.path.splitext(os.path.basename(self._file_picker.GetPath()))[0]
+            base = os.path.splitext(os.path.basename(event.GetEventObject().GetPath()))[0]
             if base:
                 self._name_ctrl.SetValue(base)
         event.Skip()
 
-    def _on_infer_types(self, event: wx.CommandEvent) -> None:
-        file_path = self._file_picker.GetPath().strip()
+    def _on_infer_types(self, kind: str) -> None:
+        file_path = self._file_pickers[kind].GetPath().strip()
         if not file_path:
-            wx.MessageBox("Pick a CSV file first.", "Infer types", wx.OK | wx.ICON_WARNING, self)
+            wx.MessageBox(f"Pick a {kind.upper()} file first.", "Infer types", wx.OK | wx.ICON_WARNING, self)
             return
         try:
-            columns = drivers.infer_csv_columns(file_path)
+            columns = _FILE_KINDS[kind]["infer"](file_path)
         except Exception as exc:
             wx.MessageBox(
-                f"Could not infer types from this CSV:\n\n{exc}",
+                f"Could not infer types from this {kind.upper()} file:\n\n{exc}",
                 "Infer types",
                 wx.OK | wx.ICON_ERROR,
                 self,
             )
             return
         self._set_grid_fields(
-            [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)]
+            self._fields_grids[kind],
+            [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)],
         )
 
     def _build_db_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
@@ -211,7 +239,8 @@ class DatasourceDialog(wx.Dialog):
 
     def _on_type_changed(self, event: Optional[wx.CommandEvent]) -> None:
         selected_type = self._type_choice.GetStringSelection()
-        self._book.SetSelection(0 if selected_type == "csv" else 1)
+        page_index = {"csv": 0, "json": 1}.get(selected_type, 2)
+        self._book.SetSelection(page_index)
 
     def _on_ok(self, event: wx.CommandEvent) -> None:
         name = self._name_ctrl.GetValue().strip()
@@ -222,10 +251,15 @@ class DatasourceDialog(wx.Dialog):
         db_host = db_name = db_user = db_password = None
         db_port = None
 
-        if selected_type == "csv":
-            file_path = self._file_picker.GetPath().strip()
+        if selected_type in ("csv", "json"):
+            file_path = self._file_pickers[selected_type].GetPath().strip()
             if not file_path:
-                wx.MessageBox("A CSV file path is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
+                wx.MessageBox(
+                    f"A {selected_type.upper()} file path is required.",
+                    "Validation error",
+                    wx.OK | wx.ICON_WARNING,
+                    self,
+                )
                 return
             if not name:
                 name = os.path.splitext(os.path.basename(file_path))[0]
@@ -265,7 +299,7 @@ class DatasourceDialog(wx.Dialog):
             db_name=db_name,
             db_user=db_user,
             db_password=db_password,
-            fields=self._grid_fields() if selected_type == "csv" else [],
+            fields=self._grid_fields(self._fields_grids[selected_type]) if selected_type in ("csv", "json") else [],
         )
         self.EndModal(wx.ID_OK)
 
