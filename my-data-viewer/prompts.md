@@ -311,7 +311,10 @@ The `pg_dump`-specific SQL format is the one piece that doesn't fall out of Duck
 
 
 p2
-when exporting a postgres db to parket, can I still use sqlalchemy and postgres driver to access the datasource in the UI and make queries and only use dockdb if neccesary for the export ? 
+ok then, let's implement it. In the datasources screen, add a new main tab "Actions" which will contain:
+ * export as parket
+ * export schema as parket
+when these option buttons are clicked, the user is asked for an output file and the dump is written in there.
 
 ---
 

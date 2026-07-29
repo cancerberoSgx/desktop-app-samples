@@ -1,3 +1,5 @@
+from typing import List
+
 import wx
 
 from app.data_explore_page import DataExplorePage
@@ -5,7 +7,7 @@ from app.datasources_page import DatasourcesPage
 from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
-from app.models import Datasource
+from app.models import Datasource, Script
 from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
 from app.repositories import DatasourceRepository, ProfileRepository, ScriptRepository, SettingsRepository
@@ -13,6 +15,42 @@ from app.sidebar import Sidebar, SIDEBAR_ITEMS
 
 DEFAULT_PROFILE_NAME = "default"
 DATASOURCES_SIDEBAR_INDEX = 1
+
+
+class UnsavedScriptsDialog(wx.Dialog):
+    """Shown on app exit when one or more scripts have unsaved edits (across
+    any datasource, not just the currently displayed one)."""
+
+    ID_SAVE_ALL = wx.NewIdRef()
+    ID_DISCARD_ALL = wx.NewIdRef()
+
+    def __init__(self, parent: wx.Window, script_names: List[str]) -> None:
+        super().__init__(parent, title="Unsaved scripts")
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        names = ", ".join(script_names)
+        message = wx.StaticText(
+            self, label=f"There are unsaved scripts: {names}.\nHow would you like to continue?"
+        )
+        message.Wrap(380)
+        sizer.Add(message, 0, wx.ALL, 16)
+
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        cancel_btn = wx.Button(self, id=wx.ID_CANCEL, label="Cancel")
+        discard_btn = wx.Button(self, id=self.ID_DISCARD_ALL, label="Discard All")
+        save_btn = wx.Button(self, id=self.ID_SAVE_ALL, label="Save All")
+        btn_sizer.Add(cancel_btn, 0, wx.RIGHT, 8)
+        btn_sizer.Add(discard_btn, 0, wx.RIGHT, 8)
+        btn_sizer.Add(save_btn, 0)
+        sizer.Add(btn_sizer, 0, wx.ALIGN_RIGHT | wx.ALL, 16)
+
+        self.SetSizerAndFit(sizer)
+
+        cancel_btn.Bind(wx.EVT_BUTTON, lambda evt: self.EndModal(wx.ID_CANCEL))
+        discard_btn.Bind(wx.EVT_BUTTON, lambda evt: self.EndModal(self.ID_DISCARD_ALL))
+        save_btn.Bind(wx.EVT_BUTTON, lambda evt: self.EndModal(self.ID_SAVE_ALL))
+        save_btn.SetDefault()
 
 
 class MainFrame(wx.Frame):
@@ -68,6 +106,8 @@ class MainFrame(wx.Frame):
         root_panel.SetSizer(root_sizer)
 
         self.Centre()
+
+        self.Bind(wx.EVT_CLOSE, self._on_close)
 
     # ------------------------------------------------------------------
     # Profile bootstrap / switching
@@ -149,6 +189,37 @@ class MainFrame(wx.Frame):
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()
+
+    def _on_close(self, event: wx.CloseEvent) -> None:
+        unsaved = self.data_explore_page.list_unsaved_scripts()
+        if not unsaved:
+            self.Destroy()
+            return
+
+        dlg = UnsavedScriptsDialog(self, [s.name for s in unsaved])
+        try:
+            choice = dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+
+        if choice == wx.ID_CANCEL:
+            if event.CanVeto():
+                event.Veto()
+            self._focus_unsaved_script(unsaved[0])
+            return
+        if choice == UnsavedScriptsDialog.ID_SAVE_ALL:
+            self.data_explore_page.save_all_unsaved_scripts()
+        elif choice == UnsavedScriptsDialog.ID_DISCARD_ALL:
+            self.data_explore_page.discard_all_unsaved_scripts()
+        self.Destroy()
+
+    def _focus_unsaved_script(self, script: Script) -> None:
+        datasource = self.datasource_repository.get(script.datasource_id)
+        if datasource is None:
+            return
+        self.data_explore_page.load_datasource(datasource)
+        self.book.ChangeSelection(self.data_explore_page_index)
+        self.data_explore_page.focus_script(script.id)
 
     def _on_about(self, event: wx.CommandEvent) -> None:
         wx.MessageBox(

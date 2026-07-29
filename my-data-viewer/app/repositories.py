@@ -97,6 +97,12 @@ class DatasourceRepository:
         self._conn.execute("DELETE FROM datasources WHERE id = ?", (datasource_id,))
         self._conn.commit()
 
+    def set_last_script_id(self, datasource_id: int, script_id: Optional[int]) -> None:
+        self._conn.execute(
+            "UPDATE datasources SET last_script_id = ? WHERE id = ?", (script_id, datasource_id)
+        )
+        self._conn.commit()
+
     @staticmethod
     def _row_to_datasource(row: sqlite3.Row) -> Datasource:
         return Datasource(
@@ -111,6 +117,7 @@ class DatasourceRepository:
             db_name=row["db_name"],
             db_user=row["db_user"],
             db_password=row["db_password"],
+            last_script_id=row["last_script_id"],
         )
 
     # ------------------------------------------------------------------

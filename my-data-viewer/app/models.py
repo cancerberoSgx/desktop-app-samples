@@ -31,6 +31,7 @@ class Datasource:
     db_user: Optional[str] = None
     db_password: Optional[str] = None
     fields: List[DatasourceField] = field(default_factory=list)
+    last_script_id: Optional[int] = None
 
 
 @dataclass

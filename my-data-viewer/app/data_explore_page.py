@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import wx
 import wx.grid
@@ -644,12 +644,13 @@ class SqlEditor(stc.StyledTextCtrl):
         self.SetSavePoint()
         self.Enable(False)
 
-    def load_content(self, content: str) -> None:
+    def load_content(self, content: str, mark_dirty: bool = False) -> None:
         self.Enable(True)
         self.SetReadOnly(False)
         self.SetText(content)
         self.EmptyUndoBuffer()
-        self.SetSavePoint()
+        if not mark_dirty:
+            self.SetSavePoint()
 
 
 class ScriptResultPanel(wx.Panel):
@@ -818,7 +819,14 @@ class ScriptsTab(wx.Panel):
     delete saved SQL scripts, edit their content in a syntax-highlighted
     editor, and run either the whole script or just the selected statement
     against the datasource - results render in ScriptResultPanel (same
-    list-ctrl grid as the Data tab, sortable/filterable client-side)."""
+    list-ctrl grid as the Data tab, sortable/filterable client-side).
+
+    Edits are not persisted until an explicit Save (or the exit "Save All"
+    flow) - switching to another script, or to another datasource entirely,
+    only stashes the in-progress text in `_pending_edits` (keyed by script
+    id, surviving datasource switches) so several scripts across different
+    datasources can be "unsaved" at once, which the app-exit confirmation
+    needs to be able to list and act on."""
 
     def __init__(
         self, parent: wx.Window, script_repository: ScriptRepository, datasource_repository: DatasourceRepository
@@ -829,6 +837,7 @@ class ScriptsTab(wx.Panel):
         self._datasource: Optional[Datasource] = None
         self._scripts: List[Script] = []
         self._current_script: Optional[Script] = None
+        self._pending_edits: Dict[int, str] = {}
 
         outer = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -881,13 +890,14 @@ class ScriptsTab(wx.Panel):
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
-    def load_datasource(self, datasource: Datasource) -> None:
-        self._save_current()
+    def load_datasource(self, datasource: Datasource, tables: Optional[List[str]] = None) -> None:
+        self._capture_current_edits()
         self._datasource = datasource
+        self._ensure_default_script(tables or [])
         self._reload_scripts(select_id=None)
 
     def clear(self) -> None:
-        self._save_current()
+        self._capture_current_edits()
         self._datasource = None
         self._scripts = []
         self._current_script = None
@@ -896,13 +906,33 @@ class ScriptsTab(wx.Panel):
         self._result_panel.clear()
         self._update_button_states()
 
+    def _ensure_default_script(self, tables: List[str]) -> None:
+        """If this datasource has no scripts yet, seed it with one so the
+        user always lands on something runnable rather than an empty list."""
+        if self._datasource is None or self._script_repository.list(self._datasource.id):
+            return
+        table_name = tables[0] if tables else "table_name"
+        self._script_repository.create(
+            Script(
+                id=None,
+                name="script 1",
+                content=f"select * from {table_name}",
+                profile_id=self._datasource.profile_id,
+                datasource_id=self._datasource.id,
+            )
+        )
+
     def _reload_scripts(self, select_id: Optional[int]) -> None:
         self._scripts = self._script_repository.list(self._datasource.id) if self._datasource else []
         self._list.Set([s.name for s in self._scripts])
         index = wx.NOT_FOUND
         if select_id is not None:
             index = next((i for i, s in enumerate(self._scripts) if s.id == select_id), wx.NOT_FOUND)
-        elif self._scripts:
+        elif self._datasource is not None and self._datasource.last_script_id is not None:
+            index = next(
+                (i for i, s in enumerate(self._scripts) if s.id == self._datasource.last_script_id), wx.NOT_FOUND
+            )
+        if index == wx.NOT_FOUND and self._scripts:
             index = 0
         if index != wx.NOT_FOUND:
             self._list.SetSelection(index)
@@ -920,9 +950,25 @@ class ScriptsTab(wx.Panel):
         if script is None:
             self._editor.clear_and_disable()
         else:
-            self._editor.load_content(script.content)
+            pending = self._pending_edits.get(script.id)
+            if pending is not None:
+                self._editor.load_content(pending, mark_dirty=True)
+            else:
+                self._editor.load_content(script.content)
+            if self._datasource is not None:
+                self._datasource_repository.set_last_script_id(self._datasource.id, script.id)
         self._result_panel.clear()
         self._update_button_states()
+
+    def focus_script(self, script_id: int) -> None:
+        """Select and load `script_id` in this datasource's list - used to
+        bring an unsaved script into view (e.g. after the user cancels the
+        exit confirmation)."""
+        index = next((i for i, s in enumerate(self._scripts) if s.id == script_id), wx.NOT_FOUND)
+        if index != wx.NOT_FOUND:
+            self._list.SetSelection(index)
+            self._load_selected()
+        self._list.SetFocus()
 
     def _update_button_states(self) -> None:
         has_datasource = self._datasource is not None
@@ -937,19 +983,57 @@ class ScriptsTab(wx.Panel):
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
-    def _save_current(self) -> None:
-        if self._current_script is None or not self._editor.GetModify():
+    def _capture_current_edits(self) -> None:
+        """Stash the editor's in-progress text for the current script into
+        `_pending_edits` if it differs from what's saved - does not write to
+        the database. Called whenever the editor is about to show something
+        else (another script, another datasource, or being torn down)."""
+        if self._current_script is not None and self._editor.GetModify():
+            self._pending_edits[self._current_script.id] = self._editor.GetText()
+
+    def _on_save(self, event: wx.CommandEvent) -> None:
+        if self._current_script is None:
             return
         self._current_script.content = self._editor.GetText()
         self._script_repository.update(self._current_script)
+        self._pending_edits.pop(self._current_script.id, None)
         self._editor.SetSavePoint()
 
-    def _on_save(self, event: wx.CommandEvent) -> None:
-        self._save_current()
-
     def _on_script_selected(self, event: wx.CommandEvent) -> None:
-        self._save_current()
+        self._capture_current_edits()
         self._load_selected()
+
+    # ------------------------------------------------------------------
+    # Unsaved scripts (used by MainFrame's exit confirmation)
+    # ------------------------------------------------------------------
+    def list_unsaved_scripts(self) -> List[Script]:
+        self._capture_current_edits()
+        scripts = []
+        for script_id in self._pending_edits:
+            script = self._script_repository.get(script_id)
+            if script is not None:
+                scripts.append(script)
+        return scripts
+
+    def save_all_unsaved_scripts(self) -> None:
+        self._capture_current_edits()
+        for script_id, content in list(self._pending_edits.items()):
+            script = self._script_repository.get(script_id)
+            if script is None:
+                continue
+            script.content = content
+            self._script_repository.update(script)
+        self._pending_edits.clear()
+        if self._current_script is not None:
+            self._editor.SetSavePoint()
+
+    def discard_all_unsaved_scripts(self) -> None:
+        self._pending_edits.clear()
+        if self._current_script is not None:
+            fresh = self._script_repository.get(self._current_script.id)
+            if fresh is not None:
+                self._current_script = fresh
+                self._editor.load_content(fresh.content)
 
     # ------------------------------------------------------------------
     # Create / rename / delete
@@ -969,7 +1053,7 @@ class ScriptsTab(wx.Panel):
         name = self._prompt_name("New script", "Script name:", "")
         if not name:
             return
-        self._save_current()
+        self._capture_current_edits()
         script = Script(
             id=None,
             name=name,
@@ -1001,6 +1085,7 @@ class ScriptsTab(wx.Panel):
         if confirm != wx.YES:
             return
         self._script_repository.delete(script.id)
+        self._pending_edits.pop(script.id, None)
         if self._current_script is not None and self._current_script.id == script.id:
             self._current_script = None
         self._reload_scripts(select_id=None)
@@ -1068,7 +1153,7 @@ class DataExplorePage(wx.Panel):
         header.Add(self._title_label, 0, wx.ALIGN_CENTER_VERTICAL)
         outer.Add(header, 0, wx.ALL, 12)
 
-        notebook = wx.Notebook(self)
+        self._notebook = notebook = wx.Notebook(self)
 
         tables_panel = wx.Panel(notebook)
         body = wx.BoxSizer(wx.HORIZONTAL)
@@ -1105,7 +1190,7 @@ class DataExplorePage(wx.Panel):
         if self._tables:
             self._tables_list.SetSelection(0)
             self._detail.load_table(datasource, self._tables[0])
-        self._scripts_tab.load_datasource(datasource)
+        self._scripts_tab.load_datasource(datasource, self._tables)
 
     def _on_table_selected(self, event: wx.CommandEvent) -> None:
         if self._datasource is None:
@@ -1114,3 +1199,19 @@ class DataExplorePage(wx.Panel):
         if index == wx.NOT_FOUND:
             return
         self._detail.load_table(self._datasource, self._tables[index])
+
+    # ------------------------------------------------------------------
+    # Unsaved scripts (used by MainFrame's exit confirmation)
+    # ------------------------------------------------------------------
+    def list_unsaved_scripts(self) -> List[Script]:
+        return self._scripts_tab.list_unsaved_scripts()
+
+    def save_all_unsaved_scripts(self) -> None:
+        self._scripts_tab.save_all_unsaved_scripts()
+
+    def discard_all_unsaved_scripts(self) -> None:
+        self._scripts_tab.discard_all_unsaved_scripts()
+
+    def focus_script(self, script_id: int) -> None:
+        self._notebook.SetSelection(1)  # Scripts tab
+        self._scripts_tab.focus_script(script_id)

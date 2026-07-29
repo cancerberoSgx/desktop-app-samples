@@ -1,0 +1,1 @@
+ALTER TABLE datasources ADD COLUMN last_script_id INTEGER REFERENCES scripts(id) ON DELETE SET NULL;
