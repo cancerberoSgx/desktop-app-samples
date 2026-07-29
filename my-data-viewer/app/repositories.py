@@ -2,7 +2,7 @@ import sqlite3
 from typing import List, Optional
 
 from . import drivers
-from .models import ColumnInfo, Datasource, IndexInfo, Profile, QueryResult
+from .models import ColumnInfo, Datasource, DatasourceField, IndexInfo, Profile, QueryResult
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 
@@ -40,6 +40,7 @@ class DatasourceRepository:
         )
         self._conn.commit()
         datasource.id = cursor.lastrowid
+        self._save_fields(datasource.id, datasource.fields)
         return datasource
 
     def list(
@@ -87,6 +88,7 @@ class DatasourceRepository:
             ),
         )
         self._conn.commit()
+        self._save_fields(datasource.id, datasource.fields)
         return datasource
 
     def delete(self, datasource_id: int) -> None:
@@ -109,24 +111,63 @@ class DatasourceRepository:
         )
 
     # ------------------------------------------------------------------
+    # datasources_fields (1-N, csv only) - the name/type the user confirmed
+    # via "Infer types" in the dialog, reapplied every time the csv is
+    # queried so DuckDB doesn't have to re-guess (and can't disagree with
+    # what the user picked).
+    # ------------------------------------------------------------------
+    def list_fields(self, datasource_id: int) -> List[DatasourceField]:
+        rows = self._conn.execute(
+            "SELECT * FROM datasources_fields WHERE datasource_id = ? ORDER BY position",
+            (datasource_id,),
+        ).fetchall()
+        return [self._row_to_field(row) for row in rows]
+
+    def _save_fields(self, datasource_id: int, fields: List[DatasourceField]) -> None:
+        self._conn.execute("DELETE FROM datasources_fields WHERE datasource_id = ?", (datasource_id,))
+        self._conn.executemany(
+            "INSERT INTO datasources_fields (datasource_id, name, type, position) VALUES (?, ?, ?, ?)",
+            [(datasource_id, f.name, f.type, position) for position, f in enumerate(fields)],
+        )
+        self._conn.commit()
+
+    @staticmethod
+    def _row_to_field(row: sqlite3.Row) -> DatasourceField:
+        return DatasourceField(
+            id=row["id"],
+            datasource_id=row["datasource_id"],
+            name=row["name"],
+            type=row["type"],
+            position=row["position"],
+        )
+
+    # ------------------------------------------------------------------
     # Operations against the underlying data source
     # ------------------------------------------------------------------
+    def _driver_for(self, datasource: Datasource):
+        column_types = None
+        if datasource.type == "csv" and datasource.id is not None:
+            fields = self.list_fields(datasource.id)
+            if fields:
+                column_types = {f.name: f.type for f in fields}
+        return drivers.get_driver(datasource, column_types=column_types)
+
     def list_tables(self, datasource: Datasource) -> List[str]:
-        return drivers.get_driver(datasource).list_tables()
+        return self._driver_for(datasource).list_tables()
 
     def list_columns(self, datasource: Datasource, table: str) -> List[ColumnInfo]:
-        return drivers.get_driver(datasource).list_columns(table)
+        return self._driver_for(datasource).list_columns(table)
 
     def list_indexes(self, datasource: Datasource, table: str) -> List[IndexInfo]:
-        return drivers.get_driver(datasource).list_indexes(table)
+        return self._driver_for(datasource).list_indexes(table)
 
     def test_connection(self, datasource: Datasource) -> None:
-        drivers.get_driver(datasource).test_connection()
+        self._driver_for(datasource).test_connection()
 
     def execute_sql(
         self, datasource: Datasource, sql: str, params: Optional[list] = None
     ) -> QueryResult:
-        return drivers.get_driver(datasource).execute_sql(sql, params)
+        return self._driver_for(datasource).execute_sql(sql, params)
 
 
 class ProfileRepository:

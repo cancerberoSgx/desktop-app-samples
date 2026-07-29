@@ -133,7 +133,8 @@ class DatasourcesPage(wx.Panel):
         datasource = self._selected_datasource()
         if datasource is None:
             return
-        dlg = DatasourceDialog(self, datasource)
+        fields = self._repository.list_fields(datasource.id) if datasource.type == "csv" else []
+        dlg = DatasourceDialog(self, datasource, fields=fields)
         if dlg.ShowModal() == wx.ID_OK:
             self._repository.update(dlg.get_datasource())
             self.reload()

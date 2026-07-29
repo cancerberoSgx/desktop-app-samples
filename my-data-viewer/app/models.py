@@ -1,7 +1,20 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 DATASOURCE_TYPES = ("postgres", "mysql", "csv")
+
+
+@dataclass
+class DatasourceField:
+    """A user-declared (or inferred) column name/type for a csv datasource,
+    persisted 1-N against its owning datasource so it can be reapplied the
+    next time the datasource is loaded."""
+
+    name: str
+    type: str
+    position: int = 0
+    id: Optional[int] = None
+    datasource_id: Optional[int] = None
 
 
 @dataclass
@@ -16,6 +29,7 @@ class Datasource:
     db_name: Optional[str] = None
     db_user: Optional[str] = None
     db_password: Optional[str] = None
+    fields: List[DatasourceField] = field(default_factory=list)
 
 
 @dataclass

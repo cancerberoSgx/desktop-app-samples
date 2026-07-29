@@ -164,7 +164,9 @@ in my-data-viewer
 
 
 
+# csv new db default name
 when creating a new csv datasource, the name is automatically filled from the csv file name if not defined. the creation dialog It should never fail because of "name is required"
+
 
 
 # csv column types

@@ -1,16 +1,18 @@
 import re
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import duckdb
 
 from .models import ColumnInfo, Datasource, IndexInfo, QueryResult
 
 
-def get_driver(datasource: Datasource) -> "CsvDriver":
-    """Return the driver object able to run operations against `datasource`."""
+def get_driver(datasource: Datasource, column_types: Optional[Dict[str, str]] = None) -> "CsvDriver":
+    """Return the driver object able to run operations against `datasource`.
+    `column_types` (name -> DuckDB type) overrides auto-detection for csv -
+    see DatasourceRepository, which loads them from `datasources_fields`."""
     if datasource.type == "csv":
-        return CsvDriver(datasource.file_path)
+        return CsvDriver(datasource.file_path, column_types=column_types)
     if datasource.type == "postgres":
         raise NotImplementedError("Postgres data sources are not implemented yet.")
     if datasource.type == "mysql":
@@ -33,12 +35,15 @@ class CsvDriver:
     Each call opens its own in-memory DuckDB connection and registers the
     CSV as a view named after the file - DuckDB reads the file directly
     (read_csv_auto), so this works without loading the whole file into
-    Python memory first.
+    Python memory first. `column_types` (name -> DuckDB type), when given,
+    is passed through as the view's dtype override instead of letting
+    DuckDB auto-detect every column.
     """
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, column_types: Optional[Dict[str, str]] = None):
         self.file_path = file_path
         self.table_name = _table_name_for(file_path)
+        self.column_types = column_types or {}
 
     def list_tables(self) -> List[str]:
         return [self.table_name]
@@ -47,7 +52,7 @@ class CsvDriver:
         con = self._connect()
         try:
             description = con.execute(f'SELECT * FROM "{self.table_name}" LIMIT 0').description
-            return [ColumnInfo(name=col[0], type="text") for col in description]
+            return [ColumnInfo(name=col[0], type=str(col[1])) for col in description]
         finally:
             con.close()
 
@@ -73,5 +78,20 @@ class CsvDriver:
         con = duckdb.connect(":memory:")
         # Registers the CSV as a view via DuckDB's relation API rather than
         # interpolating the file path into a SQL string.
-        con.read_csv(self.file_path).create_view(self.table_name)
+        con.read_csv(self.file_path, dtype=self.column_types).create_view(self.table_name)
         return con
+
+
+def infer_csv_columns(file_path: str) -> List[ColumnInfo]:
+    """Sniff a CSV's column names/types via DuckDB, without registering a
+    view - used by the "Infer types" button in the datasource dialog, before
+    the datasource (and its file path) has necessarily been saved anywhere."""
+    con = duckdb.connect(":memory:")
+    try:
+        relation = con.read_csv(file_path)
+        return [
+            ColumnInfo(name=name, type=str(dtype))
+            for name, dtype in zip(relation.columns, relation.types)
+        ]
+    finally:
+        con.close()
