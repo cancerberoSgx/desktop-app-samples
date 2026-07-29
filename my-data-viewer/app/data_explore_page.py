@@ -951,12 +951,21 @@ class DataExplorePage(wx.Panel):
     def load_datasource(self, datasource: Datasource) -> None:
         self._datasource = datasource
         self._title_label.SetLabel(f"Data Explore — {datasource.name}")
-        self._tables = self._repository.list_tables(datasource)
+        try:
+            self._tables = self._repository.list_tables(datasource)
+        except Exception as exc:
+            wx.MessageBox(
+                f'Could not list tables for "{datasource.name}":\n\n{exc}',
+                "Load failed",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+            self._tables = []
         self._tables_list.Set(self._tables)
         self._detail.clear()
         if self._tables:
             self._tables_list.SetSelection(0)
-            self._detail.load_table(datasource, self._tables[0])
+            self._load_table(datasource, self._tables[0])
         self._scripts_tab.load_datasource(datasource)
 
     def _on_table_selected(self, event: wx.CommandEvent) -> None:
@@ -965,4 +974,15 @@ class DataExplorePage(wx.Panel):
         index = self._tables_list.GetSelection()
         if index == wx.NOT_FOUND:
             return
-        self._detail.load_table(self._datasource, self._tables[index])
+        self._load_table(self._datasource, self._tables[index])
+
+    def _load_table(self, datasource: Datasource, table: str) -> None:
+        try:
+            self._detail.load_table(datasource, table)
+        except Exception as exc:
+            wx.MessageBox(
+                f'Could not load table "{table}":\n\n{exc}',
+                "Load failed",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
