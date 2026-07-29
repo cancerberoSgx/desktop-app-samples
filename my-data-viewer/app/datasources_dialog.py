@@ -143,6 +143,43 @@ class DatasourceDialog(wx.Dialog):
 
     def _build_db_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
         panel = wx.Panel(self._book)
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        has_url = bool(datasource and datasource.url)
+        mode_row = wx.BoxSizer(wx.HORIZONTAL)
+        self._url_mode_radio = wx.RadioButton(panel, label="Connection URL", style=wx.RB_GROUP)
+        self._fields_mode_radio = wx.RadioButton(panel, label="Individual fields")
+        (self._url_mode_radio if has_url or not datasource else self._fields_mode_radio).SetValue(True)
+        mode_row.Add(self._url_mode_radio, 0, wx.RIGHT, 16)
+        mode_row.Add(self._fields_mode_radio, 0)
+        outer.Add(mode_row, 0, wx.BOTTOM, 12)
+
+        self._db_book = wx.Simplebook(panel)
+        self._db_book.AddPage(self._build_db_url_panel(datasource), "url")
+        self._db_book.AddPage(self._build_db_fields_panel(datasource), "fields")
+        self._db_book.SetSelection(0 if self._url_mode_radio.GetValue() else 1)
+        outer.Add(self._db_book, 1, wx.EXPAND)
+
+        panel.SetSizer(outer)
+
+        self._url_mode_radio.Bind(wx.EVT_RADIOBUTTON, self._on_db_mode_changed)
+        self._fields_mode_radio.Bind(wx.EVT_RADIOBUTTON, self._on_db_mode_changed)
+        return panel
+
+    def _build_db_url_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
+        panel = wx.Panel(self._db_book)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(wx.StaticText(panel, label="Connection URL:"), 0, wx.BOTTOM, 4)
+        self._url_ctrl = wx.TextCtrl(panel, value=datasource.url if datasource and datasource.url else "")
+        sizer.Add(self._url_ctrl, 0, wx.EXPAND | wx.BOTTOM, 4)
+        hint = wx.StaticText(panel, label="e.g. postgresql://myuser:mypassword@localhost/searchmindai")
+        hint.SetForegroundColour(wx.Colour(120, 120, 120))
+        sizer.Add(hint, 0)
+        panel.SetSizer(sizer)
+        return panel
+
+    def _build_db_fields_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
+        panel = wx.Panel(self._db_book)
         grid = wx.FlexGridSizer(cols=2, gap=(8, 8))
         grid.AddGrowableCol(1, 1)
 
@@ -169,6 +206,9 @@ class DatasourceDialog(wx.Dialog):
         panel.SetSizer(grid)
         return panel
 
+    def _on_db_mode_changed(self, event: wx.CommandEvent) -> None:
+        self._db_book.SetSelection(0 if self._url_mode_radio.GetValue() else 1)
+
     def _on_type_changed(self, event: Optional[wx.CommandEvent]) -> None:
         selected_type = self._type_choice.GetStringSelection()
         self._book.SetSelection(0 if selected_type == "csv" else 1)
@@ -178,6 +218,7 @@ class DatasourceDialog(wx.Dialog):
         selected_type = self._type_choice.GetStringSelection()
 
         file_path = None
+        url = None
         db_host = db_name = db_user = db_password = None
         db_port = None
 
@@ -188,6 +229,14 @@ class DatasourceDialog(wx.Dialog):
                 return
             if not name:
                 name = os.path.splitext(os.path.basename(file_path))[0]
+        elif self._url_mode_radio.GetValue():
+            url = self._url_ctrl.GetValue().strip() or None
+            if not url:
+                wx.MessageBox("A connection URL is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
+                return
+            if not name:
+                wx.MessageBox("Name is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
+                return
         else:
             db_host = self._host_ctrl.GetValue().strip() or None
             db_name = self._dbname_ctrl.GetValue().strip() or None
@@ -210,6 +259,7 @@ class DatasourceDialog(wx.Dialog):
             type=selected_type,
             profile_id=self._datasource.profile_id if self._datasource else None,
             file_path=file_path,
+            url=url,
             db_host=db_host,
             db_port=db_port,
             db_name=db_name,

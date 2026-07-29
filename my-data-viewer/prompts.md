@@ -173,10 +173,32 @@ when creating a new csv datasource, the name is automatically filled from the cs
 
 in "new datasource" modal, of type CSV, after user indicate the file it also have the posibility to declare the columns types. For this, there's a button "infer types" which will use duckdb to infer column types for example using "DESCRIBE SELECT * FROM..." or sniff_csv and present this information to the user in an editable table. The user have the possibility to change the types . When the datasource CSV is saved, it also saves this information in sqlite (new table datasources_fields - relationshiop 1-N) so next time the datasource is loaded those field types will be used
 
+# postgres
+now let's implement datasource of type postgres. 
+First add column datasources.url so user can declare postgres connection with an url as postgresql://myuser:mypassword@localhost/searchmindai
+In the create datasource dialog, if user clicks "postgres" then it can configure postgres db in two ways, first using the URL text field and filling it with somehting like postgresql://myuser:mypassword@localhost/searchmindai or alternatively, with separate text fields db_host ,     db_port ,     db_name ,     db_user ,     db_password. 
+If possible use a facade on top of the choosen postgresql driver, such as sqlalchemy so when we implement other drivers such as mysql we can use the same interface.
 
 
 
-FUTURE
+
+
+---
+
+
+# FUTURE
+
+
+
+# json DS
+support datasource type = json. handle it with duckdb so it can support array of objects, ndjson, etc. The "create datasource" for json works very similar to csv. User must select the filePath, DS name is automatically inferred from file name, and user is able to "infer field types", this time using duckdb sniff_json or similar. 
+
+
+# scripts
+
+user can create one or more scripts associated to a profile and a datasource.
+
+
 
 
 when the app starts, it will remembers the last profile and connection used and will automatically display that data-explore view if any. you should use the settings table to maintain this status this: my-data-viewer/app/db/migrations/0004_create_settings.sql

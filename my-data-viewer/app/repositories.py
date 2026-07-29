@@ -23,14 +23,15 @@ class DatasourceRepository:
         cursor = self._conn.execute(
             """
             INSERT INTO datasources
-                (name, type, profile_id, file_path, db_host, db_port, db_name, db_user, db_password)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (name, type, profile_id, file_path, url, db_host, db_port, db_name, db_user, db_password)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datasource.name,
                 datasource.type,
                 datasource.profile_id,
                 datasource.file_path,
+                datasource.url,
                 datasource.db_host,
                 datasource.db_port,
                 datasource.db_name,
@@ -71,7 +72,7 @@ class DatasourceRepository:
         self._conn.execute(
             """
             UPDATE datasources
-            SET name = ?, type = ?, file_path = ?, db_host = ?, db_port = ?,
+            SET name = ?, type = ?, file_path = ?, url = ?, db_host = ?, db_port = ?,
                 db_name = ?, db_user = ?, db_password = ?
             WHERE id = ?
             """,
@@ -79,6 +80,7 @@ class DatasourceRepository:
                 datasource.name,
                 datasource.type,
                 datasource.file_path,
+                datasource.url,
                 datasource.db_host,
                 datasource.db_port,
                 datasource.db_name,
@@ -103,6 +105,7 @@ class DatasourceRepository:
             type=row["type"],
             profile_id=row["profile_id"],
             file_path=row["file_path"],
+            url=row["url"],
             db_host=row["db_host"],
             db_port=row["db_port"],
             db_name=row["db_name"],

@@ -24,6 +24,7 @@ class Datasource:
     type: str
     profile_id: Optional[int] = None
     file_path: Optional[str] = None
+    url: Optional[str] = None
     db_host: Optional[str] = None
     db_port: Optional[int] = None
     db_name: Optional[str] = None
