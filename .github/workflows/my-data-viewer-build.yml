@@ -58,7 +58,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build with PyInstaller
-        run: pyinstaller --noconfirm --windowed --name mydataviewer main.py
+        run: pyinstaller --noconfirm mydataviewer.spec
 
       - uses: actions/upload-artifact@v4
         with:

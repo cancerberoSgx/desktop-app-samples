@@ -197,6 +197,20 @@ user can create one or more scripts associated to a profile and a datasource. Sc
 
 
 
+# error with tables migrations
+
+when executing the binary in windows, for some reason it fails with error 
+"failed to execute script 'main' due to unhandled exception 'not such table 'profiles''. 
+Traceback (most recent call last):
+  File "main.py", line 14, in <module>
+  File "main.py", line 8, in main
+  File "app\frame.py", line 29, in __init__
+  File "app\frame.py", line 79, in _bootstrap_active_profile
+  File "app\repositories.py", line 240, in list
+sqlite3.OperationalError: no such table: profiles
+
+It seems migrations are not running for some reason. Can you check and fix
+
 
 ---
 
