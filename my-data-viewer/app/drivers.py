@@ -1,11 +1,34 @@
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Union
 
 import duckdb
 import sqlalchemy
 
 from .models import ColumnInfo, Datasource, IndexInfo, QueryResult
+
+if TYPE_CHECKING:
+    from .async_tasks import TaskHandle
+
+# Rows are pulled in chunks rather than via one cursor.fetchall() call. For a
+# big result set, fetchall() converts every row to a Python object inside a
+# single uninterrupted C call - since that's pure GIL-held object
+# construction (no network wait to release it around), it can lock out the
+# UI thread's event loop for the whole call even though the query itself
+# runs on a background thread. Fetching in batches gives the interpreter a
+# checkpoint between chunks to hand the GIL back, and doubles as a
+# cancellation point for a single very large query.
+_FETCH_BATCH_SIZE = 2000
+
+
+def _fetch_rows(cursor, handle: Optional["TaskHandle"]) -> List[tuple]:
+    rows: List[tuple] = []
+    while handle is None or not handle.is_cancelled():
+        batch = cursor.fetchmany(_FETCH_BATCH_SIZE)
+        if not batch:
+            break
+        rows.extend(tuple(row) for row in batch)
+    return rows
 
 
 def get_driver(
@@ -69,14 +92,25 @@ class CsvDriver:
         con = self._connect()
         con.close()
 
-    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
+    def execute_sql(
+        self,
+        sql: str,
+        params: Optional[Sequence[object]] = None,
+        handle: Optional["TaskHandle"] = None,
+    ) -> QueryResult:
         con = self._connect()
+        if handle is not None:
+            # Best-effort cancellation: DuckDB's interrupt() is safe to call
+            # from another thread while execute() is blocked on this one.
+            handle.set_interrupt(con.interrupt)
         try:
             cursor = con.execute(sql, params or [])
             columns = [col[0] for col in cursor.description] if cursor.description else []
-            rows = cursor.fetchall()
+            rows = _fetch_rows(cursor, handle)
             return QueryResult(columns=columns, rows=rows)
         finally:
+            if handle is not None:
+                handle.clear_interrupt()
             con.close()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
@@ -122,14 +156,23 @@ class JsonDriver:
         con = self._connect()
         con.close()
 
-    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
+    def execute_sql(
+        self,
+        sql: str,
+        params: Optional[Sequence[object]] = None,
+        handle: Optional["TaskHandle"] = None,
+    ) -> QueryResult:
         con = self._connect()
+        if handle is not None:
+            handle.set_interrupt(con.interrupt)
         try:
             cursor = con.execute(sql, params or [])
             columns = [col[0] for col in cursor.description] if cursor.description else []
-            rows = cursor.fetchall()
+            rows = _fetch_rows(cursor, handle)
             return QueryResult(columns=columns, rows=rows)
         finally:
+            if handle is not None:
+                handle.clear_interrupt()
             con.close()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
@@ -199,21 +242,33 @@ class SqlAlchemyDriver:
         finally:
             engine.dispose()
 
-    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
+    def execute_sql(
+        self,
+        sql: str,
+        params: Optional[Sequence[object]] = None,
+        handle: Optional["TaskHandle"] = None,
+    ) -> QueryResult:
         engine = self._make_engine()
         try:
             sql = self._translate_placeholders(engine, sql)
             raw_conn = engine.raw_connection()
+            # Best-effort cancellation: DBAPI connections (psycopg2 included)
+            # that expose cancel() support calling it from another thread
+            # while a query is blocked on this one.
+            if handle is not None and hasattr(raw_conn, "cancel"):
+                handle.set_interrupt(raw_conn.cancel)
             try:
                 cursor = raw_conn.cursor()
                 try:
                     cursor.execute(sql, list(params or []))
                     columns = [col[0] for col in cursor.description] if cursor.description else []
-                    rows = [tuple(row) for row in cursor.fetchall()]
+                    rows = _fetch_rows(cursor, handle)
                     return QueryResult(columns=columns, rows=rows)
                 finally:
                     cursor.close()
             finally:
+                if handle is not None:
+                    handle.clear_interrupt()
                 raw_conn.close()
         finally:
             engine.dispose()
