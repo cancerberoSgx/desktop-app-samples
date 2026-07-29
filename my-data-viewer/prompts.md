@@ -164,17 +164,25 @@ in my-data-viewer
 
 
 
+when creating a new csv datasource, the name is automatically filled from the csv file name if not defined. the creation dialog It should never fail because of "name is required"
+
+
+# csv column types
+
+in "new datasource" modal, of type CSV, after user indicate the file it also have the posibility to declare the columns types. For this, there's a button "infer types" which will use duckdb to infer column types for example using "DESCRIBE SELECT * FROM..." or sniff_csv and present this information to the user in an editable table. The user have the possibility to change the types . When the datasource CSV is saved, it also saves this information in sqlite (new table datasources_fields - relationshiop 1-N) so next time the datasource is loaded those field types will be used
+
+
+
+
 FUTURE
 
 
 when the app starts, it will remembers the last profile and connection used and will automatically display that data-explore view if any. you should use the settings table to maintain this status this: my-data-viewer/app/db/migrations/0004_create_settings.sql
 
-when creating a new csv datasource, the name is automatically filled from the csv file name if not defined. the creation dialog It should never fail because of "datasource name is mandatory"
 
 
 
-
-copy paste data table
+# copy paste data table & values
 copy & paste from Edit menu
 in data-table, if I click any place of a row I can select the entire row and in that situation If I eight click 
 

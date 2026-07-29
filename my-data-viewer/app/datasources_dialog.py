@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 import wx
@@ -61,7 +62,15 @@ class DatasourceDialog(wx.Dialog):
         )
         sizer.Add(self._file_picker, 0, wx.EXPAND)
         panel.SetSizer(sizer)
+        self._file_picker.Bind(wx.EVT_FILEPICKER_CHANGED, self._on_csv_file_changed)
         return panel
+
+    def _on_csv_file_changed(self, event: wx.FileDirPickerEvent) -> None:
+        if not self._name_ctrl.GetValue().strip():
+            base = os.path.splitext(os.path.basename(self._file_picker.GetPath()))[0]
+            if base:
+                self._name_ctrl.SetValue(base)
+        event.Skip()
 
     def _build_db_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
         panel = wx.Panel(self._book)
@@ -99,10 +108,6 @@ class DatasourceDialog(wx.Dialog):
         name = self._name_ctrl.GetValue().strip()
         selected_type = self._type_choice.GetStringSelection()
 
-        if not name:
-            wx.MessageBox("Name is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
-            return
-
         file_path = None
         db_host = db_name = db_user = db_password = None
         db_port = None
@@ -112,6 +117,8 @@ class DatasourceDialog(wx.Dialog):
             if not file_path:
                 wx.MessageBox("A CSV file path is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
                 return
+            if not name:
+                name = os.path.splitext(os.path.basename(file_path))[0]
         else:
             db_host = self._host_ctrl.GetValue().strip() or None
             db_name = self._dbname_ctrl.GetValue().strip() or None
@@ -124,6 +131,9 @@ class DatasourceDialog(wx.Dialog):
                 except ValueError:
                     wx.MessageBox("Port must be a number.", "Validation error", wx.OK | wx.ICON_WARNING, self)
                     return
+            if not name:
+                wx.MessageBox("Name is required.", "Validation error", wx.OK | wx.ICON_WARNING, self)
+                return
 
         self._result = Datasource(
             id=self._datasource.id if self._datasource else None,
