@@ -224,10 +224,8 @@ Run actions/upload-artifact@v4
 Warning: No files were found with the provided path: my-data-viewer/dist/mydataviewer.app. No artifacts will be uploaded.
 
 
----
 
 
-# FUTURE
 
 
 # data table copy&paste
@@ -236,5 +234,100 @@ in the data-table component, allow users to select an entire row, an entire colu
  * ctrl-click cells allows multiple selections
  * there's a "row handler" like in excel or google spreadhsheet ,at the most-left of the columns that allows me to click it and select that row
  * clicking a column name (or a small column handler on top of it) selects the entire column (like in excel or google spreadhsheet)
-before implementing, make sure you understand the ideal sulution described and if it's viable or you have other suggestions that simplifies on implementation or performance point of view.
+
+An alternative could be right clicking a cell and options select, copy, select row, select column but is less atractive IMO
+
+before implementing, make sure you understand the ideal sulution described and if it's viable or you have other suggestions that simplifies on implementation or performance point of view. First analyze and suggest options, and let me confirm
+
+ANSWR:
+
+My recommendation: wx.grid.Grid as the base widget, and option 1 (dedicated column-handle strip) for the header conflict, since it preserves current sort behavior exactly and matches the fallback you already proposed.
+
+
+
+
+
+# scripts enhancements
+for each datasource, the last script accessed should be rememberd and display when user goes to script
+if the datasource don't have any scripts, create one automatically called "script 1" with a select * from $a_table_name sql statement
+when the user exists the app, we first check if there are no unsaved scripts. If so, before exiting a modal is shown "There are unsaved scripts A, B, C, how do you like to continue" and options 
+ * "cancel" -> cancels exiting, hides modal. Focus on the first unsaved script
+ * "save all" - save all scripts changes and exit
+ * discard all" - don't save just exit.
+
+
+
+
+---
+
+
+
+
+
+# FUTURE
+
+# save data-table as csv or json
+
+# q : is it possible to export an entire db to parket or postgres dump .sql ?
+No matter the datasource (csv, postgres, mysql, etc) is it possible to export all of it as a postgres sql dump or parket (something that's easy to import in another database?)
+Also, is it possible to export only the data schema as .sql ? This would be useful to describe an schema to a LLM or others
+does duckdb helps for csv/json/parket ? Must we implement an export for each data source type ? or is there a way of having a generic implementation that works on all datasource types ? 
+Just answer question , research and give ideas, don't write code
+
+A:
+
+Good context from `app/drivers.py` — this is actually further along than CLAUDE.md suggests: Postgres is implemented via SQLAlchemy (`SqlAlchemyDriver`), and there's a JSON driver alongside CSV, both DuckDB-backed. Here's how that maps onto your questions.
+
+## Can you export any datasource to Parquet or a Postgres dump, generically?
+
+**Parquet: yes, and DuckDB makes this basically free for every source type you have today.** DuckDB's `COPY ... TO 'file.parquet' (FORMAT PARQUET)` works on any relation — a view over a CSV/JSON file, or a result set pulled from Postgres. The trick: for CSV/JSON, the data's *already* a DuckDB view (`CsvDriver`/`JsonDriver` register one via `create_view`). For Postgres, `SqlAlchemyDriver.execute_sql` returns rows in Python via `execute_sql` — you'd register that result as a DuckDB relation (`con.execute("SELECT * FROM postgres_scan(...)")` or simpler: fetch rows via the existing driver and hand them to DuckDB with `con.register(name, arrow_table_or_df)`) then `COPY` from there. Either path converges on the same DuckDB `COPY TO parquet` call — one exporter function, not one per driver.
+
+Alternative that's arguably cleaner given your architecture: DuckDB has a `postgres` extension (`INSTALL postgres; LOAD postgres;`) that lets you `ATTACH 'postgresql://...' AS pg (TYPE postgres)` and then query Postgres tables as if they were native DuckDB tables/views. If you attached instead of going through SQLAlchemy for the *export* path specifically, Postgres sources would land in the exact same "it's a DuckDB relation" bucket as CSV/JSON, and the export code genuinely wouldn't care what `datasource.type` is.
+
+**True `pg_dump`-format .sql: no, not natively, and not really desirable.** DuckDB doesn't emit `pg_dump`'s wire format. Two realistic options:
+- If the source actually *is* Postgres, shell out to real `pg_dump` — but that's Postgres-only, defeats the "generic across types" goal, and adds an external binary dependency.
+- Build your own generic writer: walk the table's columns (from whatever `list_columns()` your driver already returns — you have this today for every driver), emit `CREATE TABLE` DDL translated to Postgres types, then emit data as either `INSERT INTO ... VALUES (...)` batches or `COPY table FROM stdin` blocks (Postgres accepts plain-text COPY blocks, which is what real dumps use and is what psql `\copy` can load back in). This is fully generic since it's driven by the same column-introspection interface all your drivers already implement, and doesn't require DuckDB to know anything about Postgres syntax.
+
+## Schema-only .sql export (for describing structure to an LLM)
+
+This is the easy one, and it's *already* generic in this codebase without needing DuckDB at all: every driver already implements `list_tables()` + `list_columns()` + `list_indexes()`. A "schema export" is just: for each table, format those into `CREATE TABLE name (col type constraints, ...)` plus `CREATE INDEX` statements, and concatenate. No data movement, no type-mapping edge cases around actual values, no per-driver special-casing beyond what you have today. This is probably the first thing worth building — it's low-risk, high value (great for pasting into an LLM prompt), and validates the "generic over `DatasourceRepository`'s existing interface" idea before you tackle the harder data-export cases.
+
+## Does DuckDB help for CSV/JSON/Parquet specifically?
+
+Yes, heavily, and you're already using the relevant primitives:
+- `read_csv` / `read_json` (already used) and `read_parquet` for input.
+- `COPY <relation> TO 'file.parquet'` for output — trivial once something is a DuckDB relation.
+- `EXPORT DATABASE 'dir' (FORMAT PARQUET)` — exports **every** table/view currently registered in a DuckDB connection to a directory, as Parquet (or CSV), *and* writes out a `schema.sql` (DDL) + `load.sql` alongside it automatically. Since each of your drivers already knows how to register itself as a DuckDB view, this command is a near-perfect match for "export the whole datasource" — if you open one DuckDB connection, register every table from a datasource as a view (CSV/JSON directly; Postgres via the `postgres` attach extension or via registering fetched result sets), then call `EXPORT DATABASE` once, you get schema + data for the entire datasource in one generic call, regardless of source type.
+
+## Generic vs. per-type implementation
+
+Given the architecture already in place, I'd lean strongly generic, built on two layers you already have:
+
+1. **Schema-only export** → build directly on the existing `list_tables`/`list_columns`/`list_indexes` driver interface. Zero new driver work needed; every current and future driver already exposes what's required.
+2. **Data export (Parquet / dump-style .sql)** → build on "make it a DuckDB relation, then use DuckDB's `COPY`/`EXPORT DATABASE`." The only per-driver work is *getting the data into DuckDB* — CSV/JSON drivers already do this natively; a Postgres/MySQL driver needs either the DuckDB `postgres`/`mysql` scanner extensions (attach and query live, ideal — keeps everything on the DuckDB relation path) or a fallback that fetches rows via SQLAlchemy and registers them into DuckDB via `con.register()`. Once that bridging step exists per driver, the actual export logic is one shared function, not one per type.
+
+The `pg_dump`-specific SQL format is the one piece that doesn't fall out of DuckDB for free — that'd need a small standalone DDL/COPY-block writer, but it can still be driven generically off the same column/type metadata every driver already surfaces, so it's still one implementation, not N.
+
+
+
+p2
+when exporting a postgres db to parket, can I still use sqlalchemy and postgres driver to access the datasource in the UI and make queries and only use dockdb if neccesary for the export ? 
+
+---
+
+
+
+
+
+# drag and drop files
+Ideally users should be able to easily open a .csv or .json file with this app in which case: if there's already a datasource pointing to that file in the current profile, it automatically opens it and refresh it. If not, the 'new datasource" is automatically displayed with that file, and user can create it 
+
+ideally users should be able to open a file in two ways:
+ * in file explorer have the option of "open with" and choose this app
+ * users can drag a file from file explorer inside the app 
+
+task: research this problem and report if this is possible, and alternatives using wxPython or some extension and how compatible will be in target OSs
+(don't write any code)
+
+
 

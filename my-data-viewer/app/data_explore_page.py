@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
 import wx
+import wx.grid
 import wx.stc as stc
 
 from .models import ColumnInfo, Datasource, IndexInfo, QueryResult, Script
@@ -118,43 +119,192 @@ class PaginationBar(wx.Panel):
         self._page_size_choice.SetStringSelection(str(page_size))
 
 
-class _QueryResultListCtrl(wx.ListCtrl):
-    """Virtual report-mode grid holding only the current page of rows -
-    sorting/filtering/pagination are all pushed down into SQL (see DataTab),
-    so however large the underlying table is, only one bounded page is ever
-    fetched into memory."""
+_COLUMN_HANDLE_GLYPH = "▤"
 
-    def __init__(self, parent: wx.Window) -> None:
-        super().__init__(
-            parent,
-            style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.LC_HRULES | wx.LC_VRULES | wx.BORDER_SUNKEN,
-        )
-        self.rows: List[tuple] = []
 
-    def OnGetItemText(self, item: int, col: int) -> str:
-        value = self.rows[item][col]
+class _QueryResultTable(wx.grid.GridTableBase):
+    """Virtual data source for `_QueryResultGrid` - holds only whatever rows
+    the owner last handed it (see `_QueryResultGrid.set_rows`), same
+    lazy/replace-in-place model the old `_QueryResultListCtrl.rows` used."""
+
+    def __init__(self, columns: List[str], rows: List[tuple]) -> None:
+        super().__init__()
+        self.columns = columns
+        self.rows = rows
+        self.column_labels = list(columns)
+
+    def GetNumberRows(self) -> int:
+        return len(self.rows)
+
+    def GetNumberCols(self) -> int:
+        return len(self.columns)
+
+    def IsEmptyCell(self, row: int, col: int) -> bool:
+        return False
+
+    def GetValue(self, row: int, col: int):
+        value = self.rows[row][col]
         return "" if value is None else str(value)
 
+    def SetValue(self, row: int, col: int, value) -> None:
+        pass
+
+    # `wx.grid.Grid.SetColLabelValue`/`GetColLabelValue` forward to these -
+    # without an override the base class silently no-ops on Set and
+    # GetColLabelValue falls back to spreadsheet-style "A"/"B"/"C" labels.
+    def GetColLabelValue(self, col: int) -> str:
+        return self.column_labels[col]
+
+    def SetColLabelValue(self, col: int, value: str) -> None:
+        self.column_labels[col] = value
+
+
+class _QueryResultGrid(wx.grid.Grid):
+    """Read-only Excel-like grid for query results: click selects a single
+    cell, ctrl-click adds cells, shift-click extends a block (all native
+    `wx.grid.Grid` behavior in the default GridSelectCells mode - no extra
+    code needed), the row-number column on the left selects whole rows, and
+    a thin glyph strip above each column name selects that whole column -
+    clicking the name itself still sorts, same as before. Ctrl+C or the
+    right-click menu copies the current selection as tab/newline-separated
+    text."""
+
+    def __init__(self, parent: wx.Window, on_sort_click: Optional[Callable[[int], None]] = None) -> None:
+        super().__init__(parent)
+        self._on_sort_click = on_sort_click
+        self.SetTable(_QueryResultTable([], []), takeOwnership=True)
+        self.EnableEditing(False)
+        self.SetSelectionMode(wx.grid.Grid.GridSelectCells)
+        self.DisableDragRowSize()
+
+        dc = wx.ClientDC(self)
+        dc.SetFont(self.GetLabelFont())
+        line_height = dc.GetTextExtent("Xy")[1]
+        self._handle_band_height = line_height + 4
+        self.SetColLabelSize(2 * line_height + 12)
+
+        self.Bind(wx.grid.EVT_GRID_LABEL_LEFT_CLICK, self._on_label_left_click)
+        self.Bind(wx.grid.EVT_GRID_CELL_RIGHT_CLICK, self._on_cell_right_click)
+        self.Bind(wx.grid.EVT_GRID_LABEL_RIGHT_CLICK, self._on_label_right_click)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+
+    # ------------------------------------------------------------------
+    # Data
+    # ------------------------------------------------------------------
     def set_columns(self, columns: List[str]) -> None:
-        while self.GetColumnCount() > 0:
-            self.DeleteColumn(0)
-        for i, name in enumerate(columns):
-            self.InsertColumn(i, name)
+        self.SetTable(_QueryResultTable(columns, []), takeOwnership=True)
+        self.set_header_labels(columns)
 
     def set_rows(self, rows: List[tuple]) -> None:
-        self.rows = rows
-        self.SetItemCount(len(rows))
-        self.Refresh()
+        table = self.GetTable()
+        old_count = table.GetNumberRows()
+        table.rows = rows
+        new_count = len(rows)
+        if new_count > old_count:
+            msg = wx.grid.GridTableMessage(
+                table, wx.grid.GRIDTABLE_NOTIFY_ROWS_APPENDED, new_count - old_count
+            )
+            self.ProcessTableMessage(msg)
+        elif new_count < old_count:
+            msg = wx.grid.GridTableMessage(
+                table, wx.grid.GRIDTABLE_NOTIFY_ROWS_DELETED, 0, old_count - new_count
+            )
+            self.ProcessTableMessage(msg)
+        self.ClearSelection()
+        self.ForceRefresh()
+
+    def set_header_labels(self, labels: List[str]) -> None:
+        for i, label in enumerate(labels):
+            self.SetColLabelValue(i, f"{_COLUMN_HANDLE_GLYPH}\n{label}")
+        self.ForceRefresh()
 
     def autosize_columns(self, columns: List[str], rows: List[tuple]) -> None:
-        for i, name in enumerate(columns):
-            width = self.GetTextExtent(name)[0] + 24
-            for row in rows:
-                cell = row[i] if i < len(row) else None
-                text = "" if cell is None else str(cell)
-                width = max(width, self.GetTextExtent(text)[0] + 16)
-            width = max(80, min(width, 400))
-            self.SetColumnWidth(i, width)
+        # Only call this on column/schema changes (load), never from a
+        # sort/filter reload - AutoSizeColumns() measures every cell with no
+        # sampling, so re-running it per-keystroke on a large result set
+        # would visibly lag.
+        self.AutoSizeColumns(setAsMin=False)
+        for i in range(len(columns)):
+            self.SetColSize(i, max(80, min(self.GetColSize(i), 400)))
+
+    # ------------------------------------------------------------------
+    # Selection via headers
+    # ------------------------------------------------------------------
+    def _on_label_left_click(self, event: wx.grid.GridEvent) -> None:
+        row, col = event.GetRow(), event.GetCol()
+        if col == -1 and row >= 0:
+            event.Skip()  # let native row selection (with ctrl/shift extend) happen
+            return
+        if row == -1 and col >= 0:
+            if event.GetPosition().y <= self._handle_band_height:
+                self.SelectCol(col, addToSelected=event.ControlDown())
+            elif self._on_sort_click is not None:
+                self._on_sort_click(col)
+            return
+        event.Skip()
+
+    # ------------------------------------------------------------------
+    # Context menu
+    # ------------------------------------------------------------------
+    def _on_cell_right_click(self, event: wx.grid.GridEvent) -> None:
+        row, col = event.GetRow(), event.GetCol()
+        if not self.IsInSelection(row, col):
+            self.SetGridCursor(row, col)
+            self.SelectBlock(row, col, row, col)
+        menu = wx.Menu()
+        self.Bind(wx.EVT_MENU, lambda evt: self._copy_selection_to_clipboard(), menu.Append(wx.ID_ANY, "Copy"))
+        self.Bind(wx.EVT_MENU, lambda evt: self.SelectRow(row), menu.Append(wx.ID_ANY, "Select Row"))
+        self.Bind(wx.EVT_MENU, lambda evt: self.SelectCol(col), menu.Append(wx.ID_ANY, "Select Column"))
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def _on_label_right_click(self, event: wx.grid.GridEvent) -> None:
+        row, col = event.GetRow(), event.GetCol()
+        if col == -1 and row >= 0:
+            if not self.IsInSelection(row, 0):
+                self.SelectRow(row)
+        elif row == -1 and col >= 0:
+            if not self.IsInSelection(0, col):
+                self.SelectCol(col)
+        else:
+            return
+        menu = wx.Menu()
+        self.Bind(wx.EVT_MENU, lambda evt: self._copy_selection_to_clipboard(), menu.Append(wx.ID_ANY, "Copy"))
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    # ------------------------------------------------------------------
+    # Clipboard
+    # ------------------------------------------------------------------
+    def _on_key_down(self, event: wx.KeyEvent) -> None:
+        if event.ControlDown() and event.GetKeyCode() == ord("C"):
+            self._copy_selection_to_clipboard()
+        else:
+            event.Skip()
+
+    def _copy_selection_to_clipboard(self) -> None:
+        blocks = list(self.GetSelectedBlocks())
+        if not blocks:
+            row, col = self.GetGridCursorRow(), self.GetGridCursorCol()
+            if row < 0 or col < 0:
+                return
+            blocks = [wx.grid.GridBlockCoords(row, col, row, col)]
+
+        top = min(b.GetTopRow() for b in blocks)
+        bottom = max(b.GetBottomRow() for b in blocks)
+        left = min(b.GetLeftCol() for b in blocks)
+        right = max(b.GetRightCol() for b in blocks)
+
+        table = self.GetTable()
+        lines = []
+        for r in range(top, bottom + 1):
+            cells = [table.GetValue(r, c) if self.IsInSelection(r, c) else "" for c in range(left, right + 1)]
+            lines.append("\t".join(cells))
+        text = "\n".join(lines)
+
+        if wx.TheClipboard.Open():
+            wx.TheClipboard.SetData(wx.TextDataObject(text))
+            wx.TheClipboard.Close()
 
 
 class FieldsTab(wx.Panel):
@@ -254,7 +404,7 @@ class DataTab(wx.Panel):
         self._top_pagination = PaginationBar(self, self._on_page_size_changed, self._on_prev, self._on_next)
         outer.Add(self._top_pagination, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        self._grid = _QueryResultListCtrl(self)
+        self._grid = _QueryResultGrid(self, on_sort_click=self._on_col_click)
         outer.Add(self._grid, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self._bottom_pagination = PaginationBar(self, self._on_page_size_changed, self._on_prev, self._on_next)
@@ -265,7 +415,6 @@ class DataTab(wx.Panel):
         self._add_filter_btn.Bind(wx.EVT_BUTTON, self._on_add_filter)
         self._remove_filter_btn.Bind(wx.EVT_BUTTON, self._on_remove_filter)
         self._clear_filters_btn.Bind(wx.EVT_BUTTON, self._on_clear_filters)
-        self._grid.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
 
     # ------------------------------------------------------------------
     # Loading
@@ -288,7 +437,7 @@ class DataTab(wx.Panel):
         self._page_size = self.DEFAULT_PAGE_SIZE
 
         self._grid.set_columns(self._columns)
-        self._reload_data()
+        self._reload_data(autosize=True)
 
     def clear(self) -> None:
         self._datasource = None
@@ -305,7 +454,7 @@ class DataTab(wx.Panel):
     # ------------------------------------------------------------------
     # Querying
     # ------------------------------------------------------------------
-    def _reload_data(self) -> None:
+    def _reload_data(self, autosize: bool = False) -> None:
         if self._datasource is None or self._table is None:
             return
 
@@ -332,7 +481,8 @@ class DataTab(wx.Panel):
         )
 
         self._grid.set_rows(result.rows)
-        self._grid.autosize_columns(self._columns, result.rows)
+        if autosize:
+            self._grid.autosize_columns(self._columns, result.rows)
         self._update_sort_indicators()
         self._top_pagination.update(self._page, self._page_size, self._total_records)
         self._bottom_pagination.update(self._page, self._page_size, self._total_records)
@@ -340,8 +490,7 @@ class DataTab(wx.Panel):
     # ------------------------------------------------------------------
     # Sorting
     # ------------------------------------------------------------------
-    def _on_col_click(self, event: wx.ListEvent) -> None:
-        col_index = event.GetColumn()
+    def _on_col_click(self, col_index: int) -> None:
         if col_index < 0 or col_index >= len(self._columns):
             return
         column_name = self._columns[col_index]
@@ -354,13 +503,13 @@ class DataTab(wx.Panel):
         self._reload_data()
 
     def _update_sort_indicators(self) -> None:
-        for i, name in enumerate(self._columns):
+        labels = []
+        for name in self._columns:
             label = name
             if name == self._sort_column:
                 label += " ▲" if self._sort_ascending else " ▼"
-            item = self._grid.GetColumn(i)
-            item.SetText(label)
-            self._grid.SetColumn(i, item)
+            labels.append(label)
+        self._grid.set_header_labels(labels)
 
     # ------------------------------------------------------------------
     # Filtering
@@ -545,7 +694,7 @@ class ScriptResultPanel(wx.Panel):
         self._filters_list = wx.ListBox(self, size=(-1, 50))
         outer.Add(self._filters_list, 0, wx.EXPAND | wx.BOTTOM, 8)
 
-        self._grid = _QueryResultListCtrl(self)
+        self._grid = _QueryResultGrid(self, on_sort_click=self._on_col_click)
         outer.Add(self._grid, 1, wx.EXPAND)
 
         self._status_label = wx.StaticText(self, label="")
@@ -556,7 +705,6 @@ class ScriptResultPanel(wx.Panel):
         self._add_filter_btn.Bind(wx.EVT_BUTTON, self._on_add_filter)
         self._remove_filter_btn.Bind(wx.EVT_BUTTON, self._on_remove_filter)
         self._clear_filters_btn.Bind(wx.EVT_BUTTON, self._on_clear_filters)
-        self._grid.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
 
     def load(self, result: QueryResult) -> None:
         self._columns = result.columns
@@ -570,12 +718,12 @@ class ScriptResultPanel(wx.Panel):
             self._filter_col_choice.SetSelection(0)
         self._filter_value_ctrl.SetValue("")
         self._grid.set_columns(self._columns)
-        self._apply()
+        self._apply(autosize=True)
 
     def clear(self) -> None:
         self.load(QueryResult(columns=[], rows=[]))
 
-    def _apply(self) -> None:
+    def _apply(self, autosize: bool = False) -> None:
         rows = self._all_rows
         for f in self._filters:
             idx = self._columns.index(f.column)
@@ -603,12 +751,12 @@ class ScriptResultPanel(wx.Panel):
                 )
 
         self._grid.set_rows(rows)
-        self._grid.autosize_columns(self._columns, rows)
+        if autosize:
+            self._grid.autosize_columns(self._columns, rows)
         self._update_sort_indicators()
         self._status_label.SetLabel(f"{len(rows):,} of {len(self._all_rows):,} rows")
 
-    def _on_col_click(self, event: wx.ListEvent) -> None:
-        col_index = event.GetColumn()
+    def _on_col_click(self, col_index: int) -> None:
         if col_index < 0 or col_index >= len(self._columns):
             return
         if col_index == self._sort_column:
@@ -619,13 +767,13 @@ class ScriptResultPanel(wx.Panel):
         self._apply()
 
     def _update_sort_indicators(self) -> None:
+        labels = []
         for i, name in enumerate(self._columns):
             label = name
             if i == self._sort_column:
                 label += " ▲" if self._sort_ascending else " ▼"
-            item = self._grid.GetColumn(i)
-            item.SetText(label)
-            self._grid.SetColumn(i, item)
+            labels.append(label)
+        self._grid.set_header_labels(labels)
 
     def _on_add_filter(self, event: wx.CommandEvent) -> None:
         col_index = self._filter_col_choice.GetSelection()
