@@ -14,14 +14,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: mydataviewer-linux
-            dist-path: my-data-viewer/dist/mydataviewer
+            asset: mydataviewer-linux
+            dist-dir: dist/mydataviewer
           - os: windows-latest
-            artifact: mydataviewer-windows
-            dist-path: my-data-viewer/dist/mydataviewer
+            asset: mydataviewer-windows
+            dist-dir: dist/mydataviewer
           - os: macos-latest
-            artifact: mydataviewer-macos
-            dist-path: my-data-viewer/dist/mydataviewer.app
+            asset: mydataviewer-macos
+            dist-dir: dist/mydataviewer.app
 
     runs-on: ${{ matrix.os }}
 
@@ -60,7 +60,71 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm mydataviewer.spec
 
+      # actions/upload-artifact would otherwise re-zip the raw dist folder
+      # anyway, but only as an internal Actions-run artifact - packaging it
+      # ourselves here means the exact same .zip also becomes the public
+      # release asset in the "release" job below, with a name matching what
+      # docs/my-data-viewer/index.html's download buttons expect.
+      - name: Package archive (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd "$(dirname '${{ matrix.dist-dir }}')"
+          zip -r "${{ github.workspace }}/${{ matrix.asset }}.zip" "$(basename '${{ matrix.dist-dir }}')"
+
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "${{ matrix.dist-dir }}" -DestinationPath "${{ github.workspace }}\${{ matrix.asset }}.zip"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.dist-path }}
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.zip
+
+  # Publishes two GitHub Releases from the three zipped binaries above:
+  #   - a versioned one (mydataviewer-build.<run number>) that's never
+  #     touched again, giving a permanent build history.
+  #   - "mydataviewer-latest", deleted and recreated every run, whose asset
+  #     URLs never change - this is what docs/my-data-viewer/index.html's
+  #     download buttons link to, so the homepage needs no edits when a new
+  #     build is published.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Download built archives
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect archives
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -name '*.zip' -exec cp {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Publish versioned release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "mydataviewer-build.${{ github.run_number }}" release-assets/*.zip \
+            --repo "${{ github.repository }}" \
+            --title "My Data Viewer build #${{ github.run_number }}" \
+            --notes "Built from commit ${{ github.sha }}."
+
+      - name: Publish rolling "latest" release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete mydataviewer-latest --repo "${{ github.repository }}" --yes --cleanup-tag || true
+          gh release create mydataviewer-latest release-assets/*.zip \
+            --repo "${{ github.repository }}" \
+            --title "My Data Viewer (latest build)" \
+            --notes "Always the most recent successful build. For version history, see releases prefixed mydataviewer-build.*"

@@ -264,7 +264,45 @@ when the user exists the app, we first check if there are no unsaved scripts. If
 
 
 
+
+
 # FUTURE
+
+
+# async ui 2
+Context:
+in this project, each time a datasource is processed, connected, accessed, both local csv, json files with duckdb or slow postgres database connections, the UI freezes. This is a big issue. 
+in another similar project we've implemented the following and works fine. Do you think that also could work to execute, not only postgres connections but also local processing with duckdb so the UI doesn't freeze ? Don't implement any code, just analyze and recommend. Recommendation in another project that works fine is the foloowing: 
+
+
+## Recommended: worker thread + `wx.CallAfter`
+This is the standard wxPython pattern for any blocking I/O, and it requires no new dependencies:
+- Run the redis-py call (`ping`, or any future command) in a plain `threading.Thread`.
+- When it finishes, marshal the result back to the GUI thread with `wx.CallAfter(...)` — wx event handlers and widget mutation must happen on the main thread, and `CallAfter` is the safe bridge.
+- wxPython ships `wx.lib.delayedresult` specifically for this — `startWorker()` does the thread-spawn-and-CallAfter dance for you and hands you a `DelayedResult` object with the return value or exception. It's a thin wrapper, but it saves you from re-writing the same boilerplate in `DatasourcesPage` every time you add a new blocking action.
+
+
+
+Answer:
+
+**Short answer: yes — the worker-thread + `wx.CallAfter`/`wx.lib.delayedresult` pattern is not I/O-type-specific. It fixes UI freezes caused by *anything* that blocks the main thread for a noticeable time, and local DuckDB scans/queries block just as hard as a slow Postgres round-trip.** In fact, I found evidence this is already understood: `DatasourceRepository.list_tables`/`list_columns`/`execute_sql` in `app/repositories.py:183,187,199` have `sleep(2)` stubs injected before the real driver call — that's a deliberate reproduction of exactly this freeze for the local csv/json path.
+
+The actual freeze happens because every call site is synchronous on the UI thread: `datasources_page.py:180` (`test_connection`) and `data_explore_page.py` at `425`, `464`, `479`, `595-596`, `1118`, `1273` (`list_tables`/`list_columns`/`list_indexes`/`execute_sql`) all call straight into the repository from a wx event handler.
+
+Two things worth knowing before wiring this up for the local DuckDB case specifically — these don't affect Postgres today, which is probably why the pattern "just worked" in the other project without surfacing them:
+
+1. **A real landmine: `list_fields` touches the shared sqlite3 connection.** `DatasourceRepository._driver_for()` (`repositories.py:174`) calls `self.list_fields(datasource.id)` for csv/json datasources to load saved column types — and that executes against the single `sqlite3.Connection` from `app/db/connection.py`, which is opened with the default `check_same_thread=True`. Run `list_tables`/`list_columns`/`execute_sql` for a csv/json datasource on a background thread as-is, and it'll raise `sqlite3.ProgrammingError` immediately, because that connection was created on the main thread. Postgres skips this entirely (`_driver_for` only calls `list_fields` for `type in ("csv","json")`), so this gap is invisible until you actually thread the local path. The clean fix, consistent with the "one connection, composition-rooted" architecture in `frame.py`, is to resolve `list_fields`/column types on the main thread *before* spawning the worker, and hand the driver (or a precomputed `column_types` dict) into the thread — not open a second sqlite connection.
+
+2. **No shared live connection to worry about, but no in-flight guard either.** `CsvDriver`/`JsonDriver` open a fresh in-memory `duckdb.connect(":memory:")` per call (`drivers.py:82-87`), so unlike a pooled Postgres connection there's nothing to lock — concurrent background calls won't corrupt DuckDB state. But nothing currently stops a user from firing a second query before the first `CallAfter` lands (e.g. clicking "Run" twice, or switching tables fast in `data_explore_page.py`). Worth a simple in-flight flag or request-id check per page so a stale result doesn't overwrite a newer one.
+
+Otherwise the mechanics are identical to what worked before: keep `repositories.py`/`drivers.py` synchronous (matches the existing convention), and wrap each call site above with `wx.lib.delayedresult.startWorker`, updating widgets only inside the callback. Bonus: DuckDB's C++ core releases the GIL during execution, so it gets genuine parallelism on top of just not blocking the event loop. One caveat to flag for later: there's no clean cancel story for a long-running local scan — `con.execute()` blocks until done and this pattern doesn't add interruption, so a "Cancel" button on huge files would need more than this.
+
+
+
+---
+
+
+
 
 # save data-table as csv or json
 

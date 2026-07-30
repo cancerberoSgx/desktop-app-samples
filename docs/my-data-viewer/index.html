@@ -42,15 +42,16 @@
     </div>
 
     <!--
-      Download hrefs point at the generic /releases page until the release
-      workflow (tagging + attaching binaries on manual dispatch) exists.
-      Once it does, replace each href with the direct asset URL, e.g.:
-      https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydataviewer-v0.1.0/mydataviewer-linux.zip
+      These point at the "mydataviewer-latest" rolling release, republished
+      by .github/workflows/my-data-viewer-build.yml on every manual run - the
+      URLs are permanent and never need editing here, even as new builds are
+      published. For version history, see releases tagged mydataviewer-build.*
+      on the repo's Releases page.
     -->
     <div class="cta-row">
-      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for Linux</a>
-      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for macOS</a>
-      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for Windows</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydataviewer-latest/mydataviewer-linux.zip">⬇ Download for Linux</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydataviewer-latest/mydataviewer-macos.zip">⬇ Download for macOS</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydataviewer-latest/mydataviewer-windows.zip">⬇ Download for Windows</a>
     </div>
     <div class="downloads-note">Prebuilt binaries via GitHub Releases &middot; unzip and run, no install</div>
   </div>

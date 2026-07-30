@@ -55,11 +55,15 @@
     </div>
 
     <!--
-      Download hrefs: until the release workflow (tagging + attaching binaries
-      on manual dispatch) exists for this app, point all three at the repo's
-      generic /releases page. Once it exists, replace each href with the
-      direct asset URL, e.g.:
-      https://github.com/cancerberoSgx/desktop-app-samples/releases/download/{{TAG}}/{{ASSET_NAME}}
+      Download hrefs: the established convention (see
+      .github/workflows/my-data-viewer-build.yml and my-redis-viewer-build.yml)
+      is a rolling "{{app}}-latest" GitHub Release, deleted and recreated by
+      the app's build workflow on every manual run, so these URLs stay
+      permanent and never need editing here. Copy one of those workflow files
+      for {{APP_NAME}}, swapping in its own PyInstaller spec/asset names, then
+      point each href below at:
+      https://github.com/cancerberoSgx/desktop-app-samples/releases/download/{{app}}-latest/{{ASSET_NAME}}
+      (e.g. {{app}}-linux.zip / {{app}}-macos.zip / {{app}}-windows.zip)
     -->
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">Download for Linux</a>
