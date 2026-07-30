@@ -4,6 +4,7 @@ import wx
 import wx.stc as stc
 
 from .async_task import AsyncTaskRunner
+from .key_list_dialog import KeyListDialog
 from .models import Datasource, Script
 from .redis_script_editor import RedisScriptEditor
 from .repositories import DatasourceRepository, ScriptRepository
@@ -66,12 +67,11 @@ class ScriptsView(wx.Panel):
         right.Add(exec_toolbar, 0, wx.EXPAND | wx.RIGHT | wx.BOTTOM, 12)
 
         right.Add(wx.StaticText(self, label="Output:"), 0, wx.RIGHT | wx.BOTTOM, 4)
-        self._output = wx.TextCtrl(
-            self,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP | wx.BORDER_SUNKEN,
-        )
-        self._output.SetFont(wx.Font(wx.FontInfo().Family(wx.FONTFAMILY_TELETYPE)))
-        right.Add(self._output, 1, wx.EXPAND | wx.RIGHT | wx.BOTTOM, 12)
+        self._output_panel = wx.ScrolledWindow(self, style=wx.BORDER_SUNKEN)
+        self._output_panel.SetScrollRate(0, 20)
+        self._output_sizer = wx.BoxSizer(wx.VERTICAL)
+        self._output_panel.SetSizer(self._output_sizer)
+        right.Add(self._output_panel, 1, wx.EXPAND | wx.RIGHT | wx.BOTTOM, 12)
 
         outer.Add(right, 1, wx.EXPAND)
 
@@ -135,7 +135,7 @@ class ScriptsView(wx.Panel):
         self._current_script = script
         self._name_ctrl.ChangeValue(script.name if script else "")
         self._editor.SetText(script.text if script else "")
-        self._output.SetValue("")
+        self._clear_output()
         self._dirty = False
         self._update_button_states()
 
@@ -224,13 +224,16 @@ class ScriptsView(wx.Panel):
         if self._datasource is None or not text.strip():
             return
         datasource = self._datasource
-        self._output.SetValue("Executing...")
+        self._show_output_message("Executing...")
 
         def on_success(results) -> None:
-            self._output.SetValue(self._format_results(results) if results else "No commands found.")
+            if results:
+                self._render_results(results)
+            else:
+                self._show_output_message("No commands found.")
 
         def on_error(exc: Exception) -> None:
-            self._output.SetValue(f"Execution failed:\n\n{exc}")
+            self._show_output_message(f"Execution failed:\n\n{exc}")
 
         self._async.run(
             work=lambda: self._repository.execute_script(datasource, text),
@@ -239,10 +242,78 @@ class ScriptsView(wx.Panel):
             disable=[self._execute_all_btn, self._execute_selection_btn],
         )
 
+    # ------------------------------------------------------------------
+    # Output rendering
+    # ------------------------------------------------------------------
+    def _clear_output(self) -> None:
+        self._output_sizer.Clear(delete_windows=True)
+        self._output_panel.FitInside()
+        self._output_panel.Layout()
+
+    def _show_output_message(self, text: str) -> None:
+        self._clear_output()
+        self._output_sizer.Add(wx.StaticText(self._output_panel, label=text), 0, wx.ALL, 8)
+        self._output_panel.FitInside()
+        self._output_panel.Layout()
+
+    def _render_results(self, results) -> None:
+        self._output_sizer.Clear(delete_windows=True)
+        for index, result in enumerate(results):
+            self._output_sizer.Add(self._build_result_block(result), 0, wx.EXPAND | wx.ALL, 8)
+            if index < len(results) - 1:
+                self._output_sizer.Add(
+                    wx.StaticLine(self._output_panel), 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8
+                )
+        self._output_panel.FitInside()
+        self._output_panel.Layout()
+
+    def _build_result_block(self, result) -> wx.Panel:
+        panel = wx.Panel(self._output_panel)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        header = wx.StaticText(panel, label=f"[line {result.line_number}] {result.command_text}")
+        font = header.GetFont()
+        font.MakeBold()
+        header.SetFont(font)
+        sizer.Add(header, 0, wx.BOTTOM, 4)
+
+        if result.is_error:
+            body = wx.StaticText(panel, label=result.output_text)
+            body.SetForegroundColour(wx.Colour(180, 0, 0))
+            sizer.Add(body, 0)
+        elif result.keys is not None:
+            row = wx.BoxSizer(wx.HORIZONTAL)
+            row.Add(
+                wx.StaticText(panel, label=f"{len(result.keys)} keys"),
+                0,
+                wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+                8,
+            )
+            view_btn = wx.Button(panel, label="View keys...")
+            view_btn.Bind(wx.EVT_BUTTON, lambda event, keys=result.keys: self._on_view_keys(keys))
+            row.Add(view_btn, 0)
+            sizer.Add(row, 0)
+        else:
+            body = wx.TextCtrl(
+                panel,
+                value=result.output_text,
+                style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
+                size=(-1, self._text_block_height(result.output_text)),
+            )
+            body.SetFont(wx.Font(wx.FontInfo().Family(wx.FONTFAMILY_TELETYPE)))
+            sizer.Add(body, 0, wx.EXPAND)
+
+        panel.SetSizer(sizer)
+        return panel
+
     @staticmethod
-    def _format_results(results) -> str:
-        blocks = []
-        for result in results:
-            marker = "ERROR" if result.is_error else "->"
-            blocks.append(f"[line {result.line_number}] {result.command_text}\n{marker} {result.output_text}")
-        return "\n\n".join(blocks)
+    def _text_block_height(text: str) -> int:
+        line_count = text.count("\n") + 1
+        return min(max(line_count, 1), 10) * 18 + 10
+
+    def _on_view_keys(self, keys) -> None:
+        if self._datasource is None:
+            return
+        dlg = KeyListDialog(self, self._repository, self._datasource, keys, title=f"{len(keys)} keys")
+        dlg.ShowModal()
+        dlg.Destroy()

@@ -39,6 +39,7 @@ class CommandExecutionResult:
     command_text: str
     output_text: str
     is_error: bool
+    keys: Optional[List[str]] = None
 
 
 class DatasourceRepository:
@@ -265,6 +266,12 @@ class DatasourceRepository:
         finally:
             client.close()
 
+    # Commands whose result is unambiguously a flat list of real key names
+    # (as opposed to e.g. SMEMBERS/HKEYS/LRANGE, whose list entries aren't
+    # guaranteed to be actual top-level keys) - these get a "browse as a
+    # key table" treatment in the Scripts tab instead of plain text.
+    KEY_LISTING_COMMANDS = {"KEYS"}
+
     # ------------------------------------------------------------------
     # Raw command execution for the Scripts tab.
     # ------------------------------------------------------------------
@@ -282,10 +289,15 @@ class DatasourceRepository:
         results = []
         try:
             for command in commands:
+                keys = None
                 try:
                     value = client.execute_command(*command.args)
                     output_text = format_command_result(value)
                     is_error = False
+                    if command.args[0].upper() in self.KEY_LISTING_COMMANDS and isinstance(
+                        value, (list, tuple, set)
+                    ):
+                        keys = sorted(v.decode() if isinstance(v, bytes) else v for v in value)
                 except redis.RedisError as exc:
                     output_text = str(exc)
                     is_error = True
@@ -295,6 +307,7 @@ class DatasourceRepository:
                         command_text=command.raw_text,
                         output_text=output_text,
                         is_error=is_error,
+                        keys=keys,
                     )
                 )
         finally:

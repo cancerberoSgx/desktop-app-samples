@@ -103,11 +103,15 @@ implement it.
 when user perform a search, a key table must be shown. When a key is clicked, the key-details screen is shown (reusing the component we already have)
 
 
-# FUTURE
-
 # scripts
 there will be a new concept (db table) scripts which are associated with a datasource
 scripts have a name and text
 users are able to execute scripts, which are raw redis commands as text
 in the UI there will be a new tab in "Data explorer" view named "Scripts". In this tab user can create, delete, save, update and list all current datasource's scripts. On the active script, users are able to execute the entire script text as a redis command or only the current selection.
 Ideally the script text area should support redis syntax highlighting, or at least display as a source code editor.
+
+p2
+in the case one of the redis commands in scripts returns a list of keys, is it possible to, instead listing all keys as text, add just say "N keys" and a button that opens the keys in a table and when a key is clicked display the key-details view (like in the search screen ) ? 
+
+
+# FUTURE

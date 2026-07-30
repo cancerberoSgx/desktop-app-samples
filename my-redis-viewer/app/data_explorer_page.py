@@ -5,34 +5,11 @@ import wx
 
 from .async_task import AsyncTaskRunner
 from .key_details_dialog import KeyDetailsDialog
+from .key_list_ctrl import KeyListCtrl
 from .models import Datasource
 from .redis_key_tree import build_key_tree
 from .repositories import DatasourceRepository, ScriptRepository
 from .scripts_view import ScriptsView
-
-
-class KeyListCtrl(wx.ListCtrl):
-    """Virtual list of leaf keys under the selected branch - virtual mode
-    keeps this responsive even for branches with a very large number of
-    keys, since no per-row wx item is ever created."""
-
-    def __init__(self, parent: wx.Window, on_activate_key: Optional[Callable[[str], None]] = None) -> None:
-        super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.BORDER_SUNKEN)
-        self.InsertColumn(0, "Key", width=420)
-        self._keys: List[str] = []
-        self._on_activate_key = on_activate_key or (lambda key: None)
-        self.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_item_activated)
-
-    def set_keys(self, keys: List[str]) -> None:
-        self._keys = keys
-        self.SetItemCount(len(keys))
-        self.Refresh()
-
-    def OnGetItemText(self, item: int, column: int) -> str:  # noqa: N802 - wx override
-        return self._keys[item]
-
-    def _on_item_activated(self, event: wx.ListEvent) -> None:
-        self._on_activate_key(self._keys[event.GetIndex()])
 
 
 class KeyTreeView(wx.Panel):
