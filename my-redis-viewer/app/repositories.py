@@ -163,6 +163,38 @@ class DatasourceRepository:
         return KeyScanResult(keys=keys, truncated=truncated)
 
     # ------------------------------------------------------------------
+    # Live, server-side search for the Data Explorer's Search tab - only
+    # needed when a type filter is active; pattern-only searches are
+    # served from the cached scan_keys() result instead (see
+    # KeySearchView in data_explorer_page.py).
+    # ------------------------------------------------------------------
+    def search_keys(
+        self,
+        datasource: Datasource,
+        pattern: str,
+        redis_type: Optional[str] = None,
+        limit: int = KEY_SCAN_LIMIT,
+        batch_size: int = KEY_SCAN_BATCH_SIZE,
+    ) -> KeyScanResult:
+        """SCAN MATCH `pattern` [TYPE `redis_type`] - both are applied
+        server-side per batch (Redis 6+), so no non-matching key or value
+        is ever sent back for a type it isn't. Note this still walks the
+        whole keyspace under the hood (SCAN has no prefix/type index to
+        skip via), so it costs the same as scan_keys(), just filtered."""
+        client = self._make_client(datasource, decode_responses=True)
+        keys: List[str] = []
+        truncated = False
+        try:
+            for key in client.scan_iter(match=pattern, count=batch_size, _type=redis_type):
+                keys.append(key)
+                if len(keys) >= limit:
+                    truncated = True
+                    break
+        finally:
+            client.close()
+        return KeyScanResult(keys=keys, truncated=truncated)
+
+    # ------------------------------------------------------------------
     # Single-key details for the Key Details view.
     # ------------------------------------------------------------------
     def get_key_details(self, datasource: Datasource, key: str) -> KeyDetails:

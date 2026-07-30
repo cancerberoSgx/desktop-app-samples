@@ -96,7 +96,14 @@ This key details view will be reused in other parts of the app, so encapsulate o
 
 # key search view
 In datasource data-explorer view, add a new tab "search" on which users can search for keys using keywords like doc:foo:*. Before implementing analyze the most performat way of doing this.
-User can also filter by redis datatype (set, hash, etc)
+is it possible to allow users to filter by redis datatype (set, hash, etc) in a performant way?
 
 p2
-On search, a key table must be shown. When a key is clicked, the key-details screen is shown (reusing the component we already have)
+implement it.
+when user perform a search, a key table must be shown. When a key is clicked, the key-details screen is shown (reusing the component we already have)
+
+
+# FUTURE
+
+# scripts
+there will be a new concept (db table) scripts which are associated with a datasource
