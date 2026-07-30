@@ -5,3 +5,12 @@ I've just commited this parent folder as a github repository. Can you add a conf
 make sure .github/workflows/wxwidgets-test1-build.yml doesn't run automatically, and only explicitly pressing a button, is that possible ? 
 
 
+
+# pages / website
+This folder contains several desktop app projects using wxwindows & python. They work and are useful and I plan to add more 
+they compile successfully in gitlab actions .github/workflows to executables for linux, macos and windows.
+I would like now to create homepages for each of them, goodlooking and with screenshots or recordings of their features since I think they are cool and lightweight (have advantage over similar opensource tools.)
+Please analyze and recommend an approach to create websites for each app using github pages maybe, and if you can elaborate all this material yourself or you need me to perform some screenshots or screen recording. 
+I would like that documents generates to be able to be updated both by claude or myself a human.
+For now these apps won't have a reference manual or guide, just a single html with screenshots and data and some small instructions & tutorials
+Don't write any code, first plan how would you perform this so we have a template / framework in place to document any of the existing a new desktop apps in this folder

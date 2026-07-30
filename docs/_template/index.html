@@ -1,0 +1,151 @@
+<!--
+  TEMPLATE for a new app's homepage.
+
+  How to use this for a new app (call it "my-new-app"):
+    1. Copy this whole folder: docs/_template/ -> docs/my-new-app/
+    2. Create docs/my-new-app/media/ and drop screenshots/recordings in it
+       (see the media/README.md convention used by the other apps).
+    3. Fill in every {{PLACEHOLDER}} below and delete the HTML comments once done.
+    4. Replace each <div class="media-placeholder">...</div> block with the
+       real <img>/<video> tag shown in the comment right above it, once that
+       file exists in media/.
+    5. Add a card for it to ../index.html (copy an existing <a class="app-card">
+       block and point it at my-new-app/).
+    6. Pick an accent color for `--accent` below - keep it distinct from the
+       other apps' accents so pages stay visually distinguishable.
+
+  Do NOT add a card/page for wxwidgets-test1 - it's excluded on purpose (mock/test app).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>{{APP_NAME}}</title>
+<meta name="description" content="{{ONE_LINE_DESCRIPTION}}" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  body { --accent: {{ACCENT_HEX}}; /* e.g. #2dd4bf */ }
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">Desktop Apps</a>
+    <nav>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/{{REPO_FOLDER}}" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="eyebrow">wxPython &middot; Linux / macOS / Windows</div>
+    <h1>{{APP_NAME}}</h1>
+    <p class="tagline">{{ONE_OR_TWO_SENTENCE_PITCH}}</p>
+
+    <div class="badges">
+      <span class="badge">wxPython</span>
+      <span class="badge">{{KEY_TECH_BADGE}}</span>
+      <span class="badge">Linux</span>
+      <span class="badge">macOS</span>
+      <span class="badge">Windows</span>
+    </div>
+
+    <!--
+      Download hrefs: until the release workflow (tagging + attaching binaries
+      on manual dispatch) exists for this app, point all three at the repo's
+      generic /releases page. Once it exists, replace each href with the
+      direct asset URL, e.g.:
+      https://github.com/cancerberoSgx/desktop-app-samples/releases/download/{{TAG}}/{{ASSET_NAME}}
+    -->
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">Download for Linux</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">Download for macOS</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">Download for Windows</a>
+    </div>
+    <div class="downloads-note">Prebuilt binaries via GitHub Releases &middot; no install, just unzip and run</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="section-sub">{{OPTIONAL_GALLERY_INTRO}}</p>
+    <div class="gallery">
+
+      <!-- Replace with: <img src="media/hero.png" alt="{{DESCRIBE_SHOT}}"> -->
+      <div class="shot wide">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">{{DESCRIBE_SHOT}}</div>
+          <div class="ph-file">media/hero.png</div>
+        </div>
+      </div>
+
+      <!-- Repeat .shot blocks for more screenshots/recordings. For a short
+           looping recording, use a <video> instead of <img>:
+           <video src="media/feature.mp4" poster="media/feature.png" autoplay muted loop playsinline></video> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">{{DESCRIBE_SHOT}}</div>
+          <div class="ph-file">media/{{FILENAME}}</div>
+        </div>
+        <div class="caption">{{SHORT_CAPTION}}</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <div class="features">
+      <div class="feature">
+        <h3>{{FEATURE_TITLE}}</h3>
+        <p>{{FEATURE_DESCRIPTION}}</p>
+      </div>
+      <div class="feature">
+        <h3>{{FEATURE_TITLE}}</h3>
+        <p>{{FEATURE_DESCRIPTION}}</p>
+      </div>
+      <div class="feature">
+        <h3>{{FEATURE_TITLE}}</h3>
+        <p>{{FEATURE_DESCRIPTION}}</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p class="section-sub">Grab a binary above, or run it from source.</p>
+    <pre><code>git clone https://github.com/cancerberoSgx/desktop-app-samples.git
+cd desktop-app-samples/{{REPO_FOLDER}}
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python3 main.py</code></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>Part of the <a href="../index.html">Desktop Apps</a> collection.</div>
+    <div class="footer-links">
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/{{REPO_FOLDER}}" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<div class="lightbox"><div class="lightbox-content"></div></div>
+<script src="../assets/site.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>My Data Viewer</title>
+<meta name="description" content="A lightweight desktop app to browse CSV/JSON files and run real SQL against them instantly, powered by DuckDB." />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  body { --accent: #2dd4bf; }
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">Desktop Apps</a>
+    <nav>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-data-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="eyebrow">wxPython &middot; Linux / macOS / Windows</div>
+    <h1>My Data Viewer</h1>
+    <p class="tagline">
+      Drop a CSV or JSON file in and start running real SQL against it — no
+      import step, no server, no spreadsheet gymnastics. It's a few MB and
+      opens instantly.
+    </p>
+
+    <div class="badges">
+      <span class="badge">wxPython</span>
+      <span class="badge">DuckDB</span>
+      <span class="badge">SQL editor</span>
+      <span class="badge">Linux</span>
+      <span class="badge">macOS</span>
+      <span class="badge">Windows</span>
+    </div>
+
+    <!--
+      Download hrefs point at the generic /releases page until the release
+      workflow (tagging + attaching binaries on manual dispatch) exists.
+      Once it does, replace each href with the direct asset URL, e.g.:
+      https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydataviewer-v0.1.0/mydataviewer-linux.zip
+    -->
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for Linux</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for macOS</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for Windows</a>
+    </div>
+    <div class="downloads-note">Prebuilt binaries via GitHub Releases &middot; unzip and run, no install</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="section-sub">Open a file, browse its schema, query it, export the results.</p>
+    <div class="gallery">
+
+      <!-- Replace with: <img src="media/hero.png" alt="Running a SQL query against a CSV file in My Data Viewer"> -->
+      <div class="shot wide">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">SQL editor with query results — main hero shot</div>
+          <div class="ph-file">media/hero.png</div>
+        </div>
+      </div>
+
+      <!-- Replace with: <video src="media/open-and-query.mp4" poster="media/open-and-query.png" autoplay muted loop playsinline></video> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">🎬</div>
+          <div class="ph-label">Recording: drop a CSV in, browse its columns, run a query</div>
+          <div class="ph-file">media/open-and-query.mp4</div>
+        </div>
+        <div class="caption">From file to query results in a few seconds</div>
+      </div>
+
+      <!-- Replace with: <img src="media/datasources.png" alt="Datasources list screen"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Datasources screen — list, filter, CRUD toolbar</div>
+          <div class="ph-file">media/datasources.png</div>
+        </div>
+        <div class="caption">Datasources</div>
+      </div>
+
+      <!-- Replace with: <img src="media/schema-browser.png" alt="Tables, columns and indexes browser"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Schema browser — tables / columns / indexes</div>
+          <div class="ph-file">media/schema-browser.png</div>
+        </div>
+        <div class="caption">Know what's queryable before you write a query</div>
+      </div>
+
+      <!-- Replace with: <img src="media/export.png" alt="Export as Parquet dialog"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Export as Parquet</div>
+          <div class="ph-file">media/export.png</div>
+        </div>
+        <div class="caption">Export results or schema straight to Parquet</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <div class="features">
+
+      <div class="feature">
+        <h3>Instant SQL, no import step</h3>
+        <p>
+          Point at a CSV or JSON file (or just drag-and-drop it onto the
+          window) and it's immediately queryable — DuckDB registers it as a
+          table in memory, so there's no load/import wait, even before you
+          run a single query.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Real SQL editor</h3>
+        <p>
+          A syntax-highlighted editor runs arbitrary SQL against your data —
+          filters, ordering, whatever DuckDB supports — with results shown
+          in a grid, not a wall of CSV text.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Schema browser</h3>
+        <p>
+          See exactly what tables, columns and indexes are available before
+          you write a query, instead of guessing column names from a raw
+          file header.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Saved queries</h3>
+        <p>
+          Name and keep multiple queries per datasource. Closing the app
+          with unsaved edits prompts you to save or discard them, so nothing
+          gets lost by accident.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Export to Parquet</h3>
+        <p>
+          Export a query's results, or just the schema, straight to a
+          Parquet file for use in another tool or pipeline.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Profiles</h3>
+        <p>
+          Group datasources into profiles so unrelated projects don't clutter
+          each other's list — switch the active one from the Profiles screen.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p class="section-sub">Grab a binary above, or run it from source.</p>
+    <pre><code>git clone https://github.com/cancerberoSgx/desktop-app-samples.git
+cd desktop-app-samples/my-data-viewer
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python3 main.py</code></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>Part of the <a href="../index.html">Desktop Apps</a> collection.</div>
+    <div class="footer-links">
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-data-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<div class="lightbox"><div class="lightbox-content"></div></div>
+<script src="../assets/site.js"></script>
+
+</body>
+</html>

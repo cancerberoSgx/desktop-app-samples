@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>My Redis Viewer</title>
+<meta name="description" content="A lightweight desktop client for Redis: manage connections, browse the keyspace as a tree, inspect keys, and run saved command scripts." />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  body { --accent: #ef4444; }
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">Desktop Apps</a>
+    <nav>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-redis-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="eyebrow">wxPython &middot; Linux / macOS / Windows</div>
+    <h1>My Redis Viewer</h1>
+    <p class="tagline">
+      A small, fast desktop client for Redis: organize your connections,
+      check they're reachable in one click, then browse the whole keyspace
+      as a tree — no terminal, no bloated Electron GUI.
+    </p>
+
+    <div class="badges">
+      <span class="badge">wxPython</span>
+      <span class="badge">redis-py</span>
+      <span class="badge">Key browser</span>
+      <span class="badge">Linux</span>
+      <span class="badge">macOS</span>
+      <span class="badge">Windows</span>
+    </div>
+
+    <!--
+      Download hrefs point at the generic /releases page until the release
+      workflow (tagging + attaching binaries on manual dispatch) exists.
+      Once it does, replace each href with the direct asset URL, e.g.:
+      https://github.com/cancerberoSgx/desktop-app-samples/releases/download/myredisviewer-v0.1.0/myredisviewer-linux.zip
+    -->
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for Linux</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for macOS</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases">⬇ Download for Windows</a>
+    </div>
+    <div class="downloads-note">Prebuilt binaries via GitHub Releases &middot; unzip and run, no install</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="section-sub">Connect, browse the keyspace, inspect a key, run a saved script.</p>
+    <div class="gallery">
+
+      <!-- Replace with: <img src="media/hero.png" alt="Browsing the Redis keyspace as a tree in My Redis Viewer"> -->
+      <div class="shot wide">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Data Explorer — keyspace tree with a key open — main hero shot</div>
+          <div class="ph-file">media/hero.png</div>
+        </div>
+      </div>
+
+      <!-- Replace with: <video src="media/connect-flow.mp4" poster="media/connect-flow.png" autoplay muted loop playsinline></video> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">🎬</div>
+          <div class="ph-label">Recording: add a connection, hit Connect, land in the keyspace tree</div>
+          <div class="ph-file">media/connect-flow.mp4</div>
+        </div>
+        <div class="caption">From new connection to browsing keys in seconds</div>
+      </div>
+
+      <!-- Replace with: <img src="media/tree-search.png" alt="Tree and Search tabs of the Data Explorer"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Tree + Search tabs — glob pattern and type filter</div>
+          <div class="ph-file">media/tree-search.png</div>
+        </div>
+        <div class="caption">Search by pattern and key type</div>
+      </div>
+
+      <!-- Replace with: <img src="media/key-details.png" alt="Key Details dialog"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Key Details — type, TTL, encoding, memory, value</div>
+          <div class="ph-file">media/key-details.png</div>
+        </div>
+        <div class="caption">Everything about a key, at a glance</div>
+      </div>
+
+      <!-- Replace with: <img src="media/scripts.png" alt="Scripts tab with a saved command script"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Scripts — saved redis-cli-style command sequences</div>
+          <div class="ph-file">media/scripts.png</div>
+        </div>
+        <div class="caption">Save and re-run command scripts</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <div class="features">
+
+      <div class="feature">
+        <h3>Connection profiles</h3>
+        <p>
+          Organize Redis connections into profiles and switch the active one
+          instantly — everything else in the app is scoped to whichever
+          profile is active.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>One-click reachability check</h3>
+        <p>
+          "Connect" opens a real connection and issues a PING, reporting
+          success or the exact connection error — no terminal, no
+          <code>redis-cli</code> needed just to sanity-check a host/port/password.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Browse the whole keyspace as a tree</h3>
+        <p>
+          Colon-delimited keys (<code>doc:foo:bar</code>) are rendered as an
+          expandable branch tree, built once from a background scan and then
+          browsed with no further round-trips.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Search by pattern and type</h3>
+        <p>
+          Filter by a Redis glob pattern (<code>doc:foo:*</code>) and/or a key
+          type (string, hash, list, set, zset, stream), with debounced live
+          search as you type.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Key details at a glance</h3>
+        <p>
+          Type, TTL, encoding, memory footprint, idle time, and the value
+          itself — with a hex preview fallback for binary values like
+          vectors.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Saved command scripts</h3>
+        <p>
+          Write, save, and re-run <code>redis-cli</code>-style command
+          sequences per connection — run the whole script or just the
+          current selection.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p class="section-sub">Grab a binary above, or run it from source.</p>
+    <pre><code>git clone https://github.com/cancerberoSgx/desktop-app-samples.git
+cd desktop-app-samples/my-redis-viewer
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python3 main.py</code></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>Part of the <a href="../index.html">Desktop Apps</a> collection.</div>
+    <div class="footer-links">
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-redis-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<div class="lightbox"><div class="lightbox-content"></div></div>
+<script src="../assets/site.js"></script>
+
+</body>
+</html>
