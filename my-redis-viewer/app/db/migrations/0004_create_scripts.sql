@@ -1,0 +1,6 @@
+CREATE TABLE scripts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    datasource_id INTEGER REFERENCES datasources(id) ON DELETE CASCADE,
+    text TEXT NOT NULL DEFAULT ''
+);

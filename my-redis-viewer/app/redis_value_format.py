@@ -1,8 +1,9 @@
 """Turn raw Redis values into displayable text - shared by anything that
-renders a key's value (currently KeyDetailsDialog). Kept separate from
-DatasourceRepository because it's pure formatting, not I/O."""
+renders a key's value (currently KeyDetailsDialog) or a raw command's
+result (currently ScriptsView). Kept separate from DatasourceRepository
+because it's pure formatting, not I/O."""
 
-from typing import Tuple
+from typing import Any, Tuple
 
 MAX_TEXT_LEN = 4096
 MAX_ELEMENTS = 200
@@ -78,3 +79,25 @@ def build_value_text(client, key: str, redis_type: str) -> Tuple[str, bool]:
         return "\n".join(lines), len(entries) >= MAX_ELEMENTS
 
     return "", False
+
+
+def format_command_result(value: Any) -> str:
+    """Render the return value of a raw `client.execute_command(...)` call
+    as text - used by the Scripts tab, where the command (and therefore
+    the shape of its result: bool, int, bytes, nested list/dict of bytes,
+    ...) isn't known ahead of time the way it is for build_value_text."""
+    if value is None:
+        return "(nil)"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, bytes):
+        return format_bytes_as_text(value)
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = [format_command_result(v) for v in value]
+        return "\n".join(items) if items else "(empty)"
+    if isinstance(value, dict):
+        items = [f"{format_command_result(k)}: {format_command_result(v)}" for k, v in value.items()]
+        return "\n".join(items) if items else "(empty)"
+    return str(value)

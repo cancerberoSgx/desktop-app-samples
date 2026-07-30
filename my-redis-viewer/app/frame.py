@@ -8,7 +8,7 @@ from app.db.paths import migrations_dir
 from app.models import Datasource
 from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
-from app.repositories import DatasourceRepository, ProfileRepository, SettingsRepository
+from app.repositories import DatasourceRepository, ProfileRepository, ScriptRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
 
 DEFAULT_PROFILE_NAME = "default"
@@ -23,6 +23,7 @@ class MainFrame(wx.Frame):
         self.profile_repository = ProfileRepository(conn)
         self.settings_repository = SettingsRepository(conn)
         self.datasource_repository = DatasourceRepository(conn)
+        self.script_repository = ScriptRepository(conn)
 
         self.active_profile_id = self._bootstrap_active_profile()
 
@@ -54,6 +55,7 @@ class MainFrame(wx.Frame):
         self.data_explorer_page = DataExplorerPage(
             self.book,
             self.datasource_repository,
+            self.script_repository,
             on_status=lambda text: self.SetStatusText(text, 1),
         )
         self.book.AddPage(self.profiles_page, "Profiles")

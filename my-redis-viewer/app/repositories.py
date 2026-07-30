@@ -4,8 +4,9 @@ from typing import Callable, List, Optional
 
 import redis
 
-from .models import Datasource, Profile
-from .redis_value_format import build_value_text
+from .models import Datasource, Profile, Script
+from .redis_command_parser import parse_commands
+from .redis_value_format import build_value_text, format_command_result
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 CONNECTION_TIMEOUT_SECONDS = 5
@@ -30,6 +31,14 @@ class KeyDetails:
     idle_seconds: Optional[int]
     value_text: str
     value_truncated: bool
+
+
+@dataclass
+class CommandExecutionResult:
+    line_number: int
+    command_text: str
+    output_text: str
+    is_error: bool
 
 
 class DatasourceRepository:
@@ -256,6 +265,42 @@ class DatasourceRepository:
         finally:
             client.close()
 
+    # ------------------------------------------------------------------
+    # Raw command execution for the Scripts tab.
+    # ------------------------------------------------------------------
+    def execute_script(self, datasource: Datasource, text: str) -> List[CommandExecutionResult]:
+        """Run every command in `text` (one per non-blank, non-comment
+        line - see redis_command_parser.parse_commands) on a single shared
+        connection, in order, so stateful sequences (SELECT, MULTI/EXEC,
+        ...) behave the way they would in redis-cli. A command that errors
+        is recorded inline and doesn't stop the remaining lines from
+        running - mirrors non-interactive redis-cli script execution."""
+        commands = parse_commands(text)
+        if not commands:
+            return []
+        client = self._make_client(datasource, decode_responses=False)
+        results = []
+        try:
+            for command in commands:
+                try:
+                    value = client.execute_command(*command.args)
+                    output_text = format_command_result(value)
+                    is_error = False
+                except redis.RedisError as exc:
+                    output_text = str(exc)
+                    is_error = True
+                results.append(
+                    CommandExecutionResult(
+                        line_number=command.line_number,
+                        command_text=command.raw_text,
+                        output_text=output_text,
+                        is_error=is_error,
+                    )
+                )
+        finally:
+            client.close()
+        return results
+
     @staticmethod
     def _make_client(datasource: Datasource, decode_responses: bool = False) -> redis.Redis:
         return redis.Redis(
@@ -338,3 +383,52 @@ class SettingsRepository:
 
     def set_current_profile_id(self, profile_id: Optional[int]) -> None:
         self.set(CURRENT_PROFILE_SETTING_KEY, str(profile_id) if profile_id is not None else None)
+
+
+class ScriptRepository:
+    """CRUD for `scripts` (pure SQL against SQLite), scoped to a
+    datasource. A script is just a name plus raw redis-cli-style command
+    text - running it is DatasourceRepository.execute_script's job."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def create(self, script: Script) -> Script:
+        cursor = self._conn.execute(
+            "INSERT INTO scripts (name, datasource_id, text) VALUES (?, ?, ?)",
+            (script.name, script.datasource_id, script.text),
+        )
+        self._conn.commit()
+        script.id = cursor.lastrowid
+        return script
+
+    def list(self, datasource_id: int) -> List[Script]:
+        rows = self._conn.execute(
+            "SELECT * FROM scripts WHERE datasource_id = ? ORDER BY name", (datasource_id,)
+        ).fetchall()
+        return [self._row_to_script(row) for row in rows]
+
+    def get(self, script_id: int) -> Optional[Script]:
+        row = self._conn.execute("SELECT * FROM scripts WHERE id = ?", (script_id,)).fetchone()
+        return self._row_to_script(row) if row else None
+
+    def update(self, script: Script) -> Script:
+        self._conn.execute(
+            "UPDATE scripts SET name = ?, text = ? WHERE id = ?",
+            (script.name, script.text, script.id),
+        )
+        self._conn.commit()
+        return script
+
+    def delete(self, script_id: int) -> None:
+        self._conn.execute("DELETE FROM scripts WHERE id = ?", (script_id,))
+        self._conn.commit()
+
+    @staticmethod
+    def _row_to_script(row: sqlite3.Row) -> Script:
+        return Script(
+            id=row["id"],
+            name=row["name"],
+            datasource_id=row["datasource_id"],
+            text=row["text"],
+        )

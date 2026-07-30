@@ -7,7 +7,8 @@ from .async_task import AsyncTaskRunner
 from .key_details_dialog import KeyDetailsDialog
 from .models import Datasource
 from .redis_key_tree import build_key_tree
-from .repositories import DatasourceRepository
+from .repositories import DatasourceRepository, ScriptRepository
+from .scripts_view import ScriptsView
 
 
 class KeyListCtrl(wx.ListCtrl):
@@ -226,6 +227,7 @@ class DataExplorerPage(wx.Panel):
         self,
         parent: wx.Window,
         repository: DatasourceRepository,
+        script_repository: ScriptRepository,
         on_status: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(parent)
@@ -247,6 +249,8 @@ class DataExplorerPage(wx.Panel):
         notebook.AddPage(self._tree_view, "Tree")
         self._search_view = KeySearchView(notebook, repository, on_activate_key=self._on_key_activated)
         notebook.AddPage(self._search_view, "Search")
+        self._scripts_view = ScriptsView(notebook, repository, script_repository)
+        notebook.AddPage(self._scripts_view, "Scripts")
         sizer.Add(notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self.SetSizer(sizer)
@@ -264,6 +268,8 @@ class DataExplorerPage(wx.Panel):
         self._tree_view.clear()
         self._search_view.clear()
         self._search_view.set_datasource(datasource)
+        self._scripts_view.clear()
+        self._scripts_view.set_datasource(datasource)
         self._on_status("Scanning keys... 0")
 
         def progress(count: int) -> None:

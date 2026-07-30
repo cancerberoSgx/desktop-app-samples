@@ -21,3 +21,14 @@ class Profile:
     name: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+@dataclass
+class Script:
+    """A saved, named block of raw Redis commands (redis-cli-style text)
+    that can be re-run against the datasource it belongs to."""
+
+    id: Optional[int]
+    name: str
+    datasource_id: Optional[int] = None
+    text: str = ""
