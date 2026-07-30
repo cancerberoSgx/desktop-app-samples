@@ -87,3 +87,16 @@ Want me to go ahead and implement this (new repository method for the scan, trie
 p2
 yes implement this. When user connects to a datasource, instead of the "ping command" dialog, open a data-explorer view. This view will contain a single tab "tree" with the mentioned view. 
 put the progress indicator at the main bottom bar which currently display "Viewing:..." but at the bottom right
+
+
+# key details
+on data Explorer -> tree, if user double clicks a key, a new screen is displayed "key details" which display all the details of the key such as type, value, creation timestamp, expiration and other things. 
+For now display the value just as text, considering that there can be some values (such as vectors) which can be binary.
+This key details view will be reused in other parts of the app, so encapsulate on its own component file.
+
+# key search view
+In datasource data-explorer view, add a new tab "search" on which users can search for keys using keywords like doc:foo:*. Before implementing analyze the most performat way of doing this.
+User can also filter by redis datatype (set, hash, etc)
+
+p2
+On search, a key table must be shown. When a key is clicked, the key-details screen is shown (reusing the component we already have)

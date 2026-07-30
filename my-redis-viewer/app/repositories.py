@@ -5,6 +5,7 @@ from typing import Callable, List, Optional
 import redis
 
 from .models import Datasource, Profile
+from .redis_value_format import build_value_text
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 CONNECTION_TIMEOUT_SECONDS = 5
@@ -16,6 +17,19 @@ KEY_SCAN_LIMIT = 200_000
 class KeyScanResult:
     keys: List[str]
     truncated: bool
+
+
+@dataclass
+class KeyDetails:
+    key: str
+    exists: bool
+    type: str
+    ttl_seconds: Optional[int]
+    encoding: Optional[str]
+    memory_bytes: Optional[int]
+    idle_seconds: Optional[int]
+    value_text: str
+    value_truncated: bool
 
 
 class DatasourceRepository:
@@ -147,6 +161,68 @@ class DatasourceRepository:
         if on_progress:
             on_progress(len(keys))
         return KeyScanResult(keys=keys, truncated=truncated)
+
+    # ------------------------------------------------------------------
+    # Single-key details for the Key Details view.
+    # ------------------------------------------------------------------
+    def get_key_details(self, datasource: Datasource, key: str) -> KeyDetails:
+        """Fetch everything the Key Details view shows for `key`: type,
+        TTL, encoding, memory footprint, idle time, and the value itself
+        (rendered as text - see redis_value_format.build_value_text for how
+        binary values, e.g. vectors, are handled). Redis has no notion of a
+        key's creation time, so that's not included - OBJECT IDLETIME
+        (seconds since last access) is the closest available proxy."""
+        client = self._make_client(datasource, decode_responses=False)
+        try:
+            redis_type = client.type(key)
+            redis_type = redis_type.decode() if isinstance(redis_type, bytes) else redis_type
+            if redis_type == "none":
+                return KeyDetails(
+                    key=key,
+                    exists=False,
+                    type="none",
+                    ttl_seconds=None,
+                    encoding=None,
+                    memory_bytes=None,
+                    idle_seconds=None,
+                    value_text="",
+                    value_truncated=False,
+                )
+
+            ttl = client.ttl(key)
+            ttl_seconds = ttl if ttl is not None and ttl >= 0 else None
+
+            try:
+                encoding = client.object("encoding", key)
+                encoding = encoding.decode() if isinstance(encoding, bytes) else encoding
+            except redis.ResponseError:
+                encoding = None
+
+            try:
+                memory_bytes = client.memory_usage(key)
+            except redis.ResponseError:
+                memory_bytes = None
+
+            try:
+                idle_seconds = client.object("idletime", key)
+            except redis.ResponseError:
+                idle_seconds = None
+
+            value_text, value_truncated = build_value_text(client, key, redis_type)
+
+            return KeyDetails(
+                key=key,
+                exists=True,
+                type=redis_type,
+                ttl_seconds=ttl_seconds,
+                encoding=encoding,
+                memory_bytes=memory_bytes,
+                idle_seconds=idle_seconds,
+                value_text=value_text,
+                value_truncated=value_truncated,
+            )
+        finally:
+            client.close()
 
     @staticmethod
     def _make_client(datasource: Datasource, decode_responses: bool = False) -> redis.Redis:

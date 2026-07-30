@@ -3,6 +3,7 @@ from typing import Callable, Dict, List, Optional
 import wx
 
 from .async_task import AsyncTaskRunner
+from .key_details_dialog import KeyDetailsDialog
 from .models import Datasource
 from .redis_key_tree import build_key_tree
 from .repositories import DatasourceRepository
@@ -13,10 +14,12 @@ class KeyListCtrl(wx.ListCtrl):
     keeps this responsive even for branches with a very large number of
     keys, since no per-row wx item is ever created."""
 
-    def __init__(self, parent: wx.Window) -> None:
+    def __init__(self, parent: wx.Window, on_activate_key: Optional[Callable[[str], None]] = None) -> None:
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL | wx.BORDER_SUNKEN)
         self.InsertColumn(0, "Key", width=420)
         self._keys: List[str] = []
+        self._on_activate_key = on_activate_key or (lambda key: None)
+        self.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_item_activated)
 
     def set_keys(self, keys: List[str]) -> None:
         self._keys = keys
@@ -26,15 +29,18 @@ class KeyListCtrl(wx.ListCtrl):
     def OnGetItemText(self, item: int, column: int) -> str:  # noqa: N802 - wx override
         return self._keys[item]
 
+    def _on_item_activated(self, event: wx.ListEvent) -> None:
+        self._on_activate_key(self._keys[event.GetIndex()])
+
 
 class KeyTreeView(wx.Panel):
     """Left: a lazily-populated tree of colon-delimited key branches.
-    Right: the leaf keys of whichever branch is selected. The tree is
-    built once from an in-memory prefix trie (see redis_key_tree.py), so
-    expanding a branch or selecting one is just a dict lookup - no further
-    Redis round-trips."""
+    Right: the leaf keys of whichever branch is selected - double-clicking
+    one opens KeyDetailsDialog. The tree is built once from an in-memory
+    prefix trie (see redis_key_tree.py), so expanding a branch or selecting
+    one is just a dict lookup - no further Redis round-trips."""
 
-    def __init__(self, parent: wx.Window) -> None:
+    def __init__(self, parent: wx.Window, on_activate_key: Optional[Callable[[str], None]] = None) -> None:
         super().__init__(parent)
 
         splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
@@ -42,7 +48,7 @@ class KeyTreeView(wx.Panel):
             splitter,
             style=wx.TR_HAS_BUTTONS | wx.TR_HIDE_ROOT | wx.TR_LINES_AT_ROOT | wx.BORDER_SUNKEN,
         )
-        self._list = KeyListCtrl(splitter)
+        self._list = KeyListCtrl(splitter, on_activate_key=on_activate_key)
         splitter.SplitVertically(self._tree, self._list, 280)
         splitter.SetMinimumPaneSize(150)
 
@@ -103,6 +109,7 @@ class DataExplorerPage(wx.Panel):
         super().__init__(parent)
         self._repository = repository
         self._on_status = on_status or (lambda text: None)
+        self._datasource: Optional[Datasource] = None
         self._async = AsyncTaskRunner(self)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -114,13 +121,21 @@ class DataExplorerPage(wx.Panel):
         sizer.Add(self._title, 0, wx.ALL, 12)
 
         notebook = wx.Notebook(self)
-        self._tree_view = KeyTreeView(notebook)
+        self._tree_view = KeyTreeView(notebook, on_activate_key=self._on_key_activated)
         notebook.AddPage(self._tree_view, "Tree")
         sizer.Add(notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self.SetSizer(sizer)
 
+    def _on_key_activated(self, key: str) -> None:
+        if self._datasource is None:
+            return
+        dlg = KeyDetailsDialog(self, self._repository, self._datasource, key)
+        dlg.ShowModal()
+        dlg.Destroy()
+
     def open_datasource(self, datasource: Datasource) -> None:
+        self._datasource = datasource
         self._title.SetLabel(f"Data Explorer - {datasource.name}")
         self._tree_view.clear()
         self._on_status("Scanning keys... 0")
