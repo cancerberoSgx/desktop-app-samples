@@ -1,5 +1,6 @@
 import sqlite3
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Callable, List, Optional
 
 import redis
 
@@ -7,6 +8,14 @@ from .models import Datasource, Profile
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 CONNECTION_TIMEOUT_SECONDS = 5
+KEY_SCAN_BATCH_SIZE = 1000
+KEY_SCAN_LIMIT = 200_000
+
+
+@dataclass
+class KeyScanResult:
+    keys: List[str]
+    truncated: bool
 
 
 class DatasourceRepository:
@@ -98,19 +107,58 @@ class DatasourceRepository:
         """Open a connection to `datasource`'s Redis server and PING it.
         Raises on any failure (connection refused, auth error, timeout...);
         the caller is expected to catch and display the exception."""
-        client = redis.Redis(
+        client = self._make_client(datasource)
+        try:
+            if not client.ping():
+                raise ConnectionError("PING did not return a successful response.")
+        finally:
+            client.close()
+
+    # ------------------------------------------------------------------
+    # Key discovery for the Data Explorer tree view.
+    # ------------------------------------------------------------------
+    def scan_keys(
+        self,
+        datasource: Datasource,
+        limit: int = KEY_SCAN_LIMIT,
+        batch_size: int = KEY_SCAN_BATCH_SIZE,
+        on_progress: Optional[Callable[[int], None]] = None,
+    ) -> KeyScanResult:
+        """Walk the whole keyspace with SCAN (never KEYS, which blocks the
+        server) and return every key name, capped at `limit` so a
+        pathologically large keyspace can't hang the scan indefinitely.
+        `on_progress(count)` is invoked periodically (from this method's
+        caller's thread - the caller is responsible for hopping back to the
+        UI thread, e.g. via wx.CallAfter) so a caller can show a running
+        count while the scan is in flight."""
+        client = self._make_client(datasource, decode_responses=True)
+        keys: List[str] = []
+        truncated = False
+        try:
+            for key in client.scan_iter(count=batch_size):
+                keys.append(key)
+                if on_progress and len(keys) % batch_size == 0:
+                    on_progress(len(keys))
+                if len(keys) >= limit:
+                    truncated = True
+                    break
+        finally:
+            client.close()
+        if on_progress:
+            on_progress(len(keys))
+        return KeyScanResult(keys=keys, truncated=truncated)
+
+    @staticmethod
+    def _make_client(datasource: Datasource, decode_responses: bool = False) -> redis.Redis:
+        return redis.Redis(
             host=datasource.redis_host,
             port=datasource.redis_port,
             username=datasource.redis_user or None,
             password=datasource.redis_password or None,
             socket_connect_timeout=CONNECTION_TIMEOUT_SECONDS,
             socket_timeout=CONNECTION_TIMEOUT_SECONDS,
+            decode_responses=decode_responses,
         )
-        try:
-            if not client.ping():
-                raise ConnectionError("PING did not return a successful response.")
-        finally:
-            client.close()
 
 
 class ProfileRepository:

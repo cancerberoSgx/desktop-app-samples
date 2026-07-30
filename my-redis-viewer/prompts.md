@@ -65,3 +65,25 @@ The tree only display branches (not leaves), when user select a branch (like doc
 Before implementing suggest how this can be accomplish in a performant way
 
 
+A:
+Good performance question to nail down before writing any code, since Redis has no native prefix index — SCAN MATCH still walks the whole keyspace server-side, it just filters results, so "lazy per-branch scanning" doesn't actually save work the way it would in a real tree-structured store.
+
+Recommended approach:
+
+1. Discover keys once, via scan_iter, never KEYS — run a background scan (through AsyncTaskRunner, per the existing pattern) that walks the whole keyspace in cursor batches (e.g. COUNT=1000).
+2. Build an in-memory prefix trie client-side as keys stream in: split each key on :, insert all-but-last segment as branch nodes, attach the last segment as a leaf under its parent. This is a single O(N) pass and is cheap in both memory and CPU for realistic key counts (hundreds of thousands to a few million keys is fine for plain Python dicts).
+3. Populate wx.TreeCtrl lazily, not from the full trie at once: give every branch node a dummy child on creation, and only materialize its real children in EVT_TREE_ITEM_EXPANDING. Since the trie is already fully built in memory, expansion is an instant dict lookup — no further Redis round-trips, so this stays snappy even on a big tree.
+4. Selecting a branch reads its leaf list straight from the cached trie and renders it in a wx.ListCtrl in virtual mode (per the existing large-result-rendering guidance) — again no Redis call needed at select time.
+5. Cache the trie per connection, invalidated only by an explicit "Refresh," not polled.
+6. Guardrail for huge keyspaces: cap the initial scan at a configurable limit (e.g. 200k keys) and show a "results truncated, refine with a prefix filter" banner rather than letting the scan run unbounded — pair this with an optional prefix textbox that restricts the scan to MATCH "prefix:*" so users on very large instances can still work incrementally.
+
+Main tradeoff: this pays one upfront O(N) scan (with a progress indicator) in exchange for every subsequent expand/select being instant and requiring zero extra Redis calls. The alternative — scanning fresh on every branch expansion — avoids that upfront cost but repeats an O(N)-ish walk on every click with no real savings, since Redis can't skip to a prefix.
+
+Got it — key names only, values shown from the cache (no extra Redis round-trips on select). That confirms the plan above end to end.
+
+Want me to go ahead and implement this (new repository method for the scan, trie builder, tree view page/dialog wiring, migration if needed for a new sidebar entry), or would you like to adjust any part of the design first (e.g. the truncation cap, delimiter assumption, or where this view lives in the UI — new sidebar page vs. opening from Data Sources)?
+
+
+p2
+yes implement this. When user connects to a datasource, instead of the "ping command" dialog, open a data-explorer view. This view will contain a single tab "tree" with the mentioned view. 
+put the progress indicator at the main bottom bar which currently display "Viewing:..." but at the bottom right

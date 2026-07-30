@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import wx
 
@@ -10,15 +10,22 @@ from .repositories import DatasourceRepository
 
 class DatasourcesPage(wx.Panel):
     """CRUD screen for datasources (Redis connections): filter by name,
-    create, edit, delete, and "Connect" to PING the server and report
-    success or failure. No data-exploration UI - this page is the whole
-    story for a datasource."""
+    create, edit, delete, and "Connect" to PING the server - on success
+    this hands off to the Data Explorer (via `on_connected`) instead of
+    showing a message box; on failure it still reports the error here."""
 
-    def __init__(self, parent: wx.Window, repository: DatasourceRepository, profile_id: int) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        repository: DatasourceRepository,
+        profile_id: int,
+        on_connected: Optional[Callable[[Datasource], None]] = None,
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
         self._profile_id = profile_id
         self._datasources: List[Datasource] = []
+        self._on_connected = on_connected or (lambda datasource: None)
         self._async = AsyncTaskRunner(self)
 
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -139,12 +146,7 @@ class DatasourcesPage(wx.Panel):
             return
 
         def on_success(_result: None) -> None:
-            wx.MessageBox(
-                f'Connected to "{datasource.name}" ({datasource.redis_host}:{datasource.redis_port}) - PING ok.',
-                "Connection successful",
-                wx.OK | wx.ICON_INFORMATION,
-                self,
-            )
+            self._on_connected(datasource)
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(

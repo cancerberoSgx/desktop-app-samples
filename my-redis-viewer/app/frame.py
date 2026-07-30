@@ -1,9 +1,11 @@
 import wx
 
+from app.data_explorer_page import DataExplorerPage
 from app.datasources_page import DatasourcesPage
 from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
+from app.models import Datasource
 from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
 from app.repositories import DatasourceRepository, ProfileRepository, SettingsRepository
@@ -25,8 +27,9 @@ class MainFrame(wx.Frame):
         self.active_profile_id = self._bootstrap_active_profile()
 
         self._build_menu_bar()
-        self.CreateStatusBar()
-        self.SetStatusText("Ready")
+        self.CreateStatusBar(2)
+        self.SetStatusWidths([-1, 260])
+        self.SetStatusText("Ready", 0)
 
         root_panel = wx.Panel(self)
         root_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -46,10 +49,18 @@ class MainFrame(wx.Frame):
             self.book,
             self.datasource_repository,
             self.active_profile_id,
+            on_connected=self._on_connect_datasource,
+        )
+        self.data_explorer_page = DataExplorerPage(
+            self.book,
+            self.datasource_repository,
+            on_status=lambda text: self.SetStatusText(text, 1),
         )
         self.book.AddPage(self.profiles_page, "Profiles")
         self.book.AddPage(self.datasources_page, "Data Sources")
         self.book.AddPage(AboutPage(self.book), "About")
+        self._data_explorer_index = self.book.GetPageCount()
+        self.book.AddPage(self.data_explorer_page, "Data Explorer")
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
 
@@ -82,7 +93,7 @@ class MainFrame(wx.Frame):
         self.datasources_page.set_profile(profile_id)
         self.profiles_page.reload()
         profile = self.profile_repository.get(profile_id)
-        self.SetStatusText(f"Active profile: {profile.name if profile else '?'}")
+        self.SetStatusText(f"Active profile: {profile.name if profile else '?'}", 0)
 
     def _on_profiles_changed(self) -> None:
         """Called after a profile is created/edited/deleted - re-validate
@@ -122,7 +133,13 @@ class MainFrame(wx.Frame):
     def _on_sidebar_select(self, index: int) -> None:
         self.book.ChangeSelection(index)
         label = SIDEBAR_ITEMS[index][0]
-        self.SetStatusText(f"Viewing: {label}")
+        self.SetStatusText(f"Viewing: {label}", 0)
+        self.SetStatusText("", 1)
+
+    def _on_connect_datasource(self, datasource: Datasource) -> None:
+        self.book.ChangeSelection(self._data_explorer_index)
+        self.SetStatusText(f"Viewing: Data Explorer - {datasource.name}", 0)
+        self.data_explorer_page.open_datasource(datasource)
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()
