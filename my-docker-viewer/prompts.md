@@ -20,3 +20,5 @@ when the app starts, the "containers" table is empty for some seconds (until doc
 in "containers" table, user can sort all columns by clicking the column header asc and desc.
 the "created" column must be friendlier, for example, X hours ago, x days ago, etc instead of a timestamp.
 
+# auto-refresh
+currently the application auto-refresh every N seconds. Make a change so the user can activate auto-refresh every N seconds with a checkbox/toggle button. By default auto-refresh is disable (user must manually click the refresh button)

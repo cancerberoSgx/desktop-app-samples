@@ -94,8 +94,12 @@ timer tick.**
 
 `ContainersPage` runs a `wx.Timer` (`AUTO_REFRESH_INTERVAL_MS`, currently 5s) that
 calls `reload()` on every tick, since CPU/memory are point-in-time samples and go
-stale immediately after a manual refresh. `reload()` re-renders the list from the
-freshly-fetched data while preserving the current selection by container ID (see
+stale immediately after a manual refresh. The timer is **opt-in and off by
+default** - it's only started/stopped via the "Auto-refresh" checkbox
+(`_on_auto_refresh_toggle`), so the app doesn't hit the docker CLI on a
+recurring basis unless the user asks for it; otherwise the user drives updates
+with the Refresh button. `reload()` re-renders the list from the freshly-fetched
+data while preserving the current selection by container ID (see
 `_populate_list`), so an in-flight auto-refresh doesn't fight with the user
 selecting a row. The timer is stopped on `EVT_WINDOW_DESTROY` so it can't fire
 against a torn-down page.

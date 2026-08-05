@@ -80,9 +80,10 @@ _SORT_KEYS = [
 class ContainersPage(wx.Panel):
     """List every docker container (running and stopped), merged with live
     CPU/memory usage from `docker stats`; filter by name/image/status, and
-    stop or remove the selected one. Refreshes automatically every few
-    seconds (skipped while a request is already in flight) since CPU/memory
-    are point-in-time samples."""
+    stop or remove the selected one. Auto-refresh is opt-in via a checkbox
+    (off by default - the user must click Refresh otherwise) since CPU/memory
+    are point-in-time samples that go stale after every load; when enabled it
+    reloads on a timer (skipped while a request is already in flight)."""
 
     def __init__(self, parent: wx.Window, repository: ContainerRepository) -> None:
         super().__init__(parent)
@@ -113,7 +114,13 @@ class ContainersPage(wx.Panel):
         toolbar.Add(wx.StaticText(self, label="Status:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self._status_choice = wx.Choice(self, choices=STATUS_CHOICES)
         self._status_choice.SetSelection(0)
-        toolbar.Add(self._status_choice, 0, wx.ALIGN_CENTER_VERTICAL)
+        toolbar.Add(self._status_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        self._auto_refresh_checkbox = wx.CheckBox(
+            self, label=f"Auto-refresh ({AUTO_REFRESH_INTERVAL_MS // 1000}s)"
+        )
+        self._auto_refresh_checkbox.SetValue(False)
+        toolbar.Add(self._auto_refresh_checkbox, 0, wx.ALIGN_CENTER_VERTICAL)
 
         toolbar.AddStretchSpacer()
 
@@ -148,6 +155,7 @@ class ContainersPage(wx.Panel):
         self._image_filter.Bind(wx.EVT_TEXT, self._on_filter_changed)
         self._image_filter.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_image_filter_cancel)
         self._status_choice.Bind(wx.EVT_CHOICE, self._on_filter_changed)
+        self._auto_refresh_checkbox.Bind(wx.EVT_CHECKBOX, self._on_auto_refresh_toggle)
         self._refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
         self._stop_btn.Bind(wx.EVT_BUTTON, self._on_stop)
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
@@ -157,7 +165,9 @@ class ContainersPage(wx.Panel):
 
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
-        self._timer.Start(AUTO_REFRESH_INTERVAL_MS)
+        # Off by default - the user opts in via the checkbox above, since it
+        # means an unattended, recurring docker CLI hit (docker ps + docker
+        # stats) rather than one the user explicitly asked for.
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
         self._update_button_states(None)
@@ -212,6 +222,12 @@ class ContainersPage(wx.Panel):
 
     def _on_timer(self, event: wx.TimerEvent) -> None:
         self.reload()
+
+    def _on_auto_refresh_toggle(self, event: wx.CommandEvent) -> None:
+        if self._auto_refresh_checkbox.GetValue():
+            self._timer.Start(AUTO_REFRESH_INTERVAL_MS)
+        else:
+            self._timer.Stop()
 
     def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
         if event.GetEventObject() is self and self._timer.IsRunning():
