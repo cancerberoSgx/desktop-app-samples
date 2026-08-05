@@ -67,6 +67,7 @@ class ContainerRepository:
                     state=data.get("State", ""),
                     size=data.get("Size", ""),
                     ports=data.get("Ports", ""),
+                    created_for=data.get("RunningFor", ""),
                 )
             )
         return containers

@@ -9,3 +9,13 @@ Instead use docker CLI to build the following features in separate screens (side
  * .github/workflows/my-redis-viewer-build.yml - add a similar my-docker-viewer.yml for this project with similar builds.
 
 You will still use sqlite and migrations as in my-redis-viewer to store user settings in the future.
+
+
+# loading
+
+when the app starts, the "containers" table is empty for some seconds (until docker information retrieval finishes). Add a "loading" visual feedback when this happens or when it's refreshed.
+
+# sort columns
+
+in "containers" table, user can sort all columns by clicking the column header asc and desc.
+the "created" column must be friendlier, for example, X hours ago, x days ago, etc instead of a timestamp.

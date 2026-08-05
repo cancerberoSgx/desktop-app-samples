@@ -1,3 +1,4 @@
+import re
 from typing import List, Optional
 
 import wx
@@ -8,6 +9,72 @@ from .repositories import ContainerRepository
 
 STATUS_CHOICES = ["All", "running", "exited", "paused", "restarting", "created", "removing", "dead"]
 AUTO_REFRESH_INTERVAL_MS = 5000
+
+# Byte-unit multipliers used by _size_sort_key, covering both docker's
+# decimal (kB/MB/...) and binary (KiB/MiB/...) size suffixes.
+_SIZE_UNITS = {
+    "B": 1,
+    "KB": 1000, "MB": 1000 ** 2, "GB": 1000 ** 3, "TB": 1000 ** 4,
+    "KIB": 1024, "MIB": 1024 ** 2, "GIB": 1024 ** 3, "TIB": 1024 ** 4,
+}
+_SIZE_RE = re.compile(r"([\d.]+)\s*([A-Za-z]+)")
+
+
+def _size_sort_key(text: Optional[str]) -> float:
+    """Parses a leading docker size/usage figure (`"15.5MiB / 1.9GiB"`,
+    `"0B (virtual 435MB)"`) into bytes for numeric sorting; anything
+    unparsable (including None, for stopped containers) sorts lowest."""
+    if not text:
+        return -1.0
+    match = _SIZE_RE.match(text.strip())
+    if not match:
+        return -1.0
+    number, unit = match.groups()
+    try:
+        value = float(number)
+    except ValueError:
+        return -1.0
+    return value * _SIZE_UNITS.get(unit.upper(), 1)
+
+
+def _percent_sort_key(text: Optional[str]) -> float:
+    if not text:
+        return -1.0
+    try:
+        return float(text.strip().rstrip("%"))
+    except ValueError:
+        return -1.0
+
+
+# (header label, initial width) per list column, and the matching sort-key
+# function - both index-aligned to the columns as inserted into the wx.ListCtrl.
+_COLUMNS = [
+    ("Name", 160),
+    ("Image", 200),
+    ("Status", 170),
+    ("Created", 190),
+    ("CPU %", 70),
+    ("Mem Usage", 130),
+    ("Mem %", 70),
+    ("Size", 150),
+    ("Ports", 160),
+    ("ID", 100),
+]
+_SORT_KEYS = [
+    lambda c: c.names.lower(),
+    lambda c: c.image.lower(),
+    lambda c: c.status.lower(),
+    # created_at is docker's raw timestamp ("2026-08-05 08:57:20 -0300 -03"),
+    # not the friendlier created_for shown in the column - lexicographic order
+    # on it matches chronological order.
+    lambda c: c.created_at,
+    lambda c: _percent_sort_key(c.cpu_percent),
+    lambda c: _size_sort_key(c.mem_usage),
+    lambda c: _percent_sort_key(c.mem_percent),
+    lambda c: _size_sort_key(c.size),
+    lambda c: c.ports.lower(),
+    lambda c: c.id,
+]
 
 
 class ContainersPage(wx.Panel):
@@ -60,24 +127,17 @@ class ContainersPage(wx.Panel):
         outer.Add(toolbar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
-        for index, (label, width) in enumerate(
-            [
-                ("Name", 160),
-                ("Image", 200),
-                ("Status", 170),
-                ("Created", 190),
-                ("CPU %", 70),
-                ("Mem Usage", 130),
-                ("Mem %", 70),
-                ("Size", 150),
-                ("Ports", 160),
-                ("ID", 100),
-            ]
-        ):
+        self._column_labels = [label for label, _width in _COLUMNS]
+        for index, (label, width) in enumerate(_COLUMNS):
             self._list.InsertColumn(index, label, width=width)
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self.SetSizer(outer)
+
+        # Sortable columns: repository.list() already returns containers
+        # sorted by name, so that's also the initial header sort state.
+        self._sort_column = 0
+        self._sort_ascending = True
 
         self._name_filter.Bind(wx.EVT_TEXT, self._on_filter_changed)
         self._name_filter.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_name_filter_cancel)
@@ -89,6 +149,7 @@ class ContainersPage(wx.Panel):
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
+        self._list.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
 
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
@@ -96,6 +157,7 @@ class ContainersPage(wx.Panel):
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
         self._update_button_states(None)
+        self._update_column_headers()
         self.reload()
 
     # ------------------------------------------------------------------
@@ -161,12 +223,13 @@ class ContainersPage(wx.Panel):
         selected_id = selected.id if selected else None
 
         self._visible = self._filtered_containers()
+        self._sort_visible()
         self._list.DeleteAllItems()
         for row, container in enumerate(self._visible):
             self._list.InsertItem(row, container.names)
             self._list.SetItem(row, 1, container.image)
             self._list.SetItem(row, 2, container.status)
-            self._list.SetItem(row, 3, container.created_at)
+            self._list.SetItem(row, 3, container.created_for or container.created_at)
             self._list.SetItem(row, 4, container.cpu_percent or "-")
             self._list.SetItem(row, 5, container.mem_usage or "-")
             self._list.SetItem(row, 6, container.mem_percent or "-")
@@ -177,6 +240,28 @@ class ContainersPage(wx.Panel):
                 self._list.SetItemState(row, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
 
         self._update_button_states(None)
+
+    def _sort_visible(self) -> None:
+        key_func = _SORT_KEYS[self._sort_column]
+        self._visible.sort(key=key_func, reverse=not self._sort_ascending)
+
+    def _on_col_click(self, event: wx.ListEvent) -> None:
+        column = event.GetColumn()
+        if column == self._sort_column:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_column = column
+            self._sort_ascending = True
+        self._update_column_headers()
+        self._populate_list()
+
+    def _update_column_headers(self) -> None:
+        for index, label in enumerate(self._column_labels):
+            if index == self._sort_column:
+                label += " ↑" if self._sort_ascending else " ↓"
+            column_info = self._list.GetColumn(index)
+            column_info.SetText(label)
+            self._list.SetColumn(index, column_info)
 
     def _selected_container(self) -> Optional[Container]:
         index = self._list.GetFirstSelected()

@@ -18,6 +18,11 @@ class Container:
     state: str
     size: str = ""
     ports: str = ""
+    # Docker's own "N units ago" rendering of created_at (its `RunningFor`
+    # field, despite the name it's relative to creation, not last start) -
+    # used for display; created_at is kept as docker's raw, lexicographically
+    # sortable timestamp string for column sorting.
+    created_for: str = ""
     cpu_percent: Optional[str] = None
     mem_usage: Optional[str] = None
     mem_percent: Optional[str] = None
