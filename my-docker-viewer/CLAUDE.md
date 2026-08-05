@@ -229,11 +229,50 @@ Backs `app/images_page.py`. Same shell-out-and-parse-`{{json .}}` pattern and
   undo" posture as `ContainerRepository.stop`/`remove`. `prune()` returns docker's
   own stdout (each deleted image, then "Total reclaimed space: ...") verbatim so
   `ImagesPage` can show the user exactly what happened rather than re-deriving it.
-- `ImagesPage._on_remove` mirrors `ContainersPage._on_remove`: `force` is set
-  whenever the image has any referencing container (`image.containers > 0`), and
-  the confirm prompt names the count; docker itself still refuses removal behind a
-  *running* container even with `-f`, which surfaces as a normal `on_error` message
+- `ImagesPage._on_remove`: an image with zero referencing containers goes straight
+  to a plain yes/no confirm. One with at least one referencing container instead
+  triggers `find_dependents()` (async) and then `_RemoveImageDialog` - see below -
+  rather than the old unconditional `force=True` remove; either path's "remove
+  image only" branch still passes `force=True` and can still fail behind a
+  *running* container even so, which surfaces as a normal `on_error` message
   rather than something the dialog pre-empts.
+- **Cascading remove** (`find_dependents()` / `remove_with_dependents()` /
+  `_RemoveImageDialog` in `images_page.py`) - lets the user remove an image
+  *and* every container/volume/network that only exists because of it, to
+  reclaim the most space in one step, rather than removing the image and
+  leaving its now-pointless containers/volumes/networks behind:
+  - `find_dependents(reference)` is read-only and answers "what would a cascade
+    take out": every container built from this exact image (any state), plus the
+    volumes/networks those containers use. `docker ps --filter
+    ancestor=<reference>` is the obvious way to find candidate containers, but
+    its own docs say it also matches containers running a *descendant* of this
+    image (something built `FROM` it) - not "uses this image". So candidates are
+    cross-checked against each container's own `.Image` (exact image ID via one
+    bulk `docker inspect`) rather than trusted outright - measured, not assumed,
+    same posture as `DiskUsageRepository`'s mount-safety checks.
+  - A dependent volume/network is marked `shared` (and skipped by the cascade,
+    not removed) if `docker ps -a --filter volume=.../network=...` shows some
+    container *outside* the set being removed still references it - checked with
+    `-a` deliberately, since a stopped container still needs its volume/network
+    back the next time it starts. Predefined networks (`bridge`/`host`/`none`)
+    are excluded from cascade candidates outright - docker never lets you remove
+    them regardless.
+  - `remove_with_dependents()` removes every dependent container (`docker rm
+    -f`), then every non-shared dependent volume/network, then the image itself
+    - continuing past an individual step's failure rather than aborting the
+    whole cascade over one bad item (same posture as
+    `DiskUsageRepository.sum_mounts_bytes`), returning one human-readable note
+    per step for the result dialog.
+  - `_RemoveImageDialog` defaults to "remove image only" (the less destructive
+    choice) and only reveals the containers/volumes/networks detail list once
+    the user picks "remove image and all associated resources" - kept vs. would-
+    be-removed items are called out separately so a shared volume/network being
+    *kept* isn't mistaken for an oversight.
+  - A successful cascade also calls `on_containers_changed` (wired in
+    `frame.py` to `ContainersPage.reload`) since it can delete containers
+    `ImagesPage` never loaded itself - without this hook the Containers screen
+    would sit stale showing containers that no longer exist until the user
+    happened to revisit it.
 - Prune is the one action on this page that calls `reload()` on success instead of
   patching `self._images` in place - the set of images a prune deletes is docker's
   own unused/dangling determination, not something worth re-deriving client-side.

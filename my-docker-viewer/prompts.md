@@ -181,3 +181,7 @@ ok, let's implement the "images" main screen.
 p22
 in "images" screen, when user removes an image, the confirmation modal should also let the user to choose remove this image, all its containers and associated containers, volumes, networks, etc. The idea is that they can just remove the image, but also alternatively remove all associated resources to that image to release the most space 
 ---
+
+
+
+on the sidebar, the current screen must be highlighted

@@ -3,9 +3,9 @@ import os
 import subprocess
 import sqlite3
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
-from .models import Container, ContainerDiskUsage, Image, Mount
+from .models import Container, ContainerDiskUsage, DependentContainer, DependentResource, Image, ImageDependents, Mount
 
 DOCKER_BINARY = "docker"
 COMMAND_TIMEOUT_SECONDS = 15
@@ -179,9 +179,168 @@ class ImageRepository:
             args.append("-a")
         return self._run(args)
 
+    def find_dependents(self, reference: str) -> ImageDependents:
+        """Read-only lookup of everything a *cascading* removal of
+        `reference` would also take out: every container built from this
+        exact image (regardless of state), plus the volumes/networks only
+        those containers use - excluding any volume or network some OTHER
+        container (outside this set) still needs, so a cascade can't
+        quietly break something unrelated. Nothing is removed here.
+
+        `docker ps --filter ancestor=<reference>` is the obvious way to find
+        candidate containers, but its own docs describe it as matching
+        containers built from this image *or a descendant* of it - a
+        container running some other image that was itself built FROM this
+        one would also match, which is not what "uses this image" means
+        here. So candidates are cross-checked against each container's own
+        `.Image` (its exact image ID, via `docker inspect`) rather than
+        trusted outright - measured, not assumed."""
+        try:
+            full_id = self._run(["image", "inspect", "--format", "{{.Id}}", reference]).strip()
+        except DockerCommandError:
+            full_id = None
+
+        candidates = self._dependent_containers(reference)
+        if not candidates:
+            return ImageDependents()
+
+        details = self._inspect_containers([c.id for c in candidates])
+        if full_id:
+            containers = [c for c in candidates if details.get(c.id, {}).get("image_id") == full_id]
+        else:
+            containers = candidates
+        if not containers:
+            return ImageDependents()
+
+        container_ids = {c.id for c in containers}
+        volume_names: Set[str] = set()
+        network_names: Set[str] = set()
+        for container in containers:
+            info = details.get(container.id, {})
+            volume_names.update(info.get("volumes", set()))
+            network_names.update(info.get("networks", set()))
+        network_names -= _BUILTIN_NETWORKS
+
+        volumes = [
+            DependentResource(name=name, shared=self._used_outside("volume", name, container_ids))
+            for name in sorted(volume_names)
+        ]
+        networks = [
+            DependentResource(name=name, shared=self._used_outside("network", name, container_ids))
+            for name in sorted(network_names)
+        ]
+        return ImageDependents(containers=containers, volumes=volumes, networks=networks)
+
+    def remove_with_dependents(self, reference: str, dependents: ImageDependents) -> List[str]:
+        """Cascading remove: every dependent container (force), then every
+        non-shared dependent volume/network, then the image itself -
+        continuing past an individual step's failure rather than aborting
+        the whole cascade over one bad item, same posture as
+        DiskUsageRepository.sum_mounts_bytes. Returns a human-readable note
+        per step (what was removed, what was kept and why, what failed) so
+        the caller can show the user exactly what happened."""
+        notes: List[str] = []
+        for container in dependents.containers:
+            try:
+                self._run(["rm", "-f", container.id])
+                notes.append(f'Removed container "{container.names}".')
+            except DockerCommandError as exc:
+                notes.append(f'Could not remove container "{container.names}": {exc}')
+
+        for volume in dependents.volumes:
+            if volume.shared:
+                notes.append(f'Kept volume "{volume.name}" - still used by another container.')
+                continue
+            try:
+                self._run(["volume", "rm", volume.name])
+                notes.append(f'Removed volume "{volume.name}".')
+            except DockerCommandError as exc:
+                notes.append(f'Could not remove volume "{volume.name}": {exc}')
+
+        for network in dependents.networks:
+            if network.shared:
+                notes.append(f'Kept network "{network.name}" - still used by another container.')
+                continue
+            try:
+                self._run(["network", "rm", network.name])
+                notes.append(f'Removed network "{network.name}".')
+            except DockerCommandError as exc:
+                notes.append(f'Could not remove network "{network.name}": {exc}')
+
+        try:
+            self._run(["image", "rm", "-f", reference])
+            notes.append(f'Removed image "{reference}".')
+        except DockerCommandError as exc:
+            notes.append(f'Could not remove image "{reference}": {exc}')
+
+        return notes
+
+    # ------------------------------------------------------------------
+    def _dependent_containers(self, reference: str) -> List[DependentContainer]:
+        output = self._run(["ps", "-a", "--filter", f"ancestor={reference}", "--format", "{{json .}}"])
+        containers = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            containers.append(
+                DependentContainer(id=data.get("ID", ""), names=data.get("Names", ""), state=data.get("State", ""))
+            )
+        return containers
+
+    def _inspect_containers(self, container_ids: List[str]) -> Dict[str, dict]:
+        """One bulk `docker inspect` for every id's exact image ID, volume
+        names, and network names at once - the per-container detail
+        `find_dependents` cross-checks candidates against and builds its
+        volume/network sets from."""
+        if not container_ids:
+            return {}
+        output = _run_docker(
+            [
+                "inspect",
+                "--format",
+                '{{.Id}}{{"\t"}}{{.Image}}{{"\t"}}{{json .Mounts}}{{"\t"}}{{json .NetworkSettings.Networks}}',
+                *container_ids,
+            ]
+        )
+        result: Dict[str, dict] = {}
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            full_id, image_id, mounts_json, networks_json = line.split("\t", 3)
+            volumes = {
+                mount.get("Name") or mount.get("Source")
+                for mount in json.loads(mounts_json)
+                if mount.get("Type") == "volume"
+            }
+            networks = set(json.loads(networks_json).keys())
+            result[full_id[:12]] = {"image_id": image_id, "volumes": volumes, "networks": networks}
+        return result
+
+    def _used_outside(self, kind: str, name: str, container_ids: Set[str]) -> bool:
+        """True if some container OTHER than the ones about to be removed
+        still references this volume/network - `docker ps -a --filter
+        volume=.../network=...` covers stopped containers too, not just
+        running ones, since a stopped container still "uses" its volumes
+        and last-known network in the sense that matters here (removing
+        the volume/network out from under it would break it on next
+        start)."""
+        output = self._run(["ps", "-a", "--filter", f"{kind}={name}", "--format", "{{.ID}}"])
+        users = {line.strip() for line in output.splitlines() if line.strip()}
+        return bool(users - container_ids)
+
     @staticmethod
     def _run(args: List[str]) -> str:
         return _run_docker(args)
+
+
+# Predefined networks docker creates itself and never lets you remove -
+# excluded from cascade-removal candidates regardless of "shared" status,
+# same reasoning as excluding them from the standalone Networks screen's
+# Remove action would be.
+_BUILTIN_NETWORKS = {"bridge", "host", "none"}
 
 
 def _parse_int(value: str) -> int:

@@ -1,10 +1,10 @@
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import wx
 
 from .async_task import AsyncTaskRunner
 from .formatting import size_sort_key
-from .models import Image
+from .models import Image, ImageDependents
 from .repositories import ImageRepository
 
 STATUS_CHOICES = ["All", "In use", "Unused", "Dangling"]
@@ -34,6 +34,93 @@ _SORT_KEYS = [
 ]
 
 
+class _RemoveImageDialog(wx.Dialog):
+    """Shown instead of a plain yes/no confirm whenever the image being
+    removed has at least one dependent container - lets the user pick
+    between removing just the image (same as before: still needs -f, and
+    still fails outright behind a *running* container regardless) or
+    cascading the removal to every dependent container plus the
+    volumes/networks only those containers use, to reclaim the most space
+    in one step. `cascade` holds the user's choice after ShowModal()
+    returns wx.ID_OK; `dependents` is read-only input, never mutated here."""
+
+    def __init__(self, parent: wx.Window, image: Image, dependents: ImageDependents) -> None:
+        super().__init__(parent, title="Remove image")
+        self.cascade = False
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        summary = wx.StaticText(
+            self,
+            label=(
+                f'"{image.reference}" ({image.size or "unknown size"}) is used by '
+                f"{len(dependents.containers)} container(s)."
+            ),
+        )
+        outer.Add(summary, 0, wx.ALL, 12)
+
+        self._image_only_radio = wx.RadioButton(self, label="Remove image only", style=wx.RB_GROUP)
+        self._cascade_radio = wx.RadioButton(
+            self, label="Remove image and all associated containers/volumes/networks"
+        )
+        self._image_only_radio.SetValue(True)
+        outer.Add(self._image_only_radio, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
+        outer.Add(self._cascade_radio, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
+
+        # Only shown once "cascade" is picked - keeps the common "just
+        # remove the image" path from being cluttered by a wall of detail
+        # most of the time.
+        self._detail_text = wx.StaticText(self, label=self._describe(dependents))
+        self._detail_text.SetForegroundColour(wx.Colour(120, 120, 120))
+        self._detail_text.Wrap(420)
+        self._detail_text.Show(False)
+        outer.Add(self._detail_text, 0, wx.EXPAND | wx.ALL, 12)
+
+        button_sizer = wx.StdDialogButtonSizer()
+        ok_btn = wx.Button(self, wx.ID_OK, label="Remove")
+        ok_btn.SetDefault()
+        cancel_btn = wx.Button(self, wx.ID_CANCEL)
+        button_sizer.AddButton(ok_btn)
+        button_sizer.AddButton(cancel_btn)
+        button_sizer.Realize()
+        outer.Add(button_sizer, 0, wx.EXPAND | wx.ALL, 12)
+
+        self.SetSizerAndFit(outer)
+        self.CentreOnParent()
+
+        self._image_only_radio.Bind(wx.EVT_RADIOBUTTON, self._on_radio)
+        self._cascade_radio.Bind(wx.EVT_RADIOBUTTON, self._on_radio)
+        ok_btn.Bind(wx.EVT_BUTTON, self._on_ok)
+
+    @staticmethod
+    def _describe(dependents: ImageDependents) -> str:
+        lines = []
+        if dependents.containers:
+            lines.append("Containers: " + ", ".join(c.names for c in dependents.containers))
+        removed_volumes = [v.name for v in dependents.volumes if not v.shared]
+        kept_volumes = [v.name for v in dependents.volumes if v.shared]
+        if removed_volumes:
+            lines.append("Volumes: " + ", ".join(removed_volumes))
+        if kept_volumes:
+            lines.append("Volumes kept (also used elsewhere): " + ", ".join(kept_volumes))
+        removed_networks = [n.name for n in dependents.networks if not n.shared]
+        kept_networks = [n.name for n in dependents.networks if n.shared]
+        if removed_networks:
+            lines.append("Networks: " + ", ".join(removed_networks))
+        if kept_networks:
+            lines.append("Networks kept (also used elsewhere): " + ", ".join(kept_networks))
+        return "\n".join(lines) if lines else "Nothing else associated with this image."
+
+    def _on_radio(self, event: wx.CommandEvent) -> None:
+        self.cascade = self._cascade_radio.GetValue()
+        self._detail_text.Show(self.cascade)
+        self.Layout()
+        self.Fit()
+
+    def _on_ok(self, event: wx.CommandEvent) -> None:
+        self.cascade = self._cascade_radio.GetValue()
+        self.EndModal(wx.ID_OK)
+
+
 class ImagesPage(wx.Panel):
     """List every local docker image - repository:tag, size, and how many
     containers (running or stopped) reference it - filter by name/status,
@@ -45,9 +132,20 @@ class ImagesPage(wx.Panel):
     a manual Refresh is enough, so this page never hits the docker CLI on
     its own."""
 
-    def __init__(self, parent: wx.Window, repository: ImageRepository) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        repository: ImageRepository,
+        on_containers_changed: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
+        # A cascading remove can delete containers this page never loaded
+        # itself (it only tracks images) - this optional hook lets
+        # MainFrame wire it to ContainersPage.reload so that page doesn't
+        # sit stale showing containers that no longer exist until the user
+        # happens to revisit it.
+        self._on_containers_changed = on_containers_changed
         self._images: List[Image] = []
         self._visible: List[Image] = []
         self._async = AsyncTaskRunner(self)
@@ -254,21 +352,66 @@ class ImagesPage(wx.Panel):
         if image is None:
             return
 
-        # Same pattern as ContainersPage._on_remove: docker itself will
-        # refuse to remove an image referenced by any container (running or
-        # stopped) without -f, and -f still won't remove one behind a
-        # *running* container - that case surfaces as a docker error via
-        # on_error rather than something this dialog tries to pre-empt.
-        force = image.containers > 0
-        label = image.reference
-        prompt = (
-            f'Image "{label}" is used by {image.containers} container(s). Force remove it?'
-            if force
-            else f'Remove image "{label}"?'
-        )
-        confirm = wx.MessageBox(prompt, "Confirm remove", wx.YES_NO | wx.ICON_WARNING, self)
-        if confirm != wx.YES:
+        if image.containers == 0:
+            # Nothing to cascade to - keep the plain yes/no confirm rather
+            # than firing off a find_dependents() round trip that would
+            # come back empty anyway.
+            confirm = wx.MessageBox(
+                f'Remove image "{image.reference}"?', "Confirm remove", wx.YES_NO | wx.ICON_WARNING, self
+            )
+            if confirm == wx.YES:
+                self._run_remove(image, force=False)
             return
+
+        # At least one container references this image - look up exactly
+        # what a cascade would take out before asking, so the dialog can
+        # show real names/counts instead of just "N container(s)".
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(
+                f'Could not check what uses "{image.reference}":\n\n{exc}',
+                "Remove failed",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+
+        self._async.run(
+            work=lambda: self._repository.find_dependents(image.reference),
+            on_success=lambda dependents: self._prompt_remove(image, dependents),
+            on_error=on_error,
+            disable=[self._remove_btn, self._prune_btn],
+        )
+
+    def _prompt_remove(self, image: Image, dependents: ImageDependents) -> None:
+        if dependents.is_empty:
+            # docker's own container count on this image disagreed with
+            # what find_dependents() could actually pin down (e.g. the
+            # ancestor filter matched nothing after the exact-image-ID
+            # cross-check) - nothing concrete to cascade to, so fall back
+            # to the plain path rather than showing an empty dialog.
+            confirm = wx.MessageBox(
+                f'Image "{image.reference}" is used by {image.containers} container(s). Force remove it?',
+                "Confirm remove",
+                wx.YES_NO | wx.ICON_WARNING,
+                self,
+            )
+            if confirm == wx.YES:
+                self._run_remove(image, force=True)
+            return
+
+        dialog = _RemoveImageDialog(self, image, dependents)
+        result = dialog.ShowModal()
+        cascade = dialog.cascade
+        dialog.Destroy()
+        if result != wx.ID_OK:
+            return
+
+        if cascade:
+            self._run_cascade_remove(image, dependents)
+        else:
+            self._run_remove(image, force=True)
+
+    def _run_remove(self, image: Image, force: bool) -> None:
+        label = image.reference
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(
@@ -281,6 +424,30 @@ class ImagesPage(wx.Panel):
         self._async.run(
             work=lambda: self._repository.remove(image.reference, force=force),
             on_success=lambda _result: self._apply_removed(image.reference),
+            on_error=on_error,
+            disable=[self._remove_btn, self._prune_btn],
+        )
+
+    def _run_cascade_remove(self, image: Image, dependents: ImageDependents) -> None:
+        def on_success(notes: List[str]) -> None:
+            wx.MessageBox("\n".join(notes), "Remove complete", wx.OK | wx.ICON_INFORMATION, self)
+            if self._on_containers_changed:
+                self._on_containers_changed()
+            # See _on_prune's comment on why this has to go through
+            # wx.CallAfter rather than calling reload() directly here.
+            wx.CallAfter(self.reload)
+
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(
+                f'Could not remove "{image.reference}" and its associated resources:\n\n{exc}',
+                "Remove failed",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+
+        self._async.run(
+            work=lambda: self._repository.remove_with_dependents(image.reference, dependents),
+            on_success=on_success,
             on_error=on_error,
             disable=[self._remove_btn, self._prune_btn],
         )

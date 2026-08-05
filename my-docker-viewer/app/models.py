@@ -74,6 +74,47 @@ class Image:
 
 
 @dataclass
+class DependentContainer:
+    """One container built from an image being considered for removal -
+    found via `ImageRepository.find_dependents`. Regardless of state
+    (running or stopped): a cascading image removal takes out every
+    container that used it, not just the running ones."""
+
+    id: str
+    names: str
+    state: str
+
+
+@dataclass
+class DependentResource:
+    """A volume or network name discovered in use by an image's dependent
+    containers. `shared` is True when some OTHER container - outside the
+    set that would be removed - still uses it too, in which case a cascade
+    removal skips it rather than breaking that other container; mirrors
+    `Mount.shared`'s reasoning in spirit, but checked directly against
+    docker (`docker ps --filter volume=.../network=...`) rather than
+    inferred from a mounts list, since networks aren't mounts at all."""
+
+    name: str
+    shared: bool = False
+
+
+@dataclass
+class ImageDependents:
+    """Everything `ImageRepository.remove_with_dependents` would take out
+    alongside the image itself - the result of a read-only lookup
+    (`find_dependents`), shown to the user before they commit to it."""
+
+    containers: List[DependentContainer] = field(default_factory=list)
+    volumes: List[DependentResource] = field(default_factory=list)
+    networks: List[DependentResource] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.containers and not self.volumes and not self.networks
+
+
+@dataclass
 class Mount:
     """One entry from a container's `docker inspect` Mounts array. `kind` is
     docker's own mount `Type` ("volume", "bind", "tmpfs", ...). `identifier`
