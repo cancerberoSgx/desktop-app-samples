@@ -117,6 +117,10 @@ class ContainersPage(wx.Panel):
 
         toolbar.AddStretchSpacer()
 
+        self._loading_text = wx.StaticText(self, label="")
+        self._loading_text.SetForegroundColour(wx.Colour(120, 120, 120))
+        toolbar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+
         self._refresh_btn = wx.Button(self, label="Refresh")
         self._stop_btn = wx.Button(self, label="Stop")
         self._remove_btn = wx.Button(self, label="Remove")
@@ -166,12 +170,27 @@ class ContainersPage(wx.Panel):
     def reload(self) -> None:
         if self._async.is_busy():
             return
+        self._set_loading(True)
         self._async.run(
             work=self._repository.list,
             on_success=self._on_loaded,
             on_error=self._on_load_error,
+            on_done=lambda: self._set_loading(False),
             disable=[self._refresh_btn],
         )
+
+    def _set_loading(self, loading: bool) -> None:
+        self._loading_text.SetLabel("Loading..." if loading else "")
+        # The table only goes visibly blank on the very first load (or if
+        # the last result was empty) - once rows are showing, a refresh
+        # keeps them in place and this label is the only feedback, so an
+        # in-flight auto-refresh tick doesn't blank a populated table.
+        if loading and not self._containers:
+            self._show_loading_placeholder()
+
+    def _show_loading_placeholder(self) -> None:
+        self._list.DeleteAllItems()
+        self._list.InsertItem(0, "Loading containers...")
 
     def _on_loaded(self, containers: List[Container]) -> None:
         self._set_error(None)

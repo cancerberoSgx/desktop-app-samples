@@ -19,3 +19,4 @@ when the app starts, the "containers" table is empty for some seconds (until doc
 
 in "containers" table, user can sort all columns by clicking the column header asc and desc.
 the "created" column must be friendlier, for example, X hours ago, x days ago, etc instead of a timestamp.
+
