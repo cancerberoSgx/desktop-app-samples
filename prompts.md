@@ -14,3 +14,4 @@ Please analyze and recommend an approach to create websites for each app using g
 I would like that documents generates to be able to be updated both by claude or myself a human.
 For now these apps won't have a reference manual or guide, just a single html with screenshots and data and some small instructions & tutorials
 Don't write any code, first plan how would you perform this so we have a template / framework in place to document any of the existing a new desktop apps in this folder
+
