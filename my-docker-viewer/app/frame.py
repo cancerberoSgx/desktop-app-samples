@@ -6,9 +6,18 @@ from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
 from app.images_page import ImagesPage
+from app.networks_page import NetworksPage
 from app.pages import AboutPage
-from app.repositories import ContainerRepository, DiskUsageRepository, ImageRepository, SettingsRepository
+from app.repositories import (
+    ContainerRepository,
+    DiskUsageRepository,
+    ImageRepository,
+    NetworkRepository,
+    SettingsRepository,
+    VolumeRepository,
+)
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
+from app.volumes_page import VolumesPage
 
 
 class MainFrame(wx.Frame):
@@ -25,6 +34,8 @@ class MainFrame(wx.Frame):
         self.container_repository = ContainerRepository()
         self.disk_usage_repository = DiskUsageRepository()
         self.image_repository = ImageRepository()
+        self.volume_repository = VolumeRepository()
+        self.network_repository = NetworkRepository()
 
         self._build_menu_bar()
         self.CreateStatusBar(1)
@@ -45,6 +56,10 @@ class MainFrame(wx.Frame):
             self.book, self.image_repository, on_containers_changed=self.containers_page.reload
         )
         self.book.AddPage(self.images_page, "Images")
+        self.volumes_page = VolumesPage(self.book, self.volume_repository)
+        self.book.AddPage(self.volumes_page, "Volumes")
+        self.networks_page = NetworksPage(self.book, self.network_repository)
+        self.book.AddPage(self.networks_page, "Networks")
         self.book.AddPage(AboutPage(self.book), "About")
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
@@ -102,9 +117,9 @@ class MainFrame(wx.Frame):
             "My Docker Viewer\n\n"
             "Admin your local Docker containers: list, filter, inspect "
             "resource usage, stop, and remove - plus a read-only Containers "
-            "Disk screen to see real per-container disk usage, and an "
-            "Images screen to see every local image's size/container count "
-            "and remove or prune them - all via the docker CLI.",
+            "Disk screen to see real per-container disk usage, and Images/"
+            "Volumes/Networks screens to see what each one's used by and "
+            "remove or prune them - all via the docker CLI.",
             "About My Docker Viewer",
             wx.OK | wx.ICON_INFORMATION,
             self,

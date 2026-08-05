@@ -180,6 +180,9 @@ ok, let's implement the "images" main screen.
 
 p22
 in "images" screen, when user removes an image, the confirmation modal should also let the user to choose remove this image, all its containers and associated containers, volumes, networks, etc. The idea is that they can just remove the image, but also alternatively remove all associated resources to that image to release the most space 
+
+p3
+in "volumes" main screen, add a column "size" which is calculated re-using the solution implemented for "containers disk" which is able to calculate disk space of different volumes
 ---
 
 

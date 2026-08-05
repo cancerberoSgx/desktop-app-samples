@@ -5,7 +5,17 @@ import sqlite3
 import threading
 from typing import Dict, List, Optional, Set, Tuple
 
-from .models import Container, ContainerDiskUsage, DependentContainer, DependentResource, Image, ImageDependents, Mount
+from .models import (
+    Container,
+    ContainerDiskUsage,
+    DependentContainer,
+    DependentResource,
+    Image,
+    ImageDependents,
+    Mount,
+    Network,
+    Volume,
+)
 
 DOCKER_BINARY = "docker"
 COMMAND_TIMEOUT_SECONDS = 15
@@ -348,6 +358,183 @@ def _parse_int(value: str) -> int:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return 0
+
+
+class VolumeRepository:
+    """Wraps the docker CLI for volumes - same shell-out-and-parse-
+    `{{json .}}` pattern as ContainerRepository/ImageRepository.
+
+    `docker volume ls` itself doesn't report which containers use a volume,
+    so `list()` cross-references it against every container's own mounts -
+    one bulk `docker ps` for identity plus one bulk `docker inspect` for
+    mounts, the same two-call shape `DiskUsageRepository.list_targets` uses,
+    kept as its own independent (smaller) implementation here rather than
+    reused across classes, since this only needs volume names, not the
+    bind-mount/tmpfs handling that read-only screen also carries."""
+
+    def list(self) -> List[Volume]:
+        volumes = {v.name: v for v in self._ls()}
+        if volumes:
+            for name, container_name in self._volume_users():
+                volume = volumes.get(name)
+                if volume is not None:
+                    volume.containers += 1
+                    volume.container_names.append(container_name)
+        return sorted(volumes.values(), key=lambda v: v.name.lower())
+
+    def remove(self, name: str) -> None:
+        # No force override exists here for "volume is in use" - `-f` only
+        # suppresses a "no such volume" error, so it's not passed at all;
+        # ImagesPage-style callers should check `Volume.is_in_use` and
+        # explain rather than let this fail with docker's own message.
+        self._run(["volume", "rm", name])
+
+    def prune(self, all_unused: bool = False) -> str:
+        """Removes unused volumes - anonymous-only by default, every
+        volume with zero containers referencing it (docker's own `-a`,
+        which despite the name only extends to *named* volumes - anonymous
+        ones are always eligible) when `all_unused` is set. Returns
+        docker's own summary text verbatim, same reasoning as
+        `ImageRepository.prune`."""
+        args = ["volume", "prune", "-f"]
+        if all_unused:
+            args.append("-a")
+        return self._run(args)
+
+    # ------------------------------------------------------------------
+    def _ls(self) -> List[Volume]:
+        output = self._run(["volume", "ls", "--format", "{{json .}}"])
+        volumes = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            volumes.append(
+                Volume(
+                    name=data.get("Name", ""),
+                    driver=data.get("Driver", ""),
+                    mountpoint=data.get("Mountpoint", ""),
+                    scope=data.get("Scope", ""),
+                )
+            )
+        return volumes
+
+    def _volume_users(self):
+        """Yields (volume_name, container_name) once per volume mount
+        across every container, any state."""
+        containers = self._containers()
+        if not containers:
+            return
+        mounts_by_id = self._inspect_volume_mounts([container_id for container_id, _name in containers])
+        names_by_id = dict(containers)
+        for container_id, volume_names in mounts_by_id.items():
+            container_name = names_by_id.get(container_id, container_id)
+            for name in volume_names:
+                yield name, container_name
+
+    def _containers(self) -> List[Tuple[str, str]]:
+        output = self._run(["ps", "-a", "--format", "{{json .}}"])
+        result = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            result.append((data.get("ID", ""), data.get("Names", "")))
+        return result
+
+    def _inspect_volume_mounts(self, container_ids: List[str]) -> Dict[str, List[str]]:
+        if not container_ids:
+            return {}
+        output = _run_docker(["inspect", "--format", '{{.Id}}{{"\t"}}{{json .Mounts}}', *container_ids])
+        result: Dict[str, List[str]] = {}
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            full_id, _, mounts_json = line.partition("\t")
+            names = [m.get("Name") for m in json.loads(mounts_json) if m.get("Type") == "volume" and m.get("Name")]
+            result[full_id[:12]] = names
+        return result
+
+    @staticmethod
+    def _run(args: List[str]) -> str:
+        return _run_docker(args)
+
+
+class NetworkRepository:
+    """Wraps the docker CLI for networks - same shell-out-and-parse-
+    `{{json .}}` pattern as the other repositories in this module.
+
+    Unlike volumes, container-to-network usage comes for free: every
+    container's own `docker ps` row already reports a comma-separated
+    `Networks` field, so `list()` needs no extra `docker inspect` call at
+    all to compute `containers`/`container_names`."""
+
+    def list(self) -> List[Network]:
+        networks = {n.name: n for n in self._ls()}
+        if networks:
+            for name, container_name in self._network_users():
+                network = networks.get(name)
+                if network is not None:
+                    network.containers += 1
+                    network.container_names.append(container_name)
+        return sorted(networks.values(), key=lambda n: n.name.lower())
+
+    def remove(self, name: str) -> None:
+        # No force override here either - `-f` only suppresses a "no such
+        # network" error, not docker's refusal to remove a network with
+        # active endpoints, and bridge/host/none can never be removed at
+        # all regardless of flags.
+        self._run(["network", "rm", name])
+
+    def prune(self) -> str:
+        """Removes every network not used by any container. Unlike
+        images/volumes there's no dangling-vs-all distinction for networks
+        - `docker network prune` has no `-a` flag - so this takes no
+        argument."""
+        return self._run(["network", "prune", "-f"])
+
+    # ------------------------------------------------------------------
+    def _ls(self) -> List[Network]:
+        output = self._run(["network", "ls", "--format", "{{json .}}"])
+        networks = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            networks.append(
+                Network(
+                    id=data.get("ID", ""),
+                    name=data.get("Name", ""),
+                    driver=data.get("Driver", ""),
+                    scope=data.get("Scope", ""),
+                )
+            )
+        return networks
+
+    def _network_users(self):
+        """Yields (network_name, container_name) once per network a
+        container (any state) is attached to - `docker ps`'s own `Networks`
+        field is a comma-separated list, so a container on more than one
+        network yields once per network."""
+        output = self._run(["ps", "-a", "--format", "{{json .}}"])
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            container_name = data.get("Names", "")
+            for name in data.get("Networks", "").split(","):
+                name = name.strip()
+                if name:
+                    yield name, container_name
+
+    @staticmethod
+    def _run(args: List[str]) -> str:
+        return _run_docker(args)
 
 
 # Tiny, near-universally-cached image used purely as a vehicle to run `du`

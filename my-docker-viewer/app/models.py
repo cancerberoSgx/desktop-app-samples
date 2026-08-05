@@ -115,6 +115,65 @@ class ImageDependents:
 
 
 @dataclass
+class Volume:
+    """A single row from `docker volume ls`. `containers`/`container_names`
+    count distinct containers (running or stopped) that mount this volume -
+    computed client-side (`VolumeRepository.list()`) from every container's
+    own mounts, since `docker volume ls` itself doesn't report usage.
+
+    No size column: `docker volume ls` always reports it as `"N/A"` - real
+    numbers need `docker system df -v`, which is text-only (no `--format`
+    support for the per-volume breakdown) and comparably expensive to
+    `DiskUsageRepository`'s `du`-helper-container approach, so it's left out
+    of this screen for now rather than bolted on cheaply-but-wrong."""
+
+    name: str
+    driver: str
+    mountpoint: str
+    scope: str
+    containers: int = 0
+    container_names: List[str] = field(default_factory=list)
+
+    @property
+    def is_in_use(self) -> bool:
+        return self.containers > 0
+
+    @property
+    def status(self) -> str:
+        return "In use" if self.is_in_use else "Unused"
+
+
+@dataclass
+class Network:
+    """A single row from `docker network ls`. `containers`/`container_names`
+    count distinct containers (running or stopped) attached to it - read
+    straight off each container's own `docker ps` `Networks` field
+    (`NetworkRepository.list()`), no extra `docker inspect` calls needed."""
+
+    id: str
+    name: str
+    driver: str
+    scope: str
+    containers: int = 0
+    container_names: List[str] = field(default_factory=list)
+
+    @property
+    def is_builtin(self) -> bool:
+        """docker creates these itself at daemon startup and never lets you
+        remove them - Remove is disabled outright for these rather than
+        left to fail against docker's own refusal."""
+        return self.name in ("bridge", "host", "none")
+
+    @property
+    def is_in_use(self) -> bool:
+        return self.containers > 0
+
+    @property
+    def status(self) -> str:
+        return "In use" if self.is_in_use else "Unused"
+
+
+@dataclass
 class Mount:
     """One entry from a container's `docker inspect` Mounts array. `kind` is
     docker's own mount `Type` ("volume", "bind", "tmpfs", ...). `identifier`

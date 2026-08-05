@@ -7,8 +7,21 @@ SIDEBAR_ITEMS = [
     ("Containers", wx.ART_LIST_VIEW),
     ("Containers Disk", wx.ART_HARDDISK),
     ("Images", wx.ART_CDROM),
+    ("Volumes", wx.ART_REMOVABLE),
+    ("Networks", wx.ART_HELP_BROWSER),
     ("About", wx.ART_INFORMATION),
 ]
+
+_BG_COLOUR = wx.Colour(45, 51, 59)
+# A toggle button's native "pressed" look is what select() originally relied
+# on alone to show the current page - measured to render with no visible
+# difference at all against this flat, custom-coloured dark sidebar (GTK's
+# theme engine has nothing left to draw once the background is overridden
+# to match). Explicit colour/weight changes below are what's actually
+# visible, on any platform/theme.
+_ACTIVE_BG_COLOUR = wx.Colour(64, 96, 145)
+_FG_COLOUR = wx.Colour(230, 230, 230)
+_ACTIVE_FG_COLOUR = wx.Colour(255, 255, 255)
 
 
 class Sidebar(wx.Panel):
@@ -19,7 +32,7 @@ class Sidebar(wx.Panel):
         self._on_select = on_select
         self._buttons: List[wx.ToggleButton] = []
 
-        self.SetBackgroundColour(wx.Colour(45, 51, 59))
+        self.SetBackgroundColour(_BG_COLOUR)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -54,8 +67,7 @@ class Sidebar(wx.Panel):
         btn = wx.ToggleButton(self, label=f"  {label}")
         btn.SetBitmap(bitmap)
         btn.SetBitmapMargins(8, 4)
-        btn.SetBackgroundColour(self.GetBackgroundColour())
-        btn.SetForegroundColour(wx.Colour(230, 230, 230))
+        self._set_button_active(btn, False)
 
         if page_index is None:
             btn.Bind(wx.EVT_TOGGLEBUTTON, self._on_exit_clicked)
@@ -63,6 +75,15 @@ class Sidebar(wx.Panel):
             btn.Bind(wx.EVT_TOGGLEBUTTON, lambda evt, i=page_index: self._on_button_clicked(i))
 
         return btn
+
+    @staticmethod
+    def _set_button_active(btn: wx.ToggleButton, active: bool) -> None:
+        btn.SetBackgroundColour(_ACTIVE_BG_COLOUR if active else _BG_COLOUR)
+        btn.SetForegroundColour(_ACTIVE_FG_COLOUR if active else _FG_COLOUR)
+        font = btn.GetFont()
+        font.SetWeight(wx.FONTWEIGHT_BOLD if active else wx.FONTWEIGHT_NORMAL)
+        btn.SetFont(font)
+        btn.Refresh()
 
     def _on_exit_clicked(self, event: wx.CommandEvent) -> None:
         self.GetTopLevelParent().Close()
@@ -72,6 +93,11 @@ class Sidebar(wx.Panel):
         self._on_select(index)
 
     def select(self, index: int) -> None:
-        """Visually mark the button at `index` as active and release the rest."""
+        """Visually mark the button at `index` as the current page and
+        release the rest - background colour and bold weight, not just
+        SetValue()'s native toggle state, since that alone doesn't render
+        as any visible difference against this sidebar's flat background."""
         for i, btn in enumerate(self._buttons):
-            btn.SetValue(i == index)
+            is_active = i == index
+            btn.SetValue(is_active)
+            self._set_button_active(btn, is_active)

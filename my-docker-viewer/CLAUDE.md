@@ -8,23 +8,27 @@ A wxPython desktop app for admin'ing local Docker containers: list every contain
 (running and stopped) with its status, image, size, and live CPU/memory usage,
 filter the list by name/image/status, and stop or remove the selected one. A second,
 read-only screen (Containers Disk) shows real per-container disk usage - writable
-layer plus every volume/bind mount - to answer "what's actually eating my disk". A
-third screen (Images) lists every local image with its size and how many containers
-(running or stopped) reference it, and can remove one image or prune every unused
-image at once.
+layer plus every volume/bind mount - to answer "what's actually eating my disk".
+Three more screens - Images, Volumes, Networks - each list one other docker
+resource type with its size/usage and how many containers (running or stopped)
+reference it, and can remove one or prune every unused one at once; removing an
+image that's still in use additionally offers to cascade to its containers/
+volumes/networks too, to reclaim the most space in one step.
 
 This project was templated from the sibling `my-redis-viewer` app for its overall
 architecture (composition root in `frame.py`, sidebar + `wx.Simplebook`, `AsyncTaskRunner`
 facade, SQLite + migrations) - but **no feature was copied**: there are no profiles, no
-datasources, no data-explorer concept. All three screens (Containers, Containers Disk,
-Images) are new concepts built from scratch on top of the docker CLI.
+datasources, no data-explorer concept. All six screens (Containers, Containers Disk,
+Images, Volumes, Networks, About) are new concepts built from scratch on top of the
+docker CLI.
 
 **There is no docker SDK/Engine API dependency.** Every docker operation - listing,
 stats, stop, remove - shells out to the `docker` binary and parses its
 `--format '{{json .}}'` output (`app/repositories.py::ContainerRepository`,
-`ImageRepository`). This was an explicit choice: it needs nothing beyond a working
-Docker install already on PATH, matches what `docker` itself reports, and avoids
-pinning to a specific docker-py version/API compatibility matrix.
+`ImageRepository`, `VolumeRepository`, `NetworkRepository`). This was an explicit
+choice: it needs nothing beyond a working Docker install already on PATH, matches
+what `docker` itself reports, and avoids pinning to a specific docker-py version/API
+compatibility matrix.
 
 ## Commands
 
@@ -52,10 +56,11 @@ There is no linter or test suite configured in this repo yet.
 `MainFrame.__init__` does all composition-root work: opens the single sqlite3
 connection (`app/db/connection.py`), runs pending migrations against it
 (`app/db/migrator.py`), builds `SettingsRepository` on top of that connection, and
-constructs a plain `ContainerRepository()`, `DiskUsageRepository()`, and
-`ImageRepository()` (no connection/state - all three are stateless CLI wrappers).
-There is no dependency injection framework - everything is wired by hand in this one
-place, same as `my-redis-viewer`.
+constructs a plain `ContainerRepository()`, `DiskUsageRepository()`,
+`ImageRepository()`, `VolumeRepository()`, and `NetworkRepository()` (no
+connection/state - all five are stateless CLI wrappers). There is no dependency
+injection framework - everything is wired by hand in this one place, same as
+`my-redis-viewer`.
 
 ### `ContainerRepository` (`app/repositories.py`) - the docker CLI wrapper
 
@@ -289,6 +294,55 @@ Backs `app/images_page.py`. Same shell-out-and-parse-`{{json .}}` pattern and
   `images_page.py` needed the same logic for its Size column - both pages import
   it from there now rather than each keeping their own copy.
 
+### `VolumeRepository` / `NetworkRepository` (`app/repositories.py`) - Volumes and Networks screens
+
+Back `app/volumes_page.py` / `app/networks_page.py`, structured as close to
+`ImagesPage`/`ImageRepository` as the two resource types allow: same shell-out-
+and-parse-`{{json .}}` pattern, same status filter/Remove/Prune toolbar shape,
+same "no auto-refresh timer" reasoning (a volume/network list only changes when
+something actually creates/removes one).
+
+- Neither `docker volume ls` nor `docker network ls` reports which containers
+  use a given volume/network, unlike images (`docker image ls`'s own
+  `Containers` field) - so both repositories' `list()` cross-reference against
+  every container themselves, but via two *different* docker fields, because
+  the data is exposed differently for each:
+  - `VolumeRepository` bulk-inspects every container's `Mounts`
+    (`docker inspect --format '{{json .Mounts}}'`) - the same shape
+    `DiskUsageRepository.list_targets` uses, kept as its own independent,
+    smaller implementation here (only cares about `Type == "volume"` mounts,
+    not the bind-mount/tmpfs handling that read-only screen also carries)
+    rather than reusing that class's internals across an unrelated screen.
+  - `NetworkRepository` needs no extra `docker inspect` call at all - every
+    container's own `docker ps` row already reports a comma-separated
+    `Networks` field, cheaper than a second bulk call.
+- **Volumes has no Size column.** `docker volume ls` always reports it as
+  `"N/A"` - real numbers need `docker system df -v`, which is text-only (no
+  `--format` support for the per-volume breakdown) and comparably expensive to
+  `DiskUsageRepository`'s `du`-helper-container approach. Left out rather than
+  bolted on cheaply-but-wrong; `Volume`'s docstring in `models.py` records why.
+- **Neither volumes nor networks have a `force` override for "in use".**
+  `docker volume rm -f` / `docker network rm -f` only suppress a "no such
+  volume/network" error - they do not override docker's refusal to remove
+  something still referenced by a container, unlike `docker rm -f` for
+  containers or `docker image rm -f`. So `VolumesPage._on_remove` /
+  `NetworksPage._on_remove` check `is_in_use` themselves and show an
+  explanation naming the referencing containers *instead of* attempting a call
+  that's guaranteed to fail - "explain before it fails" rather than
+  round-tripping to docker's own less specific error.
+- **`Network.is_builtin`** (`bridge`/`host`/`none` - the networks docker
+  creates itself at daemon startup) disables the Remove button outright in
+  `NetworksPage._update_button_states`, same reasoning as the in-use check
+  above: docker never lets you remove these regardless of flags, so the
+  button doesn't invite a click that can only fail.
+- **Prune's `-a`/`--all` flag means something different per resource**, so
+  each page's prune UI matches: `VolumesPage` keeps Images' "include
+  <unused-but-still-named/tagged> resources" checkbox
+  (`docker volume prune -a` extends beyond anonymous volumes to named ones);
+  `NetworksPage` has no such checkbox at all - `docker network prune` has no
+  `-a` flag, there's no dangling/anonymous-vs-everything distinction for
+  networks to begin with.
+
 ### Migrations (`app/db/migrations/*.sql`)
 
 Schema changes are made by **adding a new numbered `.sql` file** (next sequence
@@ -307,7 +361,7 @@ file is automatically picked up by the existing
 Left `Sidebar` (icon buttons, `app/sidebar.py`) drives a `wx.Simplebook` in
 `MainFrame` - `SIDEBAR_ITEMS` order must match the order pages are added to the
 book (`Sidebar._on_button_clicked` selects by index): Containers (0),
-Containers Disk (1), Images (2), About (3).
+Containers Disk (1), Images (2), Volumes (3), Networks (4), About (5).
 
 ### PyInstaller packaging gotchas (see my-redis-viewer's/my-data-viewer's git history for the original incident)
 
