@@ -104,6 +104,19 @@ data while preserving the current selection by container ID (see
 selecting a row. The timer is stopped on `EVT_WINDOW_DESTROY` so it can't fire
 against a torn-down page.
 
+### Stop/remove: optimistic UI updates
+
+`_on_stop`/`_on_remove` don't call `reload()` on success - re-fetching via
+`docker ps`/`docker stats` after every action would mean the table stays stale
+for another full round trip right after the user just acted. Instead
+`_apply_stopped()`/`_apply_removed()` mutate the already-loaded
+`self._containers` in place (mark state `exited` and clear the cpu/mem fields,
+or drop the entry entirely) and call `_populate_list()` directly - the visible
+change is instantaneous. This is optimistic: it reflects what the user's
+`docker stop`/`docker rm` call is known to have just done, not a fresh read of
+docker's own state - the next manual refresh or auto-refresh tick reconciles
+it with docker's actual reporting (exact `Status` text, final size, etc.).
+
 ### Filtering
 
 Name/image/status filters (`_name_filter`, `_image_filter`, `_status_choice` in

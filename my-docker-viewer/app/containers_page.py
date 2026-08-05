@@ -326,6 +326,29 @@ class ContainersPage(wx.Panel):
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self.reload()
 
+    def _apply_stopped(self, container_id: str) -> None:
+        """Reflects a successful stop instantly, without waiting on a full
+        `docker ps`/`docker stats` round trip: mutate the already-loaded
+        container in place and re-render from it. A later manual or
+        auto-refresh reconciles this with docker's actual reporting (exact
+        status text, final size, ...) - this is just an optimistic, "we know
+        it stopped" update."""
+        for container in self._containers:
+            if container.id == container_id:
+                container.state = "exited"
+                container.status = "Stopped"
+                container.cpu_percent = None
+                container.mem_usage = None
+                container.mem_percent = None
+                break
+        self._populate_list()
+
+    def _apply_removed(self, container_id: str) -> None:
+        """Same idea as `_apply_stopped` - drop the container from the
+        already-loaded list right away instead of re-fetching."""
+        self._containers = [c for c in self._containers if c.id != container_id]
+        self._populate_list()
+
     def _on_stop(self, event: wx.CommandEvent) -> None:
         container = self._selected_container()
         if container is None:
@@ -341,7 +364,7 @@ class ContainersPage(wx.Panel):
 
         self._async.run(
             work=lambda: self._repository.stop(container.id),
-            on_success=lambda _result: self.reload(),
+            on_success=lambda _result: self._apply_stopped(container.id),
             on_error=on_error,
             disable=[self._stop_btn, self._remove_btn],
         )
@@ -371,7 +394,7 @@ class ContainersPage(wx.Panel):
 
         self._async.run(
             work=lambda: self._repository.remove(container.id, force=force),
-            on_success=lambda _result: self.reload(),
+            on_success=lambda _result: self._apply_removed(container.id),
             on_error=on_error,
             disable=[self._stop_btn, self._remove_btn],
         )

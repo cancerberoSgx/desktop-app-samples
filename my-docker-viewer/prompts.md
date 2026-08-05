@@ -22,3 +22,6 @@ the "created" column must be friendlier, for example, X hours ago, x days ago, e
 
 # auto-refresh
 currently the application auto-refresh every N seconds. Make a change so the user can activate auto-refresh every N seconds with a checkbox/toggle button. By default auto-refresh is disable (user must manually click the refresh button)
+
+# remove bug
+when a container is removed or stopped, the UI must be updated instantaneusly if the docker command runs successfully. (update the table without a full refresh, just virtually)
