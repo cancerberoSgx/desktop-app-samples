@@ -6,20 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A wxPython desktop app for admin'ing local Docker containers: list every container
 (running and stopped) with its status, image, size, and live CPU/memory usage,
-filter the list by name/image/status, and stop or remove the selected one.
+filter the list by name/image/status, and stop or remove the selected one. A second,
+read-only screen (Containers Disk) shows real per-container disk usage - writable
+layer plus every volume/bind mount - to answer "what's actually eating my disk". A
+third screen (Images) lists every local image with its size and how many containers
+(running or stopped) reference it, and can remove one image or prune every unused
+image at once.
 
 This project was templated from the sibling `my-redis-viewer` app for its overall
 architecture (composition root in `frame.py`, sidebar + `wx.Simplebook`, `AsyncTaskRunner`
 facade, SQLite + migrations) - but **no feature was copied**: there are no profiles, no
-datasources, no data-explorer concept. The one screen this app has (Containers) is a
-new concept built from scratch on top of the docker CLI.
+datasources, no data-explorer concept. All three screens (Containers, Containers Disk,
+Images) are new concepts built from scratch on top of the docker CLI.
 
 **There is no docker SDK/Engine API dependency.** Every docker operation - listing,
 stats, stop, remove - shells out to the `docker` binary and parses its
-`--format '{{json .}}'` output (`app/repositories.py::ContainerRepository`). This was
-an explicit choice: it needs nothing beyond a working Docker install already on PATH,
-matches what `docker` itself reports, and avoids pinning to a specific docker-py
-version/API compatibility matrix.
+`--format '{{json .}}'` output (`app/repositories.py::ContainerRepository`,
+`ImageRepository`). This was an explicit choice: it needs nothing beyond a working
+Docker install already on PATH, matches what `docker` itself reports, and avoids
+pinning to a specific docker-py version/API compatibility matrix.
 
 ## Commands
 
@@ -47,9 +52,10 @@ There is no linter or test suite configured in this repo yet.
 `MainFrame.__init__` does all composition-root work: opens the single sqlite3
 connection (`app/db/connection.py`), runs pending migrations against it
 (`app/db/migrator.py`), builds `SettingsRepository` on top of that connection, and
-constructs a plain `ContainerRepository()` (no connection/state - it's a stateless
-CLI wrapper). There is no dependency injection framework - everything is wired by
-hand in this one place, same as `my-redis-viewer`.
+constructs a plain `ContainerRepository()`, `DiskUsageRepository()`, and
+`ImageRepository()` (no connection/state - all three are stateless CLI wrappers).
+There is no dependency injection framework - everything is wired by hand in this one
+place, same as `my-redis-viewer`.
 
 ### `ContainerRepository` (`app/repositories.py`) - the docker CLI wrapper
 
@@ -126,6 +132,124 @@ Name/image/status filters (`_name_filter`, `_image_filter`, `_status_choice` in
 against docker's own `State` field (`running`, `exited`, `paused`, `restarting`,
 `created`, `removing`, `dead`), not the human-readable `Status` string.
 
+### `DiskUsageRepository` (`app/repositories.py`) - real per-container disk usage
+
+Backs the read-only "Containers Disk" screen (`app/containers_disk_page.py`),
+answering "which container is using the most disk space" - `docker ps --size`
+(the `Size` column on the main Containers screen) only covers a container's own
+writable layer, not its volumes/bind mounts, which is usually where the real
+space goes (a database's data directory, for instance).
+
+- `list_targets()` is cheap (no `du`, no `--size`) and loads automatically like
+  the main screen: identity via `docker ps`, mount composition via one bulk
+  `docker inspect --format '{{json .Mounts}}'` call. Cross-referencing mounts
+  across every container marks a volume/bind path `shared` when more than one
+  container uses it - freeing space by removing just one of them won't reclaim
+  a shared mount, which matters directly for "what can I delete".
+- Actual sizing (`ensure_helper_image`, `container_layer_bytes`,
+  `mount_usage_bytes`/`sum_mounts_bytes`) only ever runs via **Calculate**
+  (`ContainersDiskPage._on_calculate`) - never on a timer or just from loading
+  the page - because both halves are comparably expensive to the main
+  screen's `docker stats` wait: `docker inspect --size` is a filesystem diff
+  (measured ~0.3-0.5s per container), and `du` is a full tree walk. Calculate
+  runs once automatically the first time (and only the first time) the user
+  actually navigates to this page (`on_shown()`, called from
+  `MainFrame._on_sidebar_select` - not on construction, since every page is
+  built eagerly at startup) so it isn't a wall of "Not calculated" requiring
+  a click before showing anything; every visit after that, including after a
+  Refresh, is left to the user via the button.
+- **A mount's size is measured by running a disposable helper container**
+  (`docker run --rm -v <mount>:/mnt/target:ro alpine du -sk /mnt/target`)
+  rather than reading the host path directly - measured, not assumed, before
+  choosing this: named volumes are root-owned on Linux and unreadable by an
+  ordinary user even when `docker` itself works fine for them, and under
+  Docker Desktop (macOS/Windows) volumes live inside its VM and are never
+  visible to the host filesystem at all. Routing through the daemon sidesteps
+  both, identically on Linux/macOS/Windows - there is no OS-specific branch
+  anywhere in this repository. `du -sk` (kilobytes) is used rather than a
+  "bytes" flag because BusyBox's `-b` means "apparent size", not "output unit:
+  bytes" - `-s`/`-k` alone behave the same on BusyBox and GNU du.
+- **Never risk creating docker resources from what is meant to be a read-only
+  screen.** Referencing a volume name via `docker run -v <name>:...` silently
+  *creates* an empty volume with that name if it's gone missing - so a removed
+  volume is filtered out at `list_targets()` time (noted, not sized), and
+  `mount_usage_bytes` re-checks with `docker volume inspect` immediately
+  before running `du` too, since Calculate can run long after that snapshot
+  (or something else on the machine can remove the volume mid-calculation). A
+  missing bind-mount source is checked the cheap way, with `os.path.exists`.
+- Every container is sized by its **own independent job**
+  (`ContainersDiskPage._start_container_job`) - its own layer size and its own
+  mounts total both happen inside that one job - so one container's row is
+  never held up by another's pace; whichever finishes first renders first,
+  which is the whole point of the "Calculating... (n/total)" streaming UI.
+  Earlier this fetched every container's layer size in one shared bulk call
+  up front; that was measured to cost about the same *per container* as
+  fetching it individually, so batching bought nothing but forced every row
+  to wait on the slowest shared call.
+- `MAX_CONCURRENT_DU_RUNS` bounds how many `du` helper containers run at once
+  across an entire Calculate pass, regardless of container/mount count.
+- A mount that can't be sized (unsupported type, or vanished per the safety
+  checks above) is excluded from that container's total and noted rather than
+  failing the whole row - `sum_mounts_bytes` returns `(total_bytes, notes)`
+  instead of raising, so one bad mount doesn't blank out an otherwise-good
+  number.
+- Both `ContainerRepository` and `DiskUsageRepository` shell out through the
+  shared module-level `_run_docker()` (extracted so `DiskUsageRepository`
+  could pass its own longer timeouts for `du`/image-pull without duplicating
+  the `DockerNotAvailableError`/`DockerCommandError` handling).
+- `ContainersDiskPage` doesn't use `AsyncTaskRunner` for Calculate - that
+  facade is deliberately single-flight (`is_busy()` ignores a second call),
+  which doesn't fit "N independent per-container jobs streaming back
+  concurrently". It uses `run_background()` (`app/async_task.py`) instead -
+  the same `delayedresult.startWorker` + destroyed-window-safety plumbing
+  `AsyncTaskRunner.run()` is built on, minus the single-flight/disable/
+  `on_done` bookkeeping that only makes sense for one task bound to specific
+  widgets. `reload()` (identity + mounts) still uses `AsyncTaskRunner`, same
+  as the main screen.
+
+### `ImageRepository` (`app/repositories.py`) - the Images screen's docker CLI wrapper
+
+Backs `app/images_page.py`. Same shell-out-and-parse-`{{json .}}` pattern and
+`_run_docker()`/`DockerNotAvailableError`/`DockerCommandError` handling as
+`ContainerRepository` - no separate error model was introduced for images.
+
+- `list()` runs `docker image ls --format '{{json .}}'` - **deliberately without
+  `-a`**: that flag also surfaces intermediate build-cache layers, which aren't
+  images a user would ever remove/prune individually; the no-`-a` list is what
+  `docker images` shows by default, and what this screen shows too.
+- Container count comes for free: docker's own `Containers` format placeholder on
+  `image ls` already reports how many containers (running or stopped) reference
+  each image, **no cross-referencing against `docker ps` needed** - confirmed by
+  running it directly rather than assumed. `Image.status` (`"In use"` / `"Unused"`
+  / `"Dangling"`) is a client-side classification derived from that count plus
+  `Repository`/`Tag` being `<none>`, used for both the Status column and the
+  status filter - docker itself doesn't report a single "status" field for images.
+- `remove(reference, force=...)` / `prune(all_unused=...)` shell out to `docker
+  image rm [-f]` / `docker image prune -f [-a]` directly - same "no dry-run, no
+  undo" posture as `ContainerRepository.stop`/`remove`. `prune()` returns docker's
+  own stdout (each deleted image, then "Total reclaimed space: ...") verbatim so
+  `ImagesPage` can show the user exactly what happened rather than re-deriving it.
+- `ImagesPage._on_remove` mirrors `ContainersPage._on_remove`: `force` is set
+  whenever the image has any referencing container (`image.containers > 0`), and
+  the confirm prompt names the count; docker itself still refuses removal behind a
+  *running* container even with `-f`, which surfaces as a normal `on_error` message
+  rather than something the dialog pre-empts.
+- Prune is the one action on this page that calls `reload()` on success instead of
+  patching `self._images` in place - the set of images a prune deletes is docker's
+  own unused/dangling determination, not something worth re-deriving client-side.
+  That `reload()` call goes through `wx.CallAfter` because `AsyncTaskRunner` is
+  single-flight and hasn't cleared its busy flag yet inside the same success
+  callback - calling `reload()` synchronously there would be silently ignored by
+  `is_busy()`.
+- **No auto-refresh timer on this page**, unlike `ContainersPage` - an image list
+  only changes when something actually adds/removes an image (this app, another
+  docker client, a build), not every few seconds like CPU/mem, so a manual Refresh
+  is enough and this page never hits the docker CLI on its own.
+- `app/formatting.py::size_sort_key` (parses a docker size string to bytes for
+  numeric column sorting) was extracted out of `containers_page.py` once
+  `images_page.py` needed the same logic for its Size column - both pages import
+  it from there now rather than each keeping their own copy.
+
 ### Migrations (`app/db/migrations/*.sql`)
 
 Schema changes are made by **adding a new numbered `.sql` file** (next sequence
@@ -143,7 +267,8 @@ file is automatically picked up by the existing
 
 Left `Sidebar` (icon buttons, `app/sidebar.py`) drives a `wx.Simplebook` in
 `MainFrame` - `SIDEBAR_ITEMS` order must match the order pages are added to the
-book (`Sidebar._on_button_clicked` selects by index): Containers (0), About (1).
+book (`Sidebar._on_button_clicked` selects by index): Containers (0),
+Containers Disk (1), Images (2), About (3).
 
 ### PyInstaller packaging gotchas (see my-redis-viewer's/my-data-viewer's git history for the original incident)
 

@@ -5,6 +5,8 @@ import wx
 # (label, wx.ArtProvider stock art id, page index)
 SIDEBAR_ITEMS = [
     ("Containers", wx.ART_LIST_VIEW),
+    ("Containers Disk", wx.ART_HARDDISK),
+    ("Images", wx.ART_CDROM),
     ("About", wx.ART_INFORMATION),
 ]
 

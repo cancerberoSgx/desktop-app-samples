@@ -1,9 +1,11 @@
 import json
+import os
 import subprocess
 import sqlite3
-from typing import List, Optional
+import threading
+from typing import Dict, List, Optional, Tuple
 
-from .models import Container
+from .models import Container, ContainerDiskUsage, Image, Mount
 
 DOCKER_BINARY = "docker"
 COMMAND_TIMEOUT_SECONDS = 15
@@ -19,6 +21,43 @@ class DockerCommandError(RuntimeError):
     """Raised when `docker` runs but the invoked command fails (daemon
     unreachable, no such container, permission denied, timed out...);
     message is docker's own stderr wherever available."""
+
+
+class MountUnavailableError(RuntimeError):
+    """Raised when a mount's disk usage is deliberately not computed - an
+    unsupported mount type (tmpfs is memory-backed and has nothing to `du`;
+    npipe isn't a filesystem at all), or a volume/bind source that no
+    longer exists. Distinct from DockerCommandError - this isn't docker
+    failing, it's us declining - so callers can show an expected caveat
+    instead of something that reads like an error."""
+
+
+def _run_docker(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> str:
+    """Shells out to `docker`, raising DockerNotAvailableError/
+    DockerCommandError as appropriate (see their docstrings). Shared by
+    every repository in this module - `ContainerRepository._run` and
+    `DiskUsageRepository` both delegate here rather than each shelling out
+    independently."""
+    try:
+        result = subprocess.run(
+            [DOCKER_BINARY, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise DockerNotAvailableError(
+            "The 'docker' command was not found on PATH. Install Docker "
+            "and make sure it's available before using this app."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise DockerCommandError(f"docker {' '.join(args)} timed out after {timeout}s.") from exc
+
+    if result.returncode != 0:
+        raise DockerCommandError(
+            result.stderr.strip() or f"docker {' '.join(args)} failed with exit code {result.returncode}."
+        )
+    return result.stdout
 
 
 class ContainerRepository:
@@ -88,28 +127,268 @@ class ContainerRepository:
 
     @staticmethod
     def _run(args: List[str]) -> str:
-        try:
-            result = subprocess.run(
-                [DOCKER_BINARY, *args],
-                capture_output=True,
-                text=True,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-            )
-        except FileNotFoundError as exc:
-            raise DockerNotAvailableError(
-                "The 'docker' command was not found on PATH. Install Docker "
-                "and make sure it's available before using this app."
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise DockerCommandError(
-                f"docker {' '.join(args)} timed out after {COMMAND_TIMEOUT_SECONDS}s."
-            ) from exc
+        return _run_docker(args)
 
-        if result.returncode != 0:
-            raise DockerCommandError(
-                result.stderr.strip() or f"docker {' '.join(args)} failed with exit code {result.returncode}."
+
+class ImageRepository:
+    """Wraps the docker CLI for images - same shell-out-and-parse-
+    `{{json .}}` pattern as ContainerRepository, no docker SDK dependency.
+
+    `list()` deliberately omits `-a`: that flag would also surface
+    intermediate build-cache layers, which aren't images a user would ever
+    remove/prune individually - the no-`-a` list is what `docker images`
+    shows by default, and what this screen shows too."""
+
+    def list(self) -> List[Image]:
+        output = self._run(["image", "ls", "--format", "{{json .}}"])
+        images = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            images.append(
+                Image(
+                    id=data.get("ID", ""),
+                    repository=data.get("Repository", ""),
+                    tag=data.get("Tag", ""),
+                    created_at=data.get("CreatedAt", ""),
+                    created_since=data.get("CreatedSince", ""),
+                    size=data.get("Size", ""),
+                    containers=_parse_int(data.get("Containers", "")),
+                )
             )
-        return result.stdout
+        return sorted(images, key=lambda i: (i.repository.lower(), i.tag.lower()))
+
+    def remove(self, reference: str, force: bool = False) -> None:
+        args = ["image", "rm"]
+        if force:
+            args.append("-f")
+        args.append(reference)
+        self._run(args)
+
+    def prune(self, all_unused: bool = False) -> str:
+        """Removes unused images - dangling-only by default, every image
+        with zero containers referencing it (docker's own `-a`) when
+        `all_unused` is set. Returns docker's own summary text verbatim
+        (each deleted image, then "Total reclaimed space: ...") so the
+        caller can show the user exactly what happened rather than us
+        re-deriving it."""
+        args = ["image", "prune", "-f"]
+        if all_unused:
+            args.append("-a")
+        return self._run(args)
+
+    @staticmethod
+    def _run(args: List[str]) -> str:
+        return _run_docker(args)
+
+
+def _parse_int(value: str) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+# Tiny, near-universally-cached image used purely as a vehicle to run `du`
+# against a mount from inside the daemon - see DiskUsageRepository's
+# docstring for why this beats reading the host path directly.
+HELPER_IMAGE = "alpine:latest"
+# `du` walking a large volume - or the one-time image pull - can legitimately
+# take longer than the plain COMMAND_TIMEOUT_SECONDS budget every other
+# docker call uses.
+DU_TIMEOUT_SECONDS = 120
+PULL_TIMEOUT_SECONDS = 120
+# Caps how many `du` helper containers run at once across an entire
+# Calculate pass (regardless of how many containers/mounts are involved) -
+# keeps a large fleet of volumes from spawning dozens of simultaneous
+# `docker run` processes.
+MAX_CONCURRENT_DU_RUNS = 4
+
+
+class DiskUsageRepository:
+    """Computes real on-disk usage per container - its own writable layer
+    plus every volume/bind mount it uses - for the read-only "Containers
+    Disk" screen. Deliberately separate from ContainerRepository: every
+    call here is comparatively expensive (a filesystem walk, or a whole
+    throwaway container), so it must only ever run when the user presses
+    Calculate - never on a timer, never just from opening the page.
+
+    A mount's usage is measured by running a disposable helper container
+    that mounts the same volume/path and runs `du` inside it -
+    `docker run --rm -v <mount>:/mnt/target:ro alpine du -sk /mnt/target` -
+    rather than reading the host path directly. Measured before writing
+    this: (1) named volumes are root-owned on Linux and unreadable by an
+    ordinary user even when `docker` itself works fine for them, and
+    (2) under Docker Desktop (macOS/Windows) volumes live inside its VM and
+    are never visible to the host filesystem at all. Routing through the
+    daemon sidesteps both and behaves identically on Linux/macOS/Windows.
+    `du -sk` (kilobytes) is used rather than a "bytes" flag because
+    BusyBox's `-b` means "apparent size", not "output unit: bytes" - `-s`
+    and `-k` alone are the common ground between BusyBox and GNU du.
+    """
+
+    def __init__(self) -> None:
+        self._du_semaphore = threading.BoundedSemaphore(MAX_CONCURRENT_DU_RUNS)
+
+    def list_targets(self) -> List[ContainerDiskUsage]:
+        """Identity + mount info for every container. Cheap (no `du`, no
+        `--size`) - safe to call whenever the page loads or is refreshed,
+        independent of the Calculate button."""
+        containers = self._identity()
+        if not containers:
+            return containers
+
+        mounts_by_id = self._inspect_mounts([c.id for c in containers])
+        existing_volumes = self._existing_volume_names()
+
+        # A volume or bind path used by more than one container is
+        # "shared" - removing just this container won't reclaim it, which
+        # matters directly for "what can I delete to free space".
+        usage_counts: Dict[Tuple[str, str], int] = {}
+        for mounts in mounts_by_id.values():
+            for kind, identifier, _destination in mounts:
+                if kind in ("volume", "bind"):
+                    key = (kind, identifier)
+                    usage_counts[key] = usage_counts.get(key, 0) + 1
+
+        for container in containers:
+            for kind, identifier, destination in mounts_by_id.get(container.id, []):
+                if kind == "volume" and identifier not in existing_volumes:
+                    # Referencing a removed volume via `docker run -v
+                    # <name>:...` would silently recreate it empty - never
+                    # do that from a read-only screen. Note it and move on.
+                    container.notes.append(f"volume '{identifier}' no longer exists")
+                    continue
+                shared = kind in ("volume", "bind") and usage_counts.get((kind, identifier), 0) > 1
+                container.mounts.append(Mount(kind=kind, identifier=identifier, destination=destination, shared=shared))
+        return containers
+
+    def ensure_helper_image(self) -> None:
+        """Pulls HELPER_IMAGE once if it's not already cached, so individual
+        `du` calls never pay pull latency (or risk its timeout) themselves.
+        Meant to run once per Calculate pass, before any mount is sized."""
+        try:
+            _run_docker(["image", "inspect", HELPER_IMAGE])
+        except DockerCommandError:
+            _run_docker(["pull", HELPER_IMAGE], timeout=PULL_TIMEOUT_SECONDS)
+
+    def container_layer_bytes(self, container_ids: List[str]) -> Dict[str, int]:
+        """Bulk `docker inspect --size` for every id's writable-layer size
+        (`SizeRw`), in one call - this is the moderately expensive
+        counterpart to ContainerRepository's `docker ps --size` (both make
+        docker compute a filesystem diff), just fetched as raw bytes here
+        instead of a pre-formatted string."""
+        if not container_ids:
+            return {}
+        output = _run_docker(
+            ["inspect", "--size", "--format", '{{.Id}}{{"\t"}}{{.SizeRw}}', *container_ids],
+            timeout=DU_TIMEOUT_SECONDS,
+        )
+        result = {}
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            full_id, _, size = line.partition("\t")
+            try:
+                result[full_id[:12]] = int(size)
+            except ValueError:
+                continue
+        return result
+
+    def sum_mounts_bytes(self, mounts: List[Mount]) -> Tuple[int, List[str]]:
+        """Sizes every mount and sums them, collecting a note (and
+        excluding it from the sum) for any mount that can't be sized
+        instead of failing the whole container over one bad mount. Returns
+        (total_bytes, notes) rather than mutating anything, so it's safe to
+        call from a background thread - the caller applies the result on
+        the UI thread."""
+        total = 0
+        notes: List[str] = []
+        for mount in mounts:
+            try:
+                total += self.mount_usage_bytes(mount)
+            except MountUnavailableError as exc:
+                notes.append(str(exc))
+            except (DockerCommandError, DockerNotAvailableError) as exc:
+                notes.append(f"{mount.kind} '{mount.identifier}': {exc}")
+        return total, notes
+
+    def mount_usage_bytes(self, mount: Mount) -> int:
+        """Sizes one mount via the helper-container `du` described in the
+        class docstring. Raises MountUnavailableError for anything
+        deliberately not measured (tmpfs has no disk footprint to speak
+        of - it's memory; an unrecognized type like Windows' npipe isn't a
+        filesystem at all; a volume/bind source that's vanished since
+        `list_targets` was called would otherwise get silently recreated -
+        an empty directory for a bind mount, or worse, a brand new empty
+        *volume* with the old name - by `docker run -v`)."""
+        if mount.kind == "tmpfs":
+            return 0
+        if mount.kind != "volume" and mount.kind != "bind":
+            raise MountUnavailableError(f"mount type '{mount.kind}' isn't supported")
+        if mount.kind == "bind" and not os.path.exists(mount.identifier):
+            raise MountUnavailableError(f"path '{mount.identifier}' no longer exists")
+        if mount.kind == "volume":
+            # list_targets() already filtered out volumes missing at listing
+            # time, but Calculate can run long after that snapshot (or
+            # something else on the machine can remove a volume mid-run) -
+            # re-check right before the one command that would otherwise
+            # silently recreate it empty.
+            try:
+                _run_docker(["volume", "inspect", mount.identifier])
+            except DockerCommandError:
+                raise MountUnavailableError(f"volume '{mount.identifier}' no longer exists")
+
+        with self._du_semaphore:
+            output = _run_docker(
+                ["run", "--rm", "-v", f"{mount.identifier}:/mnt/target:ro", HELPER_IMAGE, "du", "-sk", "/mnt/target"],
+                timeout=DU_TIMEOUT_SECONDS,
+            )
+        kilobytes = output.strip().split()[0]
+        return int(kilobytes) * 1024
+
+    # ------------------------------------------------------------------
+    def _identity(self) -> List[ContainerDiskUsage]:
+        output = _run_docker(["ps", "-a", "--format", "{{json .}}"])
+        containers = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            data = json.loads(line)
+            containers.append(
+                ContainerDiskUsage(id=data.get("ID", ""), names=data.get("Names", ""), image=data.get("Image", ""))
+            )
+        return containers
+
+    def _inspect_mounts(self, container_ids: List[str]) -> Dict[str, List[Tuple[str, str, str]]]:
+        if not container_ids:
+            return {}
+        output = _run_docker(["inspect", "--format", '{{.Id}}{{"\t"}}{{json .Mounts}}', *container_ids])
+        result: Dict[str, List[Tuple[str, str, str]]] = {}
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            full_id, _, mounts_json = line.partition("\t")
+            entries = []
+            for raw in json.loads(mounts_json):
+                kind = raw.get("Type", "")
+                destination = raw.get("Destination", "")
+                if kind == "volume":
+                    identifier = raw.get("Name", "") or raw.get("Source", "")
+                else:
+                    identifier = raw.get("Source", "") or destination
+                entries.append((kind, identifier, destination))
+            result[full_id[:12]] = entries
+        return result
+
+    def _existing_volume_names(self) -> set:
+        output = _run_docker(["volume", "ls", "-q"])
+        return {line.strip() for line in output.splitlines() if line.strip()}
 
 
 class SettingsRepository:

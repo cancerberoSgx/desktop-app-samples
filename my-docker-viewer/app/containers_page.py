@@ -1,40 +1,14 @@
-import re
 from typing import List, Optional
 
 import wx
 
 from .async_task import AsyncTaskRunner
+from .formatting import size_sort_key
 from .models import Container
 from .repositories import ContainerRepository
 
 STATUS_CHOICES = ["All", "running", "exited", "paused", "restarting", "created", "removing", "dead"]
 AUTO_REFRESH_INTERVAL_MS = 5000
-
-# Byte-unit multipliers used by _size_sort_key, covering both docker's
-# decimal (kB/MB/...) and binary (KiB/MiB/...) size suffixes.
-_SIZE_UNITS = {
-    "B": 1,
-    "KB": 1000, "MB": 1000 ** 2, "GB": 1000 ** 3, "TB": 1000 ** 4,
-    "KIB": 1024, "MIB": 1024 ** 2, "GIB": 1024 ** 3, "TIB": 1024 ** 4,
-}
-_SIZE_RE = re.compile(r"([\d.]+)\s*([A-Za-z]+)")
-
-
-def _size_sort_key(text: Optional[str]) -> float:
-    """Parses a leading docker size/usage figure (`"15.5MiB / 1.9GiB"`,
-    `"0B (virtual 435MB)"`) into bytes for numeric sorting; anything
-    unparsable (including None, for stopped containers) sorts lowest."""
-    if not text:
-        return -1.0
-    match = _SIZE_RE.match(text.strip())
-    if not match:
-        return -1.0
-    number, unit = match.groups()
-    try:
-        value = float(number)
-    except ValueError:
-        return -1.0
-    return value * _SIZE_UNITS.get(unit.upper(), 1)
 
 
 def _percent_sort_key(text: Optional[str]) -> float:
@@ -69,9 +43,9 @@ _SORT_KEYS = [
     # on it matches chronological order.
     lambda c: c.created_at,
     lambda c: _percent_sort_key(c.cpu_percent),
-    lambda c: _size_sort_key(c.mem_usage),
+    lambda c: size_sort_key(c.mem_usage),
     lambda c: _percent_sort_key(c.mem_percent),
-    lambda c: _size_sort_key(c.size),
+    lambda c: size_sort_key(c.size),
     lambda c: c.ports.lower(),
     lambda c: c.id,
 ]

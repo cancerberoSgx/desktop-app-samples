@@ -12,6 +12,41 @@ AsyncTaskRunner instance for any new blocking action a page adds.
 """
 
 
+def run_background(
+    work: Callable[[], Any],
+    on_success: Optional[Callable[[Any], None]] = None,
+    on_error: Optional[Callable[[Exception], None]] = None,
+) -> None:
+    """Lower-level primitive behind AsyncTaskRunner.run(), for callers that
+    need several independent, concurrently-streaming jobs rather than one
+    task at a time - e.g. computing per-container disk usage, where each
+    container's row should update as soon as THAT job finishes, regardless
+    of how long the others take. AsyncTaskRunner's single-flight/is_busy/
+    disable bookkeeping only makes sense for one task bound to specific
+    widgets, so it doesn't fit that shape - this is just the
+    delayedresult.startWorker + destroyed-window-safety plumbing on its own,
+    callable as many times as needed. See ContainersDiskPage for the
+    intended usage.
+    """
+
+    def _consumer(delayed_result: "delayedresult.DelayedResult") -> None:
+        try:
+            try:
+                result = delayed_result.get()
+            except Exception as exc:  # noqa: BLE001 - re-raised job exception
+                if on_error:
+                    on_error(exc)
+            else:
+                if on_success:
+                    on_success(result)
+        except RuntimeError:
+            # The window any callback touches was destroyed while the job
+            # was in flight - nothing left to update.
+            pass
+
+    delayedresult.startWorker(_consumer, work)
+
+
 class AsyncTaskRunner:
     """Bound to a single window; runs one blocking callable at a time on a
     worker thread and calls back on the UI thread.

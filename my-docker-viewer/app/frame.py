@@ -1,11 +1,13 @@
 import wx
 
+from app.containers_disk_page import ContainersDiskPage
 from app.containers_page import ContainersPage
 from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
+from app.images_page import ImagesPage
 from app.pages import AboutPage
-from app.repositories import ContainerRepository, SettingsRepository
+from app.repositories import ContainerRepository, DiskUsageRepository, ImageRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
 
 
@@ -21,6 +23,8 @@ class MainFrame(wx.Frame):
         self.settings_repository = SettingsRepository(conn)
 
         self.container_repository = ContainerRepository()
+        self.disk_usage_repository = DiskUsageRepository()
+        self.image_repository = ImageRepository()
 
         self._build_menu_bar()
         self.CreateStatusBar(1)
@@ -35,6 +39,10 @@ class MainFrame(wx.Frame):
         self.book = wx.Simplebook(root_panel)
         self.containers_page = ContainersPage(self.book, self.container_repository)
         self.book.AddPage(self.containers_page, "Containers")
+        self.containers_disk_page = ContainersDiskPage(self.book, self.disk_usage_repository)
+        self.book.AddPage(self.containers_disk_page, "Containers Disk")
+        self.images_page = ImagesPage(self.book, self.image_repository)
+        self.book.AddPage(self.images_page, "Images")
         self.book.AddPage(AboutPage(self.book), "About")
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
@@ -70,6 +78,14 @@ class MainFrame(wx.Frame):
     # ------------------------------------------------------------------
     def _on_sidebar_select(self, index: int) -> None:
         self.book.ChangeSelection(index)
+        # Optional hook for a page to react to actually being navigated to -
+        # distinct from construction, since pages are all built eagerly at
+        # startup rather than lazily on first visit. See
+        # ContainersDiskPage.on_shown, which uses this to auto-run Calculate
+        # the first time (and only the first time) the user visits.
+        on_shown = getattr(self.book.GetPage(index), "on_shown", None)
+        if on_shown is not None:
+            on_shown()
         label = SIDEBAR_ITEMS[index][0]
         self.SetStatusText(f"Viewing: {label}", 0)
 
@@ -83,7 +99,10 @@ class MainFrame(wx.Frame):
         wx.MessageBox(
             "My Docker Viewer\n\n"
             "Admin your local Docker containers: list, filter, inspect "
-            "resource usage, stop, and remove - all via the docker CLI.",
+            "resource usage, stop, and remove - plus a read-only Containers "
+            "Disk screen to see real per-container disk usage, and an "
+            "Images screen to see every local image's size/container count "
+            "and remove or prune them - all via the docker CLI.",
             "About My Docker Viewer",
             wx.OK | wx.ICON_INFORMATION,
             self,
