@@ -205,3 +205,20 @@ in the containers screen, add a "start" button to start selected container
 in the containers screen, if user select a container, there will be a "info" button which displays the "container details" screen.
 This screen will detail everything relevant data of an existing container, for example, ports, mem, disk, cpu, etc. 
 Put the container details code in a separate reusable component since we will be calling it from different places of the app.
+
+p2: 
+in containers screen, if I double click a container the container details screen is shown
+
+p3
+in containers details screen, the disk usage doesn't work. The "Calculate" button is always disabled and I can see disk usage at all. Notice that in "containers disk" screen I'm able to see container's disk usage. Use the same implementation and fix the calculate button
+
+
+# side bar clean up and MIT license
+
+Remove the "About" option from the sidebar
+Remove the "Exit" option from the sidebar 
+In dialog menu help->about, add the following information 
+Author: Sebastián Gurin (cancerberoSgx)
+License: MIT
+Home: https://github.com/cancerberoSgx/desktop-app-samples
+Also make sure this project source code contains a license/copying file with the MIT license

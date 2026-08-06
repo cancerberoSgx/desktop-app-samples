@@ -153,6 +153,10 @@ class ContainersPage(wx.Panel):
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
+        # Double-click (or Enter on a focused row) a container to jump
+        # straight to its details, same shortcut a file manager gives you
+        # for "open" - Info is still there on the toolbar for a single click.
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_info)
 
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
@@ -356,7 +360,10 @@ class ContainersPage(wx.Panel):
         self._containers = [c for c in self._containers if c.id != container_id]
         self._populate_list()
 
-    def _on_info(self, event: wx.CommandEvent) -> None:
+    def _on_info(self, event: wx.Event) -> None:
+        # Bound to both the Info button (wx.CommandEvent) and double-click/
+        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) -
+        # neither branch below needs anything event-type-specific.
         container = self._selected_container()
         if container is None:
             return

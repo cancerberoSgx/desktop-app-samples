@@ -68,6 +68,13 @@ class ContainerDetailsDialog(wx.Dialog):
         self._container: Optional[Container] = initial
         self._disk: Optional[ContainerDiskUsage] = None
         self._gone = False
+        # Tracked explicitly rather than read back off AsyncTaskRunner.is_busy()
+        # - same reasoning as ContainersDiskPage: that flag doesn't clear
+        # until after on_success/on_done finish running, i.e. after the
+        # exact point _update_button_states needs to read it when called
+        # from inside one of those callbacks.
+        self._loading_identity = False
+        self._loading_disk = False
         self._calculating = False
         # Single-flight is fine here, unlike ContainersDiskPage/VolumesPage's
         # use of run_background for N concurrent per-row jobs - this dialog
@@ -138,7 +145,9 @@ class ContainerDetailsDialog(wx.Dialog):
         self._calculate_btn = wx.Button(disk_panel, label="Calculate")
         disk_header.Add(self._calculate_btn, 0)
         disk_box.Add(disk_header, 0, wx.EXPAND | wx.ALL, 8)
-        self._disk_text = wx.TextCtrl(disk_panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
+        self._disk_text = wx.TextCtrl(
+            disk_panel, value="Loading mounts...", style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120)
+        )
         disk_box.Add(self._disk_text, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         outer.Add(disk_box, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
 
@@ -165,10 +174,18 @@ class ContainerDetailsDialog(wx.Dialog):
     # Identity + live stats (cheap - docker ps/stats scoped to one id)
     # ------------------------------------------------------------------
     def _load_identity(self) -> None:
+        self._loading_identity = True
+        self._update_button_states()
+
+        def on_done() -> None:
+            self._loading_identity = False
+            self._update_button_states()
+
         self._async.run(
             work=lambda: self._container_repository.get(self._container_id),
             on_success=self._on_identity_loaded,
             on_error=self._on_identity_error,
+            on_done=on_done,
             disable=[self._refresh_btn],
         )
 
@@ -176,22 +193,19 @@ class ContainerDetailsDialog(wx.Dialog):
         if container is None:
             self._gone = True
             self._set_error("This container no longer exists - it may have been removed.")
-            self._update_button_states()
             return
         self._gone = False
         self._set_error(None)
         self._container = container
         self._render_overview()
-        self._update_button_states()
-        # Deferred rather than called directly: is_busy() on self._async is
-        # still True at this point (it only clears after this callback and
-        # on_done finish inside AsyncTaskRunner.run's consumer), so a second
-        # self._async.run() call here would be silently ignored.
+        # Deferred rather than called directly: AsyncTaskRunner is
+        # single-flight and its is_busy() doesn't clear until on_done runs
+        # (right after this callback returns), so a second self._async.run()
+        # call made right here would be silently ignored.
         wx.CallAfter(self._load_disk_identity)
 
     def _on_identity_error(self, exc: Exception) -> None:
         self._set_error(str(exc))
-        self._update_button_states()
 
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self._load_identity()
@@ -202,10 +216,18 @@ class ContainerDetailsDialog(wx.Dialog):
     def _load_disk_identity(self) -> None:
         if self._gone:
             return
+        self._loading_disk = True
+        self._update_button_states()
+
+        def on_done() -> None:
+            self._loading_disk = False
+            self._update_button_states()
+
         self._async.run(
             work=lambda: self._disk_usage_repository.get_target(self._container_id),
             on_success=self._on_disk_identity_loaded,
             on_error=self._on_disk_error,
+            on_done=on_done,
         )
 
     def _on_disk_identity_loaded(self, disk: Optional[ContainerDiskUsage]) -> None:
@@ -214,10 +236,9 @@ class ContainerDetailsDialog(wx.Dialog):
             return
         self._disk = disk
         self._render_disk()
-        self._update_button_states()
 
     def _on_disk_error(self, exc: Exception) -> None:
-        self._disk_status_text.SetLabel(f"Could not load disk usage: {exc}")
+        self._disk_text.SetValue(f"Could not load disk usage: {exc}")
 
     def _on_calculate(self, event: Optional[wx.CommandEvent]) -> None:
         if self._calculating or self._disk is None:
@@ -322,6 +343,11 @@ class ContainerDetailsDialog(wx.Dialog):
         self.Layout()
 
     def _update_button_states(self) -> None:
-        busy = self._async.is_busy() or self._calculating
+        # Deliberately NOT self._async.is_busy() - see the comment on
+        # self._loading_identity's declaration: that flag is still True
+        # for the whole duration of the on_success callback that's often
+        # the one calling this, so reading it here would leave both
+        # buttons permanently disabled the first time either load finishes.
+        busy = self._loading_identity or self._loading_disk or self._calculating
         self._refresh_btn.Enable(not busy and not self._gone)
         self._calculate_btn.Enable(not busy and not self._gone and self._disk is not None)
