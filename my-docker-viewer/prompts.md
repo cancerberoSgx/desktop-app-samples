@@ -212,6 +212,8 @@ in containers screen, if I double click a container the container details screen
 p3
 in containers details screen, the disk usage doesn't work. The "Calculate" button is always disabled and I can see disk usage at all. Notice that in "containers disk" screen I'm able to see container's disk usage. Use the same implementation and fix the calculate button
 
+p4
+in containers details screen now disk usage works, but I want to: 1: auto-calculate. Display the "loading" and disck usage value at the left of button "Calculate". 
 
 # side bar clean up and MIT license
 

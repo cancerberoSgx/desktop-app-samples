@@ -47,11 +47,17 @@ class ContainerDetailsDialog(wx.Dialog):
 
     Everything here is read-only - no start/stop/remove - this is a detail
     view, not a second copy of ContainersPage's toolbar. Refresh re-fetches
-    identity/live stats (cheap - one `docker ps`/`docker stats` row);
-    Calculate sizes the writable layer and every mount (comparably
-    expensive to Containers Disk/Volumes' own Calculate - a disposable `du`
-    helper container per mount), so it stays opt-in rather than running
-    automatically."""
+    identity/live stats (cheap - one `docker ps`/`docker stats` row).
+    Calculate sizes the writable layer and every mount - comparably
+    expensive to Containers Disk/Volumes' own Calculate (a disposable `du`
+    helper container per mount) - but unlike those two screens, which only
+    auto-run once per session (or never) since sizing dozens/hundreds of
+    rows at once is a lot of throwaway containers, this dialog only ever
+    sizes ONE container. So there's no such downside here: Calculate runs
+    automatically as soon as the mount list is known (on open, and again
+    after every Refresh), rather than making the user click for what's the
+    whole point of opening this popup - the Calculate button just lets
+    them re-run it on demand too (e.g. after a transient failure)."""
 
     def __init__(
         self,
@@ -167,6 +173,7 @@ class ContainerDetailsDialog(wx.Dialog):
 
         if self._container is not None:
             self._render_overview()
+        self._update_disk_summary()
         self._update_button_states()
         self._load_identity()
 
@@ -217,6 +224,7 @@ class ContainerDetailsDialog(wx.Dialog):
         if self._gone:
             return
         self._loading_disk = True
+        self._update_disk_summary()
         self._update_button_states()
 
         def on_done() -> None:
@@ -236,8 +244,17 @@ class ContainerDetailsDialog(wx.Dialog):
             return
         self._disk = disk
         self._render_disk()
+        self._update_disk_summary()
+        # Deferred for the same reason _load_disk_identity itself is
+        # deferred from _on_identity_loaded: AsyncTaskRunner is
+        # single-flight and its is_busy() doesn't clear until on_done runs
+        # right after this callback, so calling _on_calculate synchronously
+        # here would try to self._async.run() while it still (incorrectly,
+        # from this callback's perspective) looks busy, and be ignored.
+        wx.CallAfter(self._on_calculate, None)
 
     def _on_disk_error(self, exc: Exception) -> None:
+        self._disk_status_text.SetLabel(f"Error: {exc}")
         self._disk_text.SetValue(f"Could not load disk usage: {exc}")
 
     def _on_calculate(self, event: Optional[wx.CommandEvent]) -> None:
@@ -248,7 +265,7 @@ class ContainerDetailsDialog(wx.Dialog):
         self._disk.mounts_bytes = None
         self._disk.notes = []
         self._disk.error = None
-        self._disk_status_text.SetLabel("Calculating...")
+        self._update_disk_summary()
         self._render_disk()
         self._update_button_states()
 
@@ -267,14 +284,14 @@ class ContainerDetailsDialog(wx.Dialog):
             self._disk.mounts_bytes = mounts_bytes
             self._disk.notes.extend(notes)
             self._calculating = False
-            self._disk_status_text.SetLabel("")
+            self._update_disk_summary()
             self._render_disk()
             self._update_button_states()
 
         def error(exc: Exception) -> None:
             self._disk.error = str(exc)
             self._calculating = False
-            self._disk_status_text.SetLabel("")
+            self._update_disk_summary()
             self._render_disk()
             self._update_button_states()
 
@@ -333,6 +350,27 @@ class ContainerDetailsDialog(wx.Dialog):
                 lines.append(f"Note: {note}")
 
         self._disk_text.SetValue("\n".join(lines))
+
+    def _update_disk_summary(self) -> None:
+        """Keeps the compact status/value text to the left of the Calculate
+        button (`_disk_status_text`) in sync with the current loading/
+        calculating/result state - the "Container no longer exists"/mount-
+        load-error messages are set directly by their own callbacks instead,
+        since those are terminal states this state machine doesn't cover."""
+        self._disk_status_text.SetLabel(self._disk_summary_text())
+
+    def _disk_summary_text(self) -> str:
+        if self._loading_disk:
+            return "Loading mounts..."
+        if self._disk is None:
+            return "Not calculated"
+        if self._calculating:
+            return "Calculating..."
+        if self._disk.error is not None:
+            return f"Error: {self._disk.error}"
+        if self._disk.total_bytes is None:
+            return "Not calculated"
+        return f"Total: {format_bytes(self._disk.total_bytes)}"
 
     def _set_error(self, message: Optional[str]) -> None:
         if message:
