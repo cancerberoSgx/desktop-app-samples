@@ -214,6 +214,24 @@ class ImageRepository:
             )
         return sorted(images, key=lambda i: (i.repository.lower(), i.tag.lower()))
 
+    def get(self, reference: str) -> Optional[Image]:
+        """Scoped single-image refetch - e.g. ImageDetailsDialog's Refresh
+        button. Unlike ContainerRepository.get()/VolumeRepository.get(),
+        this can't cheaply filter `docker image ls` down to just one image:
+        a dangling image's `reference` is its bare ID, and `docker image
+        ls` only matches a `REPOSITORY[:TAG]` pattern - by positional
+        argument or `--filter reference=` - against neither an image ID
+        nor a dangling image's `<none>:<none>` repo/tag (measured, not
+        assumed: both return empty output for an ID). So this reuses the
+        full `list()` and picks the matching row by `.reference` - the same
+        cost as one manual Refresh on the Images screen itself, not the
+        per-item-expensive class of call DiskUsageRepository guards
+        against. Returns `None` if the image no longer exists."""
+        for image in self.list():
+            if image.reference == reference:
+                return image
+        return None
+
     def remove(self, reference: str, force: bool = False) -> None:
         args = ["image", "rm"]
         if force:
@@ -570,6 +588,40 @@ class NetworkRepository:
                     network.containers += 1
                     network.container_names.append(container_name)
         return sorted(networks.values(), key=lambda n: n.name.lower())
+
+    def get(self, name: str) -> Optional[Network]:
+        """Scoped single-network refetch - e.g. NetworkDetailsDialog's
+        Refresh button - rather than re-running the full `list()` and
+        filtering: `docker network inspect` gives identity directly (its
+        `Id` is the full 64-char ID - truncated here to match `_ls()`'s
+        short-ID convention), and `docker ps --filter network=<name>` asks
+        docker for exactly the containers attached to this one network,
+        rather than cross-referencing every container's own `Networks`
+        field the way `list()` does when it wants this for every network
+        at once. Returns `None` if the network no longer exists."""
+        try:
+            output = self._run(["network", "inspect", name, "--format", "{{json .}}"])
+        except DockerCommandError:
+            return None
+        line = next((line.strip() for line in output.splitlines() if line.strip()), None)
+        if line is None:
+            return None
+        data = json.loads(line)
+        network = Network(
+            id=data.get("Id", "")[:12],
+            name=data.get("Name", ""),
+            driver=data.get("Driver", ""),
+            scope=data.get("Scope", ""),
+        )
+        ps_output = self._run(["ps", "-a", "--filter", f"network={name}", "--format", "{{json .}}"])
+        for ps_line in ps_output.splitlines():
+            ps_line = ps_line.strip()
+            if not ps_line:
+                continue
+            row = json.loads(ps_line)
+            network.containers += 1
+            network.container_names.append(row.get("Names", ""))
+        return network
 
     def remove(self, name: str) -> None:
         # No force override here either - `-f` only suppresses a "no such

@@ -4,6 +4,7 @@ import wx
 
 from .async_task import AsyncTaskRunner
 from .formatting import size_sort_key
+from .image_details_dialog import show_image_details
 from .models import Image, ImageDependents
 from .repositories import ImageRepository
 
@@ -130,7 +131,15 @@ class ImagesPage(wx.Panel):
     only changes when something (this app, another docker client, a build)
     actually adds or removes an image, not every few seconds like CPU/mem -
     a manual Refresh is enough, so this page never hits the docker CLI on
-    its own."""
+    its own.
+
+    Info (or double-clicking/pressing Enter on a row) opens
+    `ImageDetailsDialog` (`app/image_details_dialog.py`) for the selected
+    image - full identity plus exactly which containers/volumes/networks
+    depend on it, via the same `find_dependents` lookup the cascading-
+    remove dialog above already uses. That dialog is its own reusable
+    component precisely so other screens can open the same view later from
+    just a reference, without needing a loaded `Image` row of their own."""
 
     def __init__(
         self,
@@ -179,9 +188,11 @@ class ImagesPage(wx.Panel):
         toolbar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 
         self._refresh_btn = wx.Button(self, label="Refresh")
+        self._info_btn = wx.Button(self, label="Info")
         self._remove_btn = wx.Button(self, label="Remove")
         self._prune_btn = wx.Button(self, label="Prune unused")
         toolbar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
+        toolbar.Add(self._info_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._remove_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._prune_btn, 0)
 
@@ -204,11 +215,16 @@ class ImagesPage(wx.Panel):
         self._name_filter.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_name_filter_cancel)
         self._status_choice.Bind(wx.EVT_CHOICE, self._on_filter_changed)
         self._refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
+        self._info_btn.Bind(wx.EVT_BUTTON, self._on_info)
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
         self._prune_btn.Bind(wx.EVT_BUTTON, self._on_prune)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
+        # Double-click (or Enter on a focused row) an image to jump straight
+        # to its details, same shortcut ContainersPage gives its own rows -
+        # Info is still there on the toolbar for a single click.
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_info)
 
         self._update_button_states(None)
         self._update_column_headers()
@@ -325,6 +341,7 @@ class ImagesPage(wx.Panel):
 
     def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
         image = self._selected_image()
+        self._info_btn.Enable(image is not None)
         self._remove_btn.Enable(image is not None)
 
     # ------------------------------------------------------------------
@@ -339,6 +356,15 @@ class ImagesPage(wx.Panel):
 
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self.reload()
+
+    def _on_info(self, event: wx.Event) -> None:
+        # Bound to both the Info button (wx.CommandEvent) and double-click/
+        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) -
+        # neither branch below needs anything event-type-specific.
+        image = self._selected_image()
+        if image is None:
+            return
+        show_image_details(self, image.reference, self._repository, initial=image)
 
     def _apply_removed(self, reference: str) -> None:
         """Mirrors ContainersPage._apply_removed - drop the image from the

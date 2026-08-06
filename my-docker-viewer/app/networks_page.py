@@ -4,6 +4,7 @@ import wx
 
 from .async_task import AsyncTaskRunner
 from .models import Network
+from .network_details_dialog import show_network_details
 from .repositories import NetworkRepository
 
 STATUS_CHOICES = ["All", "In use", "Unused"]
@@ -35,7 +36,15 @@ class NetworksPage(wx.Panel):
 
     No auto-refresh timer here either, same reasoning as ImagesPage: a
     network list only changes when something actually creates/removes one,
-    not on a clock, so a manual Refresh is enough."""
+    not on a clock, so a manual Refresh is enough.
+
+    Info (or double-clicking/pressing Enter on a row) opens
+    `NetworkDetailsDialog` (`app/network_details_dialog.py`) for the
+    selected network - driver/scope/built-in status and the full
+    (untruncated) list of attached containers. That dialog is its own
+    reusable component precisely so other screens can open the same view
+    later from just a network name, without needing a loaded `Network` row
+    of their own."""
 
     def __init__(self, parent: wx.Window, repository: NetworkRepository) -> None:
         super().__init__(parent)
@@ -70,9 +79,11 @@ class NetworksPage(wx.Panel):
         toolbar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 
         self._refresh_btn = wx.Button(self, label="Refresh")
+        self._info_btn = wx.Button(self, label="Info")
         self._remove_btn = wx.Button(self, label="Remove")
         self._prune_btn = wx.Button(self, label="Prune unused")
         toolbar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
+        toolbar.Add(self._info_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._remove_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._prune_btn, 0)
 
@@ -95,11 +106,16 @@ class NetworksPage(wx.Panel):
         self._name_filter.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_name_filter_cancel)
         self._status_choice.Bind(wx.EVT_CHOICE, self._on_filter_changed)
         self._refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
+        self._info_btn.Bind(wx.EVT_BUTTON, self._on_info)
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
         self._prune_btn.Bind(wx.EVT_BUTTON, self._on_prune)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
+        # Double-click (or Enter on a focused row) a network to jump
+        # straight to its details, same shortcut ContainersPage gives its
+        # own rows - Info is still there on the toolbar for a single click.
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_info)
 
         self._update_button_states(None)
         self._update_column_headers()
@@ -212,6 +228,7 @@ class NetworksPage(wx.Panel):
 
     def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
         network = self._selected_network()
+        self._info_btn.Enable(network is not None)
         # Predefined networks (bridge/host/none) can never be removed -
         # disabled outright rather than left to fail against docker's own
         # refusal, same "explain before it fails" posture as VolumesPage's
@@ -230,6 +247,15 @@ class NetworksPage(wx.Panel):
 
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self.reload()
+
+    def _on_info(self, event: wx.Event) -> None:
+        # Bound to both the Info button (wx.CommandEvent) and double-click/
+        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) -
+        # neither branch below needs anything event-type-specific.
+        network = self._selected_network()
+        if network is None:
+            return
+        show_network_details(self, network.name, self._repository, initial=network)
 
     def _apply_removed(self, name: str) -> None:
         """Mirrors ImagesPage._apply_removed - drop the network from the

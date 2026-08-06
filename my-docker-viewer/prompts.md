@@ -253,3 +253,6 @@ in the networks screen, if I double click a row or click a new "info" action but
 Put the network details code in a separate reusable component since we will be calling it from different places of the app.
 
 In the sidebar, add a relevant icon to the "network" option
+
+# container disk details
+in containers disk screen, if user clicks a new action button "info" or double click a row in the table, the existing "container-details" screen is shown.
