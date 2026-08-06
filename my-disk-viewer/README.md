@@ -1,0 +1,67 @@
+# My Disk Viewer
+
+A desktop app, built with [wxPython](https://wxpython.org), to visualize disk usage
+in a folder recursively - which subfolders and which file types are eating the
+most space - so you can find what's actually worth deleting to free space up.
+
+**Status: work in progress.** The data layer (SQLite cache + migrations, the `du`
+CLI wrapper that does the actual scanning) is built and verified; the wxPython UI
+(drill-down table + pie chart) is not written yet. There is no `main.py` to run
+yet - see `CLAUDE.md` for the full architecture and what's planned next.
+
+## Project layout
+
+```
+app/
+  disk_scan_repository.py     DiskScanRepository - wraps the `du` CLI (Linux/macOS);
+                               list_immediate() is a cheap non-recursive os.scandir
+                               pass, scan_subdirectory() runs `du -a -k -x` and
+                               recursively covers a subdirectory's entire subtree
+  cache_repository.py         CacheRepository (SQLite read/write for the folders/
+                               files cache) + SettingsRepository
+  models.py                   Entry, ExtensionUsage, ScannedFile, ScannedDir,
+                               SubtreeScan, ImmediateListing dataclasses
+  formatting.py                format_bytes - human-readable byte counts
+  async_task.py                AsyncTaskRunner / run_background - runs scans off
+                               the UI thread (copied from my-docker-viewer, generic)
+  db/
+    paths.py                  Resolves ~/.my-disk-viewer and the migrations folder
+    connection.py              SQLite connection factory
+    migrator.py                 Applies any new *.sql file under db/migrations/
+    migrations/
+      0001_create_scan_tables.sql   folders/files cache tables + indexes
+      0002_create_settings.sql       key/value settings table
+requirements.txt
+```
+
+## Why `du` for scanning
+
+`du -a -k -x <path>` ships on every Linux and macOS system already (no extra
+install), and reports real allocated disk usage rather than a file's
+apparent/logical size - the number that actually answers "what's eating my disk".
+See `CLAUDE.md` for the full comparison against `ncdu`/`dua`/`dust`/`gdu` and a
+pure-Python walker, and why `du` won for this app. Windows has no `du` equivalent
+and is intentionally out of scope for now.
+
+## How scanning + caching work
+
+Disk usage stats for every file and folder are cached in SQLite
+(`~/.my-disk-viewer/my-disk-viewer.db`) so revisiting a folder is instant. One
+`du` call recursively covers an entire subdirectory's contents in one shot - not
+just its immediate children - so "reload" a folder rescans just its direct
+children (in parallel, one job per subdirectory) and that single pass already
+populates every descendant underneath them too. Drilling further down into an
+already-scanned subfolder is a plain cache read, no rescan, until you explicitly
+hit Reload on it again.
+
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate      # on Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Run
+
+Not yet possible - the UI hasn't been built. See `CLAUDE.md`'s "What's next".
