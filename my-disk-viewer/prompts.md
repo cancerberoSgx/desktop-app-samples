@@ -19,3 +19,5 @@ There should
 p3 
 now implement a new tab that dislpay  a piechart with legends to better visualize subfolers and subfiles disk size distribution
 
+# binaries
+implement a github actions file like ../.github/workflows/my-docker-viewer-build.yml which builds this project my-disk-driver to each platform linux, macos, windows.
