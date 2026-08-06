@@ -10,6 +10,7 @@ from .cache_repository import CacheRepository
 from .disk_scan_repository import DiskScanRepository
 from .formatting import format_bytes
 from .models import Entry, ImmediateListing, SubtreeScan
+from .pie_chart import PieChartPanel
 
 """The one main screen of this app: a breadcrumb + drill-down table of
 whatever folder is currently open. No sidebar/wx.Simplebook, unlike
@@ -90,6 +91,16 @@ class ExplorerPage(wx.Panel):
         self._sort_column = _COL_SIZE
         self._sort_ascending = False
 
+        # "children": the same items the table shows (this folder's
+        # immediate subfolders/files) - the direct answer to "which
+        # subfolder/file is using the most space". "extension": every
+        # file recursively under this folder grouped by type - "which
+        # file TYPE is using the most space", the other UX-agreed
+        # breakdown. Both read from data already being kept in sync with
+        # the table (see _update_chart, called from _populate_list), so
+        # the chart is never a stale second copy of the same numbers.
+        self._chart_mode = "children"
+
         self._build_ui()
         self._update_header()
         self._update_button_states()
@@ -128,11 +139,31 @@ class ExplorerPage(wx.Panel):
         self._header_text = wx.StaticText(self, label="")
         outer.Add(self._header_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
-        self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
+        self._notebook = wx.Notebook(self)
+        outer.Add(self._notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
+        table_page = wx.Panel(self._notebook)
+        table_sizer = wx.BoxSizer(wx.VERTICAL)
+        self._list = wx.ListCtrl(table_page, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
         self._column_labels = [label for label, _width in _COLUMNS]
         for index, (label, width) in enumerate(_COLUMNS):
             self._list.InsertColumn(index, label, width=width)
-        outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        table_sizer.Add(self._list, 1, wx.EXPAND)
+        table_page.SetSizer(table_sizer)
+        self._notebook.AddPage(table_page, "Table")
+
+        chart_page = wx.Panel(self._notebook)
+        chart_sizer = wx.BoxSizer(wx.VERTICAL)
+        mode_row = wx.BoxSizer(wx.HORIZONTAL)
+        self._mode_children_radio = wx.RadioButton(chart_page, label="By subfolder/file", style=wx.RB_GROUP)
+        self._mode_extension_radio = wx.RadioButton(chart_page, label="By file type")
+        mode_row.Add(self._mode_children_radio, 0, wx.RIGHT, 16)
+        mode_row.Add(self._mode_extension_radio, 0)
+        chart_sizer.Add(mode_row, 0, wx.ALL, 8)
+        self._chart_panel = PieChartPanel(chart_page)
+        chart_sizer.Add(self._chart_panel, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        chart_page.SetSizer(chart_sizer)
+        self._notebook.AddPage(chart_page, "Chart")
 
         self.SetSizer(outer)
         self._update_column_headers()
@@ -149,6 +180,8 @@ class ExplorerPage(wx.Panel):
         # for a file it's the same as pressing Reveal - there's nothing
         # else "activating" a file row could mean on a read-only screen.
         self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_activate)
+        self._mode_children_radio.Bind(wx.EVT_RADIOBUTTON, self._on_chart_mode_changed)
+        self._mode_extension_radio.Bind(wx.EVT_RADIOBUTTON, self._on_chart_mode_changed)
 
     # ------------------------------------------------------------------
     # Navigation
@@ -418,7 +451,31 @@ class ExplorerPage(wx.Panel):
             if selected_path and entry.path == selected_path:
                 self._list.SetItemState(row, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
 
+        self._update_chart()
         self._update_button_states()
+
+    def _on_chart_mode_changed(self, event: wx.CommandEvent) -> None:
+        self._chart_mode = "extension" if self._mode_extension_radio.GetValue() else "children"
+        self._update_chart()
+
+    def _update_chart(self) -> None:
+        """Keeps the Chart tab's pie in sync with whatever the table is
+        showing right now - called from _populate_list so the two views
+        are never out of step, and doubles as this chart's "table view
+        exists" accessibility relief (dataviz skill: a chart with sub-3:1
+        fills against a light surface needs a table alternative; Table is
+        right there as the other tab on the same data)."""
+        if self._chart_mode == "extension":
+            if self._current_path is None:
+                items: List[Tuple[str, int]] = []
+            else:
+                breakdown = self._cache.extension_breakdown(self._current_path)
+                items = [
+                    (f".{b.extension}" if b.extension else "(no extension)", b.size_bytes) for b in breakdown
+                ]
+        else:
+            items = [(e.name, e.size_bytes or 0) for e in self._entries]
+        self._chart_panel.set_items(items)
 
     def _selected_entry(self) -> Optional[Entry]:
         index = self._list.GetFirstSelected()

@@ -4,15 +4,23 @@ A desktop app, built with [wxPython](https://wxpython.org), to visualize disk us
 in a folder recursively - which subfolders and which file types are eating the
 most space - so you can find what's actually worth deleting to free space up.
 
-**Status: work in progress.** The data layer (SQLite cache + migrations, the `du`
-CLI wrapper that does the actual scanning) is built and verified; the wxPython UI
-(drill-down table + pie chart) is not written yet. There is no `main.py` to run
-yet - see `CLAUDE.md` for the full architecture and what's planned next.
+**Status: work in progress, but runnable.** The data layer (SQLite cache +
+migrations, the `du` CLI wrapper that does the actual scanning) and the wxPython
+UI (breadcrumb + drill-down table, Reload, and a pie chart tab) are built and
+verified - see `CLAUDE.md` for the full architecture and what's still ahead
+(recent-folders list, packaging).
 
 ## Project layout
 
 ```
 app/
+  frame.py                     Composition root: DB connection + migrations,
+                               builds the repositories, hosts ExplorerPage
+  explorer_page.py             The one main screen: toolbar, breadcrumb,
+                               drill-down table, and the Chart tab
+  pie_chart.py                 PieChartPanel - hand-drawn pie + legend (no
+                               charting library), toggled between "by subfolder/
+                               file" and "by file type"
   disk_scan_repository.py     DiskScanRepository - wraps the `du` CLI (Linux/macOS);
                                list_immediate() is a cheap non-recursive os.scandir
                                pass, scan_subdirectory() runs `du -a -k -x` and
@@ -31,6 +39,7 @@ app/
     migrations/
       0001_create_scan_tables.sql   folders/files cache tables + indexes
       0002_create_settings.sql       key/value settings table
+main.py                        Entry point - `python3 main.py [folder]`
 requirements.txt
 ```
 
@@ -64,4 +73,12 @@ pip install -r requirements.txt
 
 ## Run
 
-Not yet possible - the UI hasn't been built. See `CLAUDE.md`'s "What's next".
+```bash
+python3 main.py                # then use "Open Folder..." in the toolbar
+python3 main.py /some/folder   # or open straight into a folder
+```
+
+Use **Reload** to compute disk usage for the open folder - it's never automatic
+(even the first time), since it means running `du` against every immediate
+subdirectory. The **Chart** tab shows the same data as the table as a pie, toggled
+between "by subfolder/file" and "by file type" (recursive, by extension).
