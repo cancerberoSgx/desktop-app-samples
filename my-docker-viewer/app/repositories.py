@@ -86,6 +86,9 @@ class ContainerRepository:
                 container.mem_percent = mem_percent
         return sorted(containers.values(), key=lambda c: c.names)
 
+    def start(self, container_id: str) -> None:
+        self._run(["start", container_id])
+
     def stop(self, container_id: str) -> None:
         self._run(["stop", container_id])
 
@@ -375,11 +378,16 @@ class VolumeRepository:
     def list(self) -> List[Volume]:
         volumes = {v.name: v for v in self._ls()}
         if volumes:
-            for name, container_name in self._volume_users():
+            for name, container_name, image in self._volume_users():
                 volume = volumes.get(name)
                 if volume is not None:
                     volume.containers += 1
                     volume.container_names.append(container_name)
+                    # Multiple containers sharing a volume often share the
+                    # same image too (a compose stack's replicas, say) -
+                    # dedupe so it doesn't just repeat itself.
+                    if image and image not in volume.image_names:
+                        volume.image_names.append(image)
         return sorted(volumes.values(), key=lambda v: v.name.lower())
 
     def remove(self, name: str) -> None:
@@ -421,19 +429,21 @@ class VolumeRepository:
         return volumes
 
     def _volume_users(self):
-        """Yields (volume_name, container_name) once per volume mount
-        across every container, any state."""
+        """Yields (volume_name, container_name, image) once per volume
+        mount across every container, any state. `image` comes straight off
+        the same `docker ps` row as the container's name (docker's own
+        `Image` format field) - no second inspect call needed for it."""
         containers = self._containers()
         if not containers:
             return
-        mounts_by_id = self._inspect_volume_mounts([container_id for container_id, _name in containers])
-        names_by_id = dict(containers)
+        mounts_by_id = self._inspect_volume_mounts([container_id for container_id, _name, _image in containers])
+        by_id = {container_id: (name, image) for container_id, name, image in containers}
         for container_id, volume_names in mounts_by_id.items():
-            container_name = names_by_id.get(container_id, container_id)
+            container_name, image = by_id.get(container_id, (container_id, ""))
             for name in volume_names:
-                yield name, container_name
+                yield name, container_name, image
 
-    def _containers(self) -> List[Tuple[str, str]]:
+    def _containers(self) -> List[Tuple[str, str, str]]:
         output = self._run(["ps", "-a", "--format", "{{json .}}"])
         result = []
         for line in output.splitlines():
@@ -441,7 +451,7 @@ class VolumeRepository:
             if not line:
                 continue
             data = json.loads(line)
-            result.append((data.get("ID", ""), data.get("Names", "")))
+            result.append((data.get("ID", ""), data.get("Names", ""), data.get("Image", "")))
         return result
 
     def _inspect_volume_mounts(self, container_ids: List[str]) -> Dict[str, List[str]]:

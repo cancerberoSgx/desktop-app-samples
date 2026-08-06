@@ -120,6 +120,13 @@ class Volume:
     count distinct containers (running or stopped) that mount this volume -
     computed client-side (`VolumeRepository.list()`) from every container's
     own mounts, since `docker volume ls` itself doesn't report usage.
+    `image_names` is the deduplicated set of images those containers were
+    run from - read straight off the same `docker ps` rows `container_names`
+    already comes from (its own `Image` field), no extra docker call.
+    Both exist to answer "what is this volume actually for" - container/
+    image references are what falls back to a short ID when nothing more
+    readable is available, same as docker itself reports for an unnamed
+    container or an untagged image.
 
     `size_bytes` is `None` until computed - `docker volume ls` always
     reports size as `"N/A"` (real numbers need `docker system df -v`, which
@@ -138,6 +145,7 @@ class Volume:
     scope: str
     containers: int = 0
     container_names: List[str] = field(default_factory=list)
+    image_names: List[str] = field(default_factory=list)
     size_bytes: Optional[int] = None
     size_error: Optional[str] = None
 

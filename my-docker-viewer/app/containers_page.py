@@ -54,7 +54,7 @@ _SORT_KEYS = [
 class ContainersPage(wx.Panel):
     """List every docker container (running and stopped), merged with live
     CPU/memory usage from `docker stats`; filter by name/image/status, and
-    stop or remove the selected one. Auto-refresh is opt-in via a checkbox
+    start, stop, or remove the selected one. Auto-refresh is opt-in via a checkbox
     (off by default - the user must click Refresh otherwise) since CPU/memory
     are point-in-time samples that go stale after every load; when enabled it
     reloads on a timer (skipped while a request is already in flight)."""
@@ -103,9 +103,11 @@ class ContainersPage(wx.Panel):
         toolbar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 
         self._refresh_btn = wx.Button(self, label="Refresh")
+        self._start_btn = wx.Button(self, label="Start")
         self._stop_btn = wx.Button(self, label="Stop")
         self._remove_btn = wx.Button(self, label="Remove")
         toolbar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
+        toolbar.Add(self._start_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._stop_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._remove_btn, 0)
 
@@ -131,6 +133,7 @@ class ContainersPage(wx.Panel):
         self._status_choice.Bind(wx.EVT_CHOICE, self._on_filter_changed)
         self._auto_refresh_checkbox.Bind(wx.EVT_CHECKBOX, self._on_auto_refresh_toggle)
         self._refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
+        self._start_btn.Bind(wx.EVT_BUTTON, self._on_start)
         self._stop_btn.Bind(wx.EVT_BUTTON, self._on_stop)
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
@@ -280,6 +283,7 @@ class ContainersPage(wx.Panel):
 
     def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
         container = self._selected_container()
+        self._start_btn.Enable(container is not None and not container.is_running)
         self._stop_btn.Enable(container is not None and container.is_running)
         self._remove_btn.Enable(container is not None)
 
@@ -299,6 +303,20 @@ class ContainersPage(wx.Panel):
 
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self.reload()
+
+    def _apply_started(self, container_id: str) -> None:
+        """Mirrors `_apply_stopped`: reflect a successful start instantly
+        rather than waiting on a full `docker ps`/`docker stats` round trip.
+        cpu/mem are left `None` (not immediately re-fetched) since a
+        container that just started has no `docker stats` sample yet
+        either way - the next manual or auto-refresh picks those up along
+        with docker's exact `Status` text ("Up 1 second", ...)."""
+        for container in self._containers:
+            if container.id == container_id:
+                container.state = "running"
+                container.status = "Up"
+                break
+        self._populate_list()
 
     def _apply_stopped(self, container_id: str) -> None:
         """Reflects a successful stop instantly, without waiting on a full
@@ -322,6 +340,26 @@ class ContainersPage(wx.Panel):
         already-loaded list right away instead of re-fetching."""
         self._containers = [c for c in self._containers if c.id != container_id]
         self._populate_list()
+
+    def _on_start(self, event: wx.CommandEvent) -> None:
+        container = self._selected_container()
+        if container is None:
+            return
+
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(
+                f'Could not start "{container.names}":\n\n{exc}',
+                "Start failed",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+
+        self._async.run(
+            work=lambda: self._repository.start(container.id),
+            on_success=lambda _result: self._apply_started(container.id),
+            on_error=on_error,
+            disable=[self._start_btn, self._stop_btn, self._remove_btn],
+        )
 
     def _on_stop(self, event: wx.CommandEvent) -> None:
         container = self._selected_container()

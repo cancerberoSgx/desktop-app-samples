@@ -19,17 +19,39 @@ _COLUMNS = [
     ("Driver", 90),
     ("Mountpoint", 340),
     ("Containers", 90),
+    ("Used By", 220),
+    ("Images", 220),
     ("Status", 90),
     ("Size", 100),
 ]
-_SIZE_COLUMN = 5
+_SIZE_COLUMN = 7
 _SORT_KEYS = [
     lambda v: v.name.lower(),
     lambda v: v.driver.lower(),
     lambda v: v.mountpoint.lower(),
     lambda v: v.containers,
+    lambda v: ", ".join(v.container_names).lower(),
+    lambda v: ", ".join(v.image_names).lower(),
     lambda v: v.status,
 ]
+
+
+# How many names to spell out in the "Used By"/"Images" cells before
+# collapsing the rest into a "+N more" count - a volume shared across a
+# whole compose stack would otherwise blow the column out to an unreadable
+# width. The *sort* key (_SORT_KEYS above) still sorts on the full,
+# untruncated join, so this only affects what's rendered.
+_NAMES_SHOWN = 2
+
+
+def _joined(names: List[str]) -> str:
+    if not names:
+        return "-"
+    if len(names) <= _NAMES_SHOWN:
+        return ", ".join(names)
+    shown = ", ".join(names[:_NAMES_SHOWN])
+    remaining = len(names) - _NAMES_SHOWN
+    return f"{shown}, … +{remaining} more"
 
 
 def _size_text(volume: Volume, pending: Set[str]) -> str:
@@ -53,10 +75,12 @@ def _size_sort_key(volume: Volume, pending: Set[str]) -> int:
 
 
 class VolumesPage(wx.Panel):
-    """List every local docker volume - driver, mountpoint, and how many
-    containers (running or stopped) mount it - filter by name/status,
-    remove one, or prune every unused volume at once. Size is computed on
-    demand via Calculate, reusing the exact same helper-container `du`
+    """List every local docker volume - driver, mountpoint, how many
+    containers (running or stopped) mount it, and by name which containers
+    and which images those containers were run from (so an anonymous-
+    looking volume name still says what it's actually for) - filter by
+    name/status, remove one, or prune every unused volume at once. Size is
+    computed on demand via Calculate, reusing the exact same helper-container `du`
     approach as the Containers Disk screen (`DiskUsageRepository`) - not
     run automatically on load or on every Refresh, since sizing every
     volume on the machine is comparably expensive to that screen's own
@@ -287,8 +311,10 @@ class VolumesPage(wx.Panel):
             self._list.SetItem(row, 1, volume.driver)
             self._list.SetItem(row, 2, volume.mountpoint)
             self._list.SetItem(row, 3, str(volume.containers))
-            self._list.SetItem(row, 4, volume.status)
-            self._list.SetItem(row, 5, _size_text(volume, self._pending_names))
+            self._list.SetItem(row, 4, _joined(volume.container_names))
+            self._list.SetItem(row, 5, _joined(volume.image_names))
+            self._list.SetItem(row, 6, volume.status)
+            self._list.SetItem(row, 7, _size_text(volume, self._pending_names))
             if selected_name and volume.name == selected_name:
                 self._list.SetItemState(row, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
 

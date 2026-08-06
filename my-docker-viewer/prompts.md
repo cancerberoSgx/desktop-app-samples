@@ -192,3 +192,16 @@ on the sidebar, the current screen must be highlighted
 ---
 
 
+# volumnes view image or container
+question  (don't write code), in the volumes view, is it possible to display a column indicating which containers or images are associated with it. The idea is to have better notion of what the volume is used for, right now the names of most of my containers are just hashes so i don't have a clue of how it's being used or by whom. 
+
+p2
+please add the two columns "used by" and "images". Remember that I want to see the names of containers and images if possible, if not a small hash.
+
+# containers start
+in the containers screen, add a "start" button to start selected container
+
+# container details
+in the containers screen, if user select a container, there will be a "info" button which displays the "container details" screen.
+This screen will detail everything relevant data of an existing container, for example, ports, mem, disk, cpu, etc. 
+Put the container details code in a separate reusable component since we will be calling it from different places of the app.
