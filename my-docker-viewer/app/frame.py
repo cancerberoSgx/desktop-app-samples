@@ -7,7 +7,6 @@ from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
 from app.images_page import ImagesPage
 from app.networks_page import NetworksPage
-from app.pages import AboutPage
 from app.repositories import (
     ContainerRepository,
     DiskUsageRepository,
@@ -62,7 +61,6 @@ class MainFrame(wx.Frame):
         self.book.AddPage(self.volumes_page, "Volumes")
         self.networks_page = NetworksPage(self.book, self.network_repository)
         self.book.AddPage(self.networks_page, "Networks")
-        self.book.AddPage(AboutPage(self.book), "About")
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
 
@@ -121,7 +119,10 @@ class MainFrame(wx.Frame):
             "resource usage, stop, and remove - plus a read-only Containers "
             "Disk screen to see real per-container disk usage, and Images/"
             "Volumes/Networks screens to see what each one's used by and "
-            "remove or prune them - all via the docker CLI.",
+            "remove or prune them - all via the docker CLI.\n\n"
+            "Author: Sebastián Gurin (cancerberoSgx)\n"
+            "License: MIT\n"
+            "Home: https://github.com/cancerberoSgx/desktop-app-samples",
             "About My Docker Viewer",
             wx.OK | wx.ICON_INFORMATION,
             self,

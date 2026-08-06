@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional
+from typing import Callable, List
 
 import wx
 
@@ -9,7 +9,6 @@ SIDEBAR_ITEMS = [
     ("Images", wx.ART_CDROM),
     ("Volumes", wx.ART_REMOVABLE),
     ("Networks", wx.ART_HELP_BROWSER),
-    ("About", wx.ART_INFORMATION),
 ]
 
 _BG_COLOUR = wx.Colour(45, 51, 59)
@@ -54,26 +53,18 @@ class Sidebar(wx.Panel):
 
         sizer.AddStretchSpacer()
 
-        exit_btn = self._make_button("Exit", wx.ART_QUIT, None)
-        sizer.Add(exit_btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
         self.SetSizer(sizer)
         self.SetMinSize((180, -1))
 
         self.select(0)
 
-    def _make_button(self, label: str, art_id: str, page_index: Optional[int]) -> wx.ToggleButton:
+    def _make_button(self, label: str, art_id: str, page_index: int) -> wx.ToggleButton:
         bitmap = wx.ArtProvider.GetBitmap(art_id, wx.ART_BUTTON, (20, 20))
         btn = wx.ToggleButton(self, label=f"  {label}")
         btn.SetBitmap(bitmap)
         btn.SetBitmapMargins(8, 4)
         self._set_button_active(btn, False)
-
-        if page_index is None:
-            btn.Bind(wx.EVT_TOGGLEBUTTON, self._on_exit_clicked)
-        else:
-            btn.Bind(wx.EVT_TOGGLEBUTTON, lambda evt, i=page_index: self._on_button_clicked(i))
-
+        btn.Bind(wx.EVT_TOGGLEBUTTON, lambda evt, i=page_index: self._on_button_clicked(i))
         return btn
 
     @staticmethod
@@ -84,9 +75,6 @@ class Sidebar(wx.Panel):
         font.SetWeight(wx.FONTWEIGHT_BOLD if active else wx.FONTWEIGHT_NORMAL)
         btn.SetFont(font)
         btn.Refresh()
-
-    def _on_exit_clicked(self, event: wx.CommandEvent) -> None:
-        self.GetTopLevelParent().Close()
 
     def _on_button_clicked(self, index: int) -> None:
         self.select(index)

@@ -12,7 +12,6 @@ main.py                       Entry point
 app/
   frame.py                    Main window: menu bar + sidebar + page-switching area
   sidebar.py                  Left navigation sidebar with icon buttons
-  pages.py                    About page
   containers_page.py          "Containers" screen: list + filter + stop/remove + auto-refresh
   models.py                   Container dataclass
   repositories.py             ContainerRepository (wraps the docker CLI) / SettingsRepository

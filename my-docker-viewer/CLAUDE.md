@@ -18,8 +18,8 @@ volumes/networks too, to reclaim the most space in one step.
 This project was templated from the sibling `my-redis-viewer` app for its overall
 architecture (composition root in `frame.py`, sidebar + `wx.Simplebook`, `AsyncTaskRunner`
 facade, SQLite + migrations) - but **no feature was copied**: there are no profiles, no
-datasources, no data-explorer concept. All six screens (Containers, Containers Disk,
-Images, Volumes, Networks, About) are new concepts built from scratch on top of the
+datasources, no data-explorer concept. All five screens (Containers, Containers Disk,
+Images, Volumes, Networks) are new concepts built from scratch on top of the
 docker CLI.
 
 **There is no docker SDK/Engine API dependency.** Every docker operation - listing,
@@ -419,7 +419,10 @@ file is automatically picked up by the existing
 Left `Sidebar` (icon buttons, `app/sidebar.py`) drives a `wx.Simplebook` in
 `MainFrame` - `SIDEBAR_ITEMS` order must match the order pages are added to the
 book (`Sidebar._on_button_clicked` selects by index): Containers (0),
-Containers Disk (1), Images (2), Volumes (3), Networks (4), About (5).
+Containers Disk (1), Images (2), Volumes (3), Networks (4). There is no About
+entry in the sidebar (or an Exit button pinned under it, as there once was) -
+"About" only exists as the Help menu's About dialog (`MainFrame._on_about`),
+which is also the one place author/license/home links are shown.
 
 ### PyInstaller packaging gotchas (see my-redis-viewer's/my-data-viewer's git history for the original incident)
 
