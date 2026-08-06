@@ -48,7 +48,9 @@ class MainFrame(wx.Frame):
         root_sizer.Add(self.sidebar, 0, wx.EXPAND)
 
         self.book = wx.Simplebook(root_panel)
-        self.containers_page = ContainersPage(self.book, self.container_repository)
+        self.containers_page = ContainersPage(
+            self.book, self.container_repository, self.disk_usage_repository
+        )
         self.book.AddPage(self.containers_page, "Containers")
         self.containers_disk_page = ContainersDiskPage(self.book, self.disk_usage_repository)
         self.book.AddPage(self.containers_disk_page, "Containers Disk")

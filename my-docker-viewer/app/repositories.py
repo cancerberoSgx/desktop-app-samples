@@ -86,6 +86,46 @@ class ContainerRepository:
                 container.mem_percent = mem_percent
         return sorted(containers.values(), key=lambda c: c.names)
 
+    def get(self, container_id: str) -> Optional[Container]:
+        """Scoped single-container refetch - e.g. ContainerDetailsDialog's
+        Refresh button - rather than re-running the full `list()` and
+        filtering: both `docker ps` and `docker stats` accept a specific
+        container directly, so this costs the same one-row round trip
+        regardless of how many other containers exist. Returns `None` if
+        the container no longer exists (removed since the caller last saw
+        it) rather than raising - "it's gone" is an expected outcome here,
+        not a docker command failure."""
+        output = self._run(["ps", "-a", "--size", "--filter", f"id={container_id}", "--format", "{{json .}}"])
+        line = next((line.strip() for line in output.splitlines() if line.strip()), None)
+        if line is None:
+            return None
+        data = json.loads(line)
+        container = Container(
+            id=data.get("ID", ""),
+            names=data.get("Names", ""),
+            image=data.get("Image", ""),
+            command=data.get("Command", ""),
+            created_at=data.get("CreatedAt", ""),
+            status=data.get("Status", ""),
+            state=data.get("State", ""),
+            size=data.get("Size", ""),
+            ports=data.get("Ports", ""),
+            created_for=data.get("RunningFor", ""),
+            networks=data.get("Networks", ""),
+        )
+        if container.is_running:
+            # `docker stats` only reports running containers - same
+            # reasoning as `list()`/`_stats()`, just scoped to this one id
+            # instead of every container.
+            stats_output = self._run(["stats", "--no-stream", "--format", "{{json .}}", container.id])
+            stats_line = next((line.strip() for line in stats_output.splitlines() if line.strip()), None)
+            if stats_line is not None:
+                stats_data = json.loads(stats_line)
+                container.cpu_percent = stats_data.get("CPUPerc")
+                container.mem_usage = stats_data.get("MemUsage")
+                container.mem_percent = stats_data.get("MemPerc")
+        return container
+
     def start(self, container_id: str) -> None:
         self._run(["start", container_id])
 
@@ -120,6 +160,7 @@ class ContainerRepository:
                     size=data.get("Size", ""),
                     ports=data.get("Ports", ""),
                     created_for=data.get("RunningFor", ""),
+                    networks=data.get("Networks", ""),
                 )
             )
         return containers
@@ -587,6 +628,20 @@ class DiskUsageRepository:
 
     def __init__(self) -> None:
         self._du_semaphore = threading.BoundedSemaphore(MAX_CONCURRENT_DU_RUNS)
+
+    def get_target(self, container_id: str) -> Optional[ContainerDiskUsage]:
+        """Identity + mount info for one container - e.g.
+        ContainerDetailsDialog's disk section. Built on top of
+        `list_targets()` rather than a narrower, single-container `docker
+        inspect`: a mount's `shared` flag is only correct when cross-
+        referenced against every OTHER container's mounts too, exactly like
+        the full Containers Disk screen, so there's no cheaper correct way
+        to answer this for just one container. Returns `None` if the
+        container isn't found (removed since the caller last saw it)."""
+        for target in self.list_targets():
+            if target.id == container_id:
+                return target
+        return None
 
     def list_targets(self) -> List[ContainerDiskUsage]:
         """Identity + mount info for every container. Cheap (no `du`, no

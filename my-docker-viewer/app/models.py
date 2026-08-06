@@ -23,6 +23,10 @@ class Container:
     # used for display; created_at is kept as docker's raw, lexicographically
     # sortable timestamp string for column sorting.
     created_for: str = ""
+    # Comma-separated network names, read straight off `docker ps`'s own
+    # `Networks` field - the same free field NetworkRepository already uses
+    # to cross-reference containers, no extra `docker inspect` call needed.
+    networks: str = ""
     cpu_percent: Optional[str] = None
     mem_usage: Optional[str] = None
     mem_percent: Optional[str] = None

@@ -3,9 +3,10 @@ from typing import List, Optional
 import wx
 
 from .async_task import AsyncTaskRunner
+from .container_details_dialog import show_container_details
 from .formatting import size_sort_key
 from .models import Container
-from .repositories import ContainerRepository
+from .repositories import ContainerRepository, DiskUsageRepository
 
 STATUS_CHOICES = ["All", "running", "exited", "paused", "restarting", "created", "removing", "dead"]
 AUTO_REFRESH_INTERVAL_MS = 5000
@@ -57,11 +58,21 @@ class ContainersPage(wx.Panel):
     start, stop, or remove the selected one. Auto-refresh is opt-in via a checkbox
     (off by default - the user must click Refresh otherwise) since CPU/memory
     are point-in-time samples that go stale after every load; when enabled it
-    reloads on a timer (skipped while a request is already in flight)."""
+    reloads on a timer (skipped while a request is already in flight).
 
-    def __init__(self, parent: wx.Window, repository: ContainerRepository) -> None:
+    Info opens `ContainerDetailsDialog` (`app/container_details_dialog.py`)
+    for the selected container - identity, live cpu/mem, ports, networks,
+    and real disk usage in one popup. That dialog is its own reusable
+    component precisely so other screens can open the same view later from
+    just a container id/name, without needing a loaded `Container` row of
+    their own."""
+
+    def __init__(
+        self, parent: wx.Window, repository: ContainerRepository, disk_usage_repository: DiskUsageRepository
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
+        self._disk_usage_repository = disk_usage_repository
         self._containers: List[Container] = []
         self._visible: List[Container] = []
         self._async = AsyncTaskRunner(self)
@@ -103,10 +114,12 @@ class ContainersPage(wx.Panel):
         toolbar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 
         self._refresh_btn = wx.Button(self, label="Refresh")
+        self._info_btn = wx.Button(self, label="Info")
         self._start_btn = wx.Button(self, label="Start")
         self._stop_btn = wx.Button(self, label="Stop")
         self._remove_btn = wx.Button(self, label="Remove")
         toolbar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
+        toolbar.Add(self._info_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._start_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._stop_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._remove_btn, 0)
@@ -133,6 +146,7 @@ class ContainersPage(wx.Panel):
         self._status_choice.Bind(wx.EVT_CHOICE, self._on_filter_changed)
         self._auto_refresh_checkbox.Bind(wx.EVT_CHECKBOX, self._on_auto_refresh_toggle)
         self._refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
+        self._info_btn.Bind(wx.EVT_BUTTON, self._on_info)
         self._start_btn.Bind(wx.EVT_BUTTON, self._on_start)
         self._stop_btn.Bind(wx.EVT_BUTTON, self._on_stop)
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
@@ -283,6 +297,7 @@ class ContainersPage(wx.Panel):
 
     def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
         container = self._selected_container()
+        self._info_btn.Enable(container is not None)
         self._start_btn.Enable(container is not None and not container.is_running)
         self._stop_btn.Enable(container is not None and container.is_running)
         self._remove_btn.Enable(container is not None)
@@ -340,6 +355,14 @@ class ContainersPage(wx.Panel):
         already-loaded list right away instead of re-fetching."""
         self._containers = [c for c in self._containers if c.id != container_id]
         self._populate_list()
+
+    def _on_info(self, event: wx.CommandEvent) -> None:
+        container = self._selected_container()
+        if container is None:
+            return
+        show_container_details(
+            self, container.id, self._repository, self._disk_usage_repository, initial=container
+        )
 
     def _on_start(self, event: wx.CommandEvent) -> None:
         container = self._selected_container()
