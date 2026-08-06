@@ -3,9 +3,10 @@ from typing import Dict, List, Optional, Set
 import wx
 
 from .async_task import AsyncTaskRunner, run_background
+from .container_details_dialog import show_container_details
 from .formatting import format_bytes
 from .models import ContainerDiskUsage
-from .repositories import DiskUsageRepository
+from .repositories import ContainerRepository, DiskUsageRepository
 
 # (header label, initial width) per list column - index-aligned to the
 # columns as inserted into the wx.ListCtrl and to _SORT_KEYS below.
@@ -83,12 +84,24 @@ class ContainersDiskPage(wx.Panel):
     calculated" the first time you'd have to already know to click past.
     Each container's total streams in independently as soon as ITS mounts
     finish sizing, rather than waiting for the slowest one - see
-    _on_calculate."""
+    _on_calculate.
 
-    def __init__(self, parent: wx.Window, repository: DiskUsageRepository) -> None:
+    Info (or double-clicking/pressing Enter on a row) opens
+    `ContainerDetailsDialog` (`app/container_details_dialog.py`) for the
+    selected container - this page only ever loads `ContainerDiskUsage`
+    rows (identity + mounts), not a full `Container`, so it's opened
+    without an `initial` snapshot: the dialog fetches identity/live stats
+    itself from just the container id, exactly the reuse-from-just-an-id
+    case that dialog was built as its own component for."""
+
+    def __init__(
+        self, parent: wx.Window, repository: DiskUsageRepository, container_repository: ContainerRepository
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
+        self._container_repository = container_repository
         self._containers: List[ContainerDiskUsage] = []
+        self._visible: List[ContainerDiskUsage] = []
         self._pending_ids: Set[str] = set()
         # Tracked explicitly rather than read back off AsyncTaskRunner.is_busy()
         # - that flag doesn't clear until after on_done runs, i.e. after the
@@ -119,8 +132,10 @@ class ContainersDiskPage(wx.Panel):
         toolbar.AddStretchSpacer()
 
         self._refresh_btn = wx.Button(self, label="Refresh")
+        self._info_btn = wx.Button(self, label="Info")
         self._calculate_btn = wx.Button(self, label="Calculate")
         toolbar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
+        toolbar.Add(self._info_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._calculate_btn, 0)
 
         outer.Add(toolbar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
@@ -143,8 +158,16 @@ class ContainersDiskPage(wx.Panel):
         self._sort_ascending = False
 
         self._refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
+        self._info_btn.Bind(wx.EVT_BUTTON, self._on_info)
         self._calculate_btn.Bind(wx.EVT_BUTTON, self._on_calculate)
+        self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
+        self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
+        # Double-click (or Enter on a focused row) a container to jump
+        # straight to its details, same shortcut every other list page in
+        # this app gives its own rows - Info is still there on the toolbar
+        # for a single click.
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_info)
 
         self._update_column_headers()
         self._update_button_states()
@@ -303,12 +326,16 @@ class ContainersDiskPage(wx.Panel):
     # Rendering
     # ------------------------------------------------------------------
     def _populate_list(self) -> None:
+        selected = self._selected_container()
+        selected_id = selected.id if selected else None
+
         rows = list(self._containers)
         key_func = _disk_usage_sort_key if self._sort_column == 3 else None
         if key_func is not None:
             rows.sort(key=lambda c: key_func(c, self._pending_ids), reverse=not self._sort_ascending)
         else:
             rows.sort(key=self._text_sort_key, reverse=not self._sort_ascending)
+        self._visible = rows
 
         self._list.DeleteAllItems()
         for row, container in enumerate(rows):
@@ -317,6 +344,16 @@ class ContainersDiskPage(wx.Panel):
             self._list.SetItem(row, 2, container.image)
             self._list.SetItem(row, 3, _disk_usage_text(container, self._pending_ids))
             self._list.SetItem(row, 4, _storage_summary(container))
+            if selected_id and container.id == selected_id:
+                self._list.SetItemState(row, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
+
+        self._update_button_states()
+
+    def _selected_container(self) -> Optional[ContainerDiskUsage]:
+        index = self._list.GetFirstSelected()
+        if index == -1 or index >= len(self._visible):
+            return None
+        return self._visible[index]
 
     def _text_sort_key(self, container: ContainerDiskUsage):
         return [container.id, container.names.lower(), container.image.lower(), "", _storage_summary(container).lower()][
@@ -354,10 +391,20 @@ class ContainersDiskPage(wx.Panel):
             column_info.SetText(label)
             self._list.SetColumn(index, column_info)
 
-    def _update_button_states(self) -> None:
+    def _update_button_states(self, event: Optional[wx.ListEvent] = None) -> None:
         busy = self._loading or self._calculating
         self._refresh_btn.Enable(not busy)
+        self._info_btn.Enable(self._selected_container() is not None)
         self._calculate_btn.Enable(not busy and bool(self._containers))
 
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self.reload()
+
+    def _on_info(self, event: wx.Event) -> None:
+        # Bound to both the Info button (wx.CommandEvent) and double-click/
+        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) -
+        # neither branch below needs anything event-type-specific.
+        container = self._selected_container()
+        if container is None:
+            return
+        show_container_details(self, container.id, self._container_repository, self._repository)
