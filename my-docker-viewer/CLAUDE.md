@@ -316,11 +316,8 @@ something actually creates/removes one).
   - `NetworkRepository` needs no extra `docker inspect` call at all - every
     container's own `docker ps` row already reports a comma-separated
     `Networks` field, cheaper than a second bulk call.
-- **Volumes has no Size column.** `docker volume ls` always reports it as
-  `"N/A"` - real numbers need `docker system df -v`, which is text-only (no
-  `--format` support for the per-volume breakdown) and comparably expensive to
-  `DiskUsageRepository`'s `du`-helper-container approach. Left out rather than
-  bolted on cheaply-but-wrong; `Volume`'s docstring in `models.py` records why.
+- **Volumes' Size column is computed on demand, not read off `docker volume
+  ls`** - see the dedicated section below.
 - **Neither volumes nor networks have a `force` override for "in use".**
   `docker volume rm -f` / `docker network rm -f` only suppress a "no such
   volume/network" error - they do not override docker's refusal to remove
@@ -342,6 +339,67 @@ something actually creates/removes one).
   `NetworksPage` has no such checkbox at all - `docker network prune` has no
   `-a` flag, there's no dangling/anonymous-vs-everything distinction for
   networks to begin with.
+
+### Volumes' Size column - reuses Containers Disk's `du`-helper-container approach
+
+`docker volume ls` always reports size as `"N/A"` - real numbers need `docker
+system df -v`, which is text-only (no `--format` support for the per-volume
+breakdown) and comparably expensive to `DiskUsageRepository`'s
+`du`-helper-container approach anyway. So rather than bolt on something
+cheap-but-wrong, `VolumesPage` reuses that exact approach instead of
+reimplementing sizing in `VolumeRepository`:
+
+- `DiskUsageRepository.volume_usage_bytes(name)` is a thin wrapper around the
+  same `mount_usage_bytes()` the Containers Disk screen uses for a
+  container's volume mounts - it builds a synthetic `Mount(kind="volume",
+  identifier=name, destination="")` (a volume has no `destination`; that's a
+  per-*container* concept - where that container happens to mount it) and
+  gets the same measured, safety-checked `du`-via-disposable-helper-container
+  path for free, including its just-in-time `docker volume inspect` re-check
+  immediately before running `du` (so a volume removed mid-Calculate doesn't
+  get silently recreated empty by `docker run -v`).
+- **`VolumesPage` is constructed with both `VolumeRepository` *and*
+  `DiskUsageRepository`** (`frame.py` passes the same `DiskUsageRepository`
+  instance used by `ContainersDiskPage`) - the only page in this app wired to
+  two repositories, because sizing a volume and listing/removing/pruning
+  volumes are genuinely different concerns backed by different docker
+  commands.
+- **Sharing that one `DiskUsageRepository` instance also shares its
+  `MAX_CONCURRENT_DU_RUNS` semaphore** across both screens - running
+  Calculate on Containers Disk and Volumes at the same time still caps the
+  total number of simultaneous `du` helper containers, rather than each
+  screen getting its own independent cap that could double the load.
+- **Calculate is manual, never automatic, on this page** - unlike
+  `ContainersDiskPage`, which auto-runs Calculate once on first visit
+  (`on_shown`). Deliberately different: Containers Disk's job count is
+  bounded by how many containers you have, while a machine can easily have
+  dozens of volumes (95 on the machine this was built against) that have
+  nothing to do with any container the user is currently looking at -
+  silently kicking off that many disposable containers just because the user
+  opened the page would be a surprise this page's other columns don't
+  otherwise justify. Refresh still resets every row back to "Not calculated"
+  (fresh `Volume` objects from `VolumeRepository.list()` carry no size
+  state), same as Containers Disk's Refresh.
+- **Calculate sizes every *loaded* volume, not just the currently filtered/
+  visible ones** - so changing a filter mid-Calculate can't leave some rows
+  permanently stuck at "Not calculated", and the "Calculating... (n/total)"
+  progress readout stays honest against the real total.
+- Refresh/Remove/Prune and Calculate are mutually exclusive on this page -
+  `_update_button_states` disables Refresh/Remove/Prune while
+  `self._calculating` is true, and the reverse (`reload()`/`_on_remove`/
+  `_on_prune` all pass `self._calculate_btn` into their `AsyncTaskRunner`
+  `disable=[...]` list) - because a Calculate job holds a direct reference to
+  the very `Volume` objects a concurrent Refresh would replace wholesale.
+- Same streaming-per-item shape as `ContainersDiskPage._start_container_job`:
+  each volume is sized by its own independent `run_background` job (not
+  `AsyncTaskRunner`, which is single-flight) so the fastest volumes render
+  first instead of every row waiting on the slowest.
+- `app/formatting.py::format_bytes` (raw-byte-count → human string, e.g.
+  `1690624000` → `"1.7 GB"`) was extracted out of `containers_disk_page.py`
+  once `volumes_page.py` needed the same formatting for its own Size column -
+  both pages import it from there now, alongside the already-shared
+  `size_sort_key` (which parses the *other* direction: a docker-reported size
+  *string* into bytes, not a byte count we already hold into a string).
 
 ### Migrations (`app/db/migrations/*.sql`)
 

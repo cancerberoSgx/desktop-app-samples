@@ -31,3 +31,16 @@ def size_sort_key(text: Optional[str]) -> float:
     except ValueError:
         return -1.0
     return value * _SIZE_UNITS.get(unit.upper(), 1)
+
+
+def format_bytes(num_bytes: int) -> str:
+    """Human-friendly decimal size for a raw byte count *we* computed (via
+    `du`, never parsed from docker's own size strings - see `size_sort_key`
+    for that direction). Originally lived in containers_disk_page.py;
+    moved here once volumes_page.py needed the same formatting for its own
+    on-demand Size column."""
+    value = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1000 or unit == "TB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1000

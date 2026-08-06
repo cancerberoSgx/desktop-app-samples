@@ -696,6 +696,18 @@ class DiskUsageRepository:
         kilobytes = output.strip().split()[0]
         return int(kilobytes) * 1024
 
+    def volume_usage_bytes(self, volume_name: str) -> int:
+        """Sizes one named volume directly - the same measured,
+        safety-checked `du`-via-helper-container path as `mount_usage_bytes`
+        (including its just-in-time `docker volume inspect` re-check, so a
+        volume removed mid-Calculate doesn't get silently recreated by
+        `docker run -v`), for `VolumesPage`'s own Calculate button rather
+        than a container's mount. A volume has no `destination` (that's a
+        per-container concept - where *that container* mounts it), so the
+        synthetic `Mount` below only carries what `mount_usage_bytes`
+        actually reads: `kind` and `identifier`."""
+        return self.mount_usage_bytes(Mount(kind="volume", identifier=volume_name, destination=""))
+
     # ------------------------------------------------------------------
     def _identity(self) -> List[ContainerDiskUsage]:
         output = _run_docker(["ps", "-a", "--format", "{{json .}}"])

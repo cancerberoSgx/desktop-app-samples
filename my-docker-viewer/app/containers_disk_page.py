@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Set
 import wx
 
 from .async_task import AsyncTaskRunner, run_background
+from .formatting import format_bytes
 from .models import ContainerDiskUsage
 from .repositories import DiskUsageRepository
 
@@ -19,18 +20,6 @@ _COLUMNS = [
 _KIND_LABELS = {"volume": "volume", "bind": "bind mount", "tmpfs": "tmpfs"}
 
 
-def _format_bytes(num_bytes: int) -> str:
-    """Human-friendly decimal size (matches how most disk-usage tools read,
-    including this app's existing docker-ps-derived Size column) - always
-    computed from a raw byte count we control, never from `du`'s own
-    heuristics, so formatting stays consistent across mounts."""
-    value = float(num_bytes)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if value < 1000 or unit == "TB":
-            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1000
-
-
 def _disk_usage_text(container: ContainerDiskUsage, pending: Set[str]) -> str:
     if container.error is not None:
         return f"Error: {container.error}"
@@ -39,7 +28,7 @@ def _disk_usage_text(container: ContainerDiskUsage, pending: Set[str]) -> str:
     total = container.total_bytes
     if total is None:
         return "Not calculated"
-    return _format_bytes(total)
+    return format_bytes(total)
 
 
 def _storage_summary(container: ContainerDiskUsage) -> str:
@@ -340,7 +329,7 @@ class ContainersDiskPage(wx.Panel):
             return
         total = sum(c.total_bytes or 0 for c in self._containers)
         errored = sum(1 for c in self._containers if c.error is not None)
-        message = f"Total: {_format_bytes(total)} across {len(self._containers)} container(s)"
+        message = f"Total: {format_bytes(total)} across {len(self._containers)} container(s)"
         if errored:
             message += f" ({errored} could not be calculated)"
         self._total_text.SetLabel(message)

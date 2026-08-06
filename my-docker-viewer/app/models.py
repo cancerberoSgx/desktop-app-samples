@@ -121,11 +121,16 @@ class Volume:
     computed client-side (`VolumeRepository.list()`) from every container's
     own mounts, since `docker volume ls` itself doesn't report usage.
 
-    No size column: `docker volume ls` always reports it as `"N/A"` - real
-    numbers need `docker system df -v`, which is text-only (no `--format`
-    support for the per-volume breakdown) and comparably expensive to
-    `DiskUsageRepository`'s `du`-helper-container approach, so it's left out
-    of this screen for now rather than bolted on cheaply-but-wrong."""
+    `size_bytes` is `None` until computed - `docker volume ls` always
+    reports size as `"N/A"` (real numbers need `docker system df -v`, which
+    is text-only and doesn't break sizes out per volume anyway), so
+    `VolumesPage`'s Calculate button sizes it the same way
+    `DiskUsageRepository` sizes a container's volume mounts: a disposable
+    helper container running `du` against it. Comparably expensive to that
+    screen's Calculate (one throwaway container per volume), so it's
+    opt-in here too rather than run automatically on every load.
+    `size_error` carries why sizing failed for one volume (removed
+    mid-calculation, permission issue, ...) without blocking the rest."""
 
     name: str
     driver: str
@@ -133,6 +138,8 @@ class Volume:
     scope: str
     containers: int = 0
     container_names: List[str] = field(default_factory=list)
+    size_bytes: Optional[int] = None
+    size_error: Optional[str] = None
 
     @property
     def is_in_use(self) -> bool:

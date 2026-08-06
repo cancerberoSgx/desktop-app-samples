@@ -183,8 +183,12 @@ in "images" screen, when user removes an image, the confirmation modal should al
 
 p3
 in "volumes" main screen, add a column "size" which is calculated re-using the solution implemented for "containers disk" which is able to calculate disk space of different volumes
+
+p33
+in "volumes" main screen, there's a column with the container(s) id using the volume
+
+p5
+on the sidebar, the current screen must be highlighted
 ---
 
 
-
-on the sidebar, the current screen must be highlighted

@@ -56,7 +56,7 @@ class MainFrame(wx.Frame):
             self.book, self.image_repository, on_containers_changed=self.containers_page.reload
         )
         self.book.AddPage(self.images_page, "Images")
-        self.volumes_page = VolumesPage(self.book, self.volume_repository)
+        self.volumes_page = VolumesPage(self.book, self.volume_repository, self.disk_usage_repository)
         self.book.AddPage(self.volumes_page, "Volumes")
         self.networks_page = NetworksPage(self.book, self.network_repository)
         self.book.AddPage(self.networks_page, "Networks")
