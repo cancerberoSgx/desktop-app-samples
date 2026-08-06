@@ -1,5 +1,7 @@
 import re
-from typing import Optional
+from typing import Optional, Set
+
+from .models import Volume
 
 """Shared display/sort helpers used by more than one list page - split out
 of containers_page.py once ImagesPage needed the same size-string parsing,
@@ -44,3 +46,21 @@ def format_bytes(num_bytes: int) -> str:
         if value < 1000 or unit == "TB":
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1000
+
+
+def volume_size_text(volume: Volume, pending: Set[str]) -> str:
+    """Renders a Volume's on-demand Size state - "Not calculated" until
+    Calculate has run, "Calculating..." while `volume.name` is in
+    `pending`, the human-readable total once known, or the error if sizing
+    failed. Originally lived in volumes_page.py as its Size column
+    renderer; moved here once volume_details_dialog.py needed the exact
+    same state->text mapping for a single volume (pass `{volume.name}` as
+    `pending` while its own Calculate is running, or an empty set
+    otherwise)."""
+    if volume.size_error is not None:
+        return f"Error: {volume.size_error}"
+    if volume.name in pending:
+        return "Calculating..."
+    if volume.size_bytes is None:
+        return "Not calculated"
+    return format_bytes(volume.size_bytes)

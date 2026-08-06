@@ -193,7 +193,14 @@ class ContainerDetailsDialog(wx.Dialog):
             on_success=self._on_identity_loaded,
             on_error=self._on_identity_error,
             on_done=on_done,
-            disable=[self._refresh_btn],
+            # Deliberately no `disable=[self._refresh_btn]` here: our own
+            # on_done above already re-derives the button's correct state
+            # via _update_button_states() (including "stay disabled, the
+            # container is gone"). AsyncTaskRunner's `disable` bookkeeping
+            # unconditionally re-enables its widgets right after on_done
+            # runs, which would silently undo that - see the "container no
+            # longer exists" case: _gone becomes True, on_done disables
+            # Refresh correctly, and then `disable=` would flip it back on.
         )
 
     def _on_identity_loaded(self, container: Optional[Container]) -> None:

@@ -431,6 +431,44 @@ class VolumeRepository:
                         volume.image_names.append(image)
         return sorted(volumes.values(), key=lambda v: v.name.lower())
 
+    def get(self, name: str) -> Optional[Volume]:
+        """Scoped single-volume refetch - e.g. VolumeDetailsDialog's
+        Refresh button - rather than re-running the full `list()` and
+        filtering. Cheaper too, and by a different route than `list()`'s
+        own bulk cross-reference: `docker volume inspect` gives identity
+        directly, and `docker ps --filter volume=<name>` asks docker for
+        exactly the containers that mount this one volume, rather than
+        bulk-inspecting every container's mounts to work that out - the
+        bulk approach `list()` needs only pays off when it's answering this
+        for every volume at once. Returns `None` if the volume no longer
+        exists (removed since the caller last saw it)."""
+        try:
+            output = self._run(["volume", "inspect", name, "--format", "{{json .}}"])
+        except DockerCommandError:
+            return None
+        line = next((line.strip() for line in output.splitlines() if line.strip()), None)
+        if line is None:
+            return None
+        data = json.loads(line)
+        volume = Volume(
+            name=data.get("Name", ""),
+            driver=data.get("Driver", ""),
+            mountpoint=data.get("Mountpoint", ""),
+            scope=data.get("Scope", ""),
+        )
+        ps_output = self._run(["ps", "-a", "--filter", f"volume={name}", "--format", "{{json .}}"])
+        for ps_line in ps_output.splitlines():
+            ps_line = ps_line.strip()
+            if not ps_line:
+                continue
+            row = json.loads(ps_line)
+            volume.containers += 1
+            volume.container_names.append(row.get("Names", ""))
+            image = row.get("Image", "")
+            if image and image not in volume.image_names:
+                volume.image_names.append(image)
+        return volume
+
     def remove(self, name: str) -> None:
         # No force override exists here for "volume is in use" - `-f` only
         # suppresses a "no such volume" error, so it's not passed at all;

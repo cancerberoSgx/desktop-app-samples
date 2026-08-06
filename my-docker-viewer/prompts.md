@@ -215,6 +215,7 @@ in containers details screen, the disk usage doesn't work. The "Calculate" butto
 p4
 in containers details screen now disk usage works, but I want to: 1: auto-calculate. Display the "loading" and disck usage value at the left of button "Calculate". 
 
+
 # side bar clean up and MIT license
 
 Remove the "About" option from the sidebar
@@ -224,3 +225,31 @@ Author: Sebastián Gurin (cancerberoSgx)
 License: MIT
 Home: https://github.com/cancerberoSgx/desktop-app-samples
 Also make sure this project source code contains a license/copying file with the MIT license
+
+
+# volume details
+
+in the volumes screen, if I double click or click a new "info" action button, a volume-details screen is displayed.  This screen will detail everything relevant data of an existing volume, including total volume's disk space used using the same implementation already existing in "volumes" table "size" column.
+
+Put the volume details code in a separate reusable component since we will be calling it from different places of the app.
+
+in the volumes screen table, make the columns "name" and "mountpoint" to occupy less horizontal space, just like Driver. 
+
+
+
+
+two similar tasks:
+
+# image details
+
+in the images screen, if I double click a row or click a new "info" action button, a image-details screen is displayed.  This screen will detail everything relevant data of an existing image
+
+Put the image details code in a separate reusable component since we will be calling it from different places of the app.
+
+# network details
+
+in the networks screen, if I double click a row or click a new "info" action button, a network-details screen is displayed.  This screen will detail everything relevant data of an existing network
+
+Put the network details code in a separate reusable component since we will be calling it from different places of the app.
+
+In the sidebar, add a relevant icon to the "network" option

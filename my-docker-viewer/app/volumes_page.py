@@ -3,9 +3,10 @@ from typing import List, Optional, Set
 import wx
 
 from .async_task import AsyncTaskRunner, run_background
-from .formatting import format_bytes
+from .formatting import volume_size_text
 from .models import Volume
 from .repositories import DiskUsageRepository, VolumeRepository
+from .volume_details_dialog import show_volume_details
 
 STATUS_CHOICES = ["All", "In use", "Unused"]
 
@@ -15,9 +16,9 @@ STATUS_CHOICES = ["All", "In use", "Unused"]
 # _sort_visible, its ordering depends on transient Calculate state
 # (pending/error), not just the Volume's own fields.
 _COLUMNS = [
-    ("Name", 260),
+    ("Name", 90),
     ("Driver", 90),
-    ("Mountpoint", 340),
+    ("Mountpoint", 90),
     ("Containers", 90),
     ("Used By", 220),
     ("Images", 220),
@@ -54,16 +55,6 @@ def _joined(names: List[str]) -> str:
     return f"{shown}, … +{remaining} more"
 
 
-def _size_text(volume: Volume, pending: Set[str]) -> str:
-    if volume.size_error is not None:
-        return f"Error: {volume.size_error}"
-    if volume.name in pending:
-        return "Calculating..."
-    if volume.size_bytes is None:
-        return "Not calculated"
-    return format_bytes(volume.size_bytes)
-
-
 def _size_sort_key(volume: Volume, pending: Set[str]) -> int:
     # Sorting must stay stable regardless of state: errored or
     # still-calculating rows sort lowest so a descending sort ("biggest
@@ -89,7 +80,16 @@ class VolumesPage(wx.Panel):
 
     No auto-refresh timer here either, same reasoning as ImagesPage: a
     volume list only changes when something actually creates/removes one,
-    not on a clock, so a manual Refresh is enough."""
+    not on a clock, so a manual Refresh is enough.
+
+    Info (or double-clicking/pressing Enter on a row) opens
+    `VolumeDetailsDialog` (`app/volume_details_dialog.py`) for the selected
+    volume - driver/mountpoint/scope, the full Used By/Images lists (not
+    truncated the way the table's own columns are), and its size, computed
+    the same on-demand way as this page's own Size column. That dialog is
+    its own reusable component precisely so other screens can open the same
+    view later from just a volume name, without needing a loaded `Volume`
+    row of their own."""
 
     def __init__(
         self, parent: wx.Window, repository: VolumeRepository, disk_usage_repository: DiskUsageRepository
@@ -135,10 +135,12 @@ class VolumesPage(wx.Panel):
         toolbar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 
         self._refresh_btn = wx.Button(self, label="Refresh")
+        self._info_btn = wx.Button(self, label="Info")
         self._calculate_btn = wx.Button(self, label="Calculate")
         self._remove_btn = wx.Button(self, label="Remove")
         self._prune_btn = wx.Button(self, label="Prune unused")
         toolbar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
+        toolbar.Add(self._info_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._calculate_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._remove_btn, 0, wx.RIGHT, 8)
         toolbar.Add(self._prune_btn, 0)
@@ -162,12 +164,17 @@ class VolumesPage(wx.Panel):
         self._name_filter.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_name_filter_cancel)
         self._status_choice.Bind(wx.EVT_CHOICE, self._on_filter_changed)
         self._refresh_btn.Bind(wx.EVT_BUTTON, self._on_refresh)
+        self._info_btn.Bind(wx.EVT_BUTTON, self._on_info)
         self._calculate_btn.Bind(wx.EVT_BUTTON, self._on_calculate)
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
         self._prune_btn.Bind(wx.EVT_BUTTON, self._on_prune)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
+        # Double-click (or Enter on a focused row) a volume to jump straight
+        # to its details, same shortcut ContainersPage gives its own rows -
+        # Info is still there on the toolbar for a single click.
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_info)
 
         self._update_button_states(None)
         self._update_column_headers()
@@ -314,7 +321,7 @@ class VolumesPage(wx.Panel):
             self._list.SetItem(row, 4, _joined(volume.container_names))
             self._list.SetItem(row, 5, _joined(volume.image_names))
             self._list.SetItem(row, 6, volume.status)
-            self._list.SetItem(row, 7, _size_text(volume, self._pending_names))
+            self._list.SetItem(row, 7, volume_size_text(volume, self._pending_names))
             if selected_name and volume.name == selected_name:
                 self._list.SetItemState(row, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
 
@@ -363,6 +370,7 @@ class VolumesPage(wx.Panel):
         # holding a reference to the very Volume objects Refresh would
         # replace, or a container that's mid-removal from under it.
         self._refresh_btn.Enable(not self._calculating)
+        self._info_btn.Enable(volume is not None)
         self._calculate_btn.Enable(not self._calculating and bool(self._volumes))
         self._remove_btn.Enable(volume is not None and not self._calculating)
         self._prune_btn.Enable(not self._calculating)
@@ -379,6 +387,17 @@ class VolumesPage(wx.Panel):
 
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self.reload()
+
+    def _on_info(self, event: wx.Event) -> None:
+        # Bound to both the Info button (wx.CommandEvent) and double-click/
+        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) -
+        # neither branch below needs anything event-type-specific.
+        volume = self._selected_volume()
+        if volume is None:
+            return
+        show_volume_details(
+            self, volume.name, self._repository, self._disk_usage_repository, initial=volume
+        )
 
     def _apply_removed(self, name: str) -> None:
         """Mirrors ImagesPage._apply_removed - drop the volume from the
