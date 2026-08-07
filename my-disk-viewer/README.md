@@ -82,3 +82,12 @@ Use **Reload** to compute disk usage for the open folder - it's never automatic
 (even the first time), since it means running `du` against every immediate
 subdirectory. The **Chart** tab shows the same data as the table as a pie, toggled
 between "by subfolder/file" and "by file type" (recursive, by extension).
+
+## Installing on Arch Linux (AUR)
+
+There's an `aur/PKGBUILD` in this directory that installs `mydiskviewer` as a
+normal, dynamically-linked Arch package (`python` + `python-wxpython` from
+the official repos, nothing bundled) - lighter on disk and memory than a
+PyInstaller build, since it shares the system's already-installed
+Python/wxWidgets instead of vendoring a private copy of each. See `/AUR.md`
+at the repo root for how to test it locally and publish it to AUR.

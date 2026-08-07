@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=My Docker Viewer
+Comment=Admin containers, images, volumes and networks via the docker CLI
+Exec=mydockerviewer
+Terminal=false
+Categories=Utility;System;

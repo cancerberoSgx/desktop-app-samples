@@ -1,0 +1,53 @@
+# Maintainer: Sebastián Gurin (cancerberoSgx) <sebastian@devaiq.com>
+
+# VCS (-git) package: builds my-disk-viewer straight from this monorepo's
+# main branch. There are no per-app release tags (yet), and Arch's own
+# package manager already guarantees python/wxWidgets are on the target
+# system, so there is nothing to bundle - unlike the PyInstaller builds in
+# .github/workflows/my-data-viewer-build.yml (my-disk-viewer shares that
+# workflow's pattern), which target non-Arch Linux (and Windows/macOS) and
+# so vendor a private copy of everything. See /AUR.md at the repo root for
+# the full local-test/publish workflow.
+
+pkgname=my-disk-viewer-git
+pkgver=r1.0000000
+pkgrel=1
+pkgdesc="Native wxWidgets desktop viewer for recursive disk usage - see which subfolders and file types are eating the most space"
+arch=('any')
+url="https://github.com/cancerberoSgx/desktop-app-samples"
+license=('MIT')
+depends=('python' 'python-wxpython')
+makedepends=('git')
+provides=('my-disk-viewer' 'mydiskviewer')
+conflicts=('my-disk-viewer' 'mydiskviewer')
+source=("$pkgname::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main")
+sha256sums=('SKIP')
+
+_pkgsubdir=my-disk-viewer
+_bin=mydiskviewer
+
+pkgver() {
+  cd "$pkgname"
+  # Whole-repo commit count (not just this app's subtree) so the version
+  # always increases even across history that touches other apps only.
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  local _src="$srcdir/$pkgname/$_pkgsubdir"
+  local _appdir="$pkgdir/usr/lib/$_bin"
+
+  # Vendor main.py + app/ under /usr/lib/<bin>/, not into Python's shared
+  # site-packages: every one of these apps has its own top-level `app`
+  # package (see app/frame.py etc.) - installing them all as global `app`
+  # modules would collide. The launcher script below points PYTHONPATH at
+  # this private directory instead, same effect as a venv without the venv.
+  install -d "$_appdir"
+  cp "$_src/main.py" "$_appdir/main.py"
+  cp -r "$_src/app" "$_appdir/app"
+  find "$_appdir" -name '__pycache__' -type d -exec rm -rf {} +
+
+  install -Dm755 "$_src/aur/$_bin.sh" "$pkgdir/usr/bin/$_bin"
+  install -Dm644 "$_src/aur/$_bin.desktop" "$pkgdir/usr/share/applications/$_bin.desktop"
+  install -Dm644 "$_src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=My Disk Viewer
+Comment=Visualize recursive disk usage by folder and file type
+Exec=mydiskviewer %f
+Terminal=false
+Categories=Utility;System;FileTools;
+# main.py opens straight into the given folder when passed one argument
+# (see main.py) - lets a file manager's "Open With" pass a directory here.
+MimeType=inode/directory;

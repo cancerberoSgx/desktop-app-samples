@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=My Data Viewer
+Comment=Browse CSV/JSON files and databases; run SQL against them
+Exec=mydataviewer
+Terminal=false
+Categories=Utility;Development;Database;

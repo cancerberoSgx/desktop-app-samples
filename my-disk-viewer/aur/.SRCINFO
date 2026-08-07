@@ -1,0 +1,18 @@
+pkgbase = my-disk-viewer-git
+	pkgdesc = Native wxWidgets desktop viewer for recursive disk usage - see which subfolders and file types are eating the most space
+	pkgver = r1.0000000
+	pkgrel = 1
+	url = https://github.com/cancerberoSgx/desktop-app-samples
+	arch = any
+	license = MIT
+	makedepends = git
+	depends = python
+	depends = python-wxpython
+	provides = my-disk-viewer
+	provides = mydiskviewer
+	conflicts = my-disk-viewer
+	conflicts = mydiskviewer
+	source = my-disk-viewer-git::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main
+	sha256sums = SKIP
+
+pkgname = my-disk-viewer-git

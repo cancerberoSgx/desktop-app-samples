@@ -1,0 +1,19 @@
+pkgbase = my-redis-viewer-git
+	pkgdesc = Native wxWidgets desktop app for managing and testing Redis connection profiles
+	pkgver = r1.0000000
+	pkgrel = 1
+	url = https://github.com/cancerberoSgx/desktop-app-samples
+	arch = any
+	license = MIT
+	makedepends = git
+	depends = python
+	depends = python-wxpython
+	depends = python-redis
+	provides = my-redis-viewer
+	provides = myredisviewer
+	conflicts = my-redis-viewer
+	conflicts = myredisviewer
+	source = my-redis-viewer-git::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main
+	sha256sums = SKIP
+
+pkgname = my-redis-viewer-git

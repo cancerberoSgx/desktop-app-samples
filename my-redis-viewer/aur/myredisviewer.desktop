@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=My Redis Viewer
+Comment=Manage and test Redis connection profiles
+Exec=myredisviewer
+Terminal=false
+Categories=Utility;Development;Database;

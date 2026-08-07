@@ -78,6 +78,15 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
+## Installing on Arch Linux (AUR)
+
+There's an `aur/PKGBUILD` in this directory that installs `mydockerviewer` as
+a normal, dynamically-linked Arch package (`python` + `python-wxpython` from
+the official repos, nothing bundled) - much lighter than the PyInstaller
+build below, since it shares the system's already-installed Python/wxWidgets
+instead of vendoring a private copy of each. See `/AUR.md` at the repo root
+for how to test it locally and publish it to AUR.
+
 ## Building standalone executables
 
 Standalone executables are built with [PyInstaller](https://pyinstaller.org).

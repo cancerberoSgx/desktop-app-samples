@@ -1,0 +1,19 @@
+pkgbase = my-docker-viewer-git
+	pkgdesc = Native wxWidgets desktop viewer for Docker containers, images, volumes and networks (shells out to the docker CLI - no Docker SDK/Engine API dependency)
+	pkgver = r1.0000000
+	pkgrel = 1
+	url = https://github.com/cancerberoSgx/desktop-app-samples
+	arch = any
+	license = MIT
+	makedepends = git
+	depends = python
+	depends = python-wxpython
+	optdepends = docker: connect to a local Docker daemon - every operation shells out to the docker CLI
+	provides = my-docker-viewer
+	provides = mydockerviewer
+	conflicts = my-docker-viewer
+	conflicts = mydockerviewer
+	source = my-docker-viewer-git::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main
+	sha256sums = SKIP
+
+pkgname = my-docker-viewer-git
