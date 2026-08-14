@@ -267,6 +267,8 @@ Add support for sqlite datasource so user can load sqlite database file
 p2
 both after creating sqlite datasource from a small local db local file or after selecting a table for inspecting, the window is frozen. Do you know if in this project there exist a pattern or technique to prevent UI freeze when executing long tasks ? 
 p3 FUTURE
+question: (don't write any code) : sqlite datasource implementation feels very slow. Is there anything we can do to get it fast still using sqlialchemy ? or should we use another driver like python's native sqlite ? 
+
 too slow - why? can't we use a faster implementation like python's sqlite native driver ? 
 
 
@@ -277,9 +279,13 @@ make the sidebar collapsible to save space. Also remember this in user's prefere
  in this particular project I would like to control some actions that can take a long time like exporting or executing complex
   queries. When they execute users need to see the task status (running, finished, canceled) and be able to cancel them. Or very simplifying, being able to see that there's a task currently running - no other tasks can be executed until that finish but without freezing the UI. Also being able to cancel it. Do you think the current suggestion of using the app/async_task.py facade will work for this case ? Or should we implement ssomething else ? 
 p2
-ok now the app never freezes but, good, I would like to ALWAYS see the "Running: X" on any action against the database. For example when inspecting Tables it takes some seconds to display the information and user don't know what's happening. Make sure every operation on a datasource displays the "Running" feedback. By default there's no need to implement "Cancel" button - only for the actions already implemented (run script, export actions, etc)
+ok now the app never freezes but, good, I would like to ALWAYS see the "Running: X" and "Cancel" buttons on any action against the database. For example when inspecting Tables it takes some seconds to display the information and user don't know what's happening. Make sure every operation on a datasource displays the "Running" feedback and cancel button.
+ok but now i have the pro  
 
-
+# table mem cache
+each time I select a table in Tables view, these actions are always executed loading table, loading columns, loading data in serial which is very slow. Let's cache Datasource's tables, columns and indexes in memory and there's a "reload" at the right of the bar where the datasource name is displayed
+p2
+now I see table data is being cached and displayed fast but nevertheless the calls to "Loading" and "Querying" are still being made in background. Since we now have a refresh button, prevent hitting the DB if the table data is already in cache when clicking tables
 
 # FUTURE
 

@@ -3,14 +3,16 @@ from typing import Any, Callable, List, Optional
 
 import wx.lib.delayedresult as delayedresult
 
-"""App-wide coordinator for long, deliberately-triggered, cancelable actions
-- currently: exporting to Parquet (ActionsTab) and running a SQL script/
-statement (ScriptsTab). One MainFrame-owned TaskManager backs the whole app,
-so "only one task at a time, visible everywhere, cancelable from anywhere"
-holds globally rather than per-page - unlike AsyncTaskRunner (app/
-async_task.py), which is the right tool for routine per-page background
-loads (list tables/columns, test_connection, ...) that don't need a visible
-status or a cancel button.
+"""App-wide coordinator for any action that talks to a datasource - listing
+tables/columns/indexes, testing a connection, inferring csv/json column
+types, running a SQL script, exporting to Parquet, .... One MainFrame-owned
+TaskManager backs the whole app, so "only one task at a time, visible
+everywhere (the status bar's 'Running: <label>' + Cancel button), cancelable
+from anywhere" holds globally rather than per-page. AsyncTaskRunner (app/
+async_task.py) is still available for a future background load that
+genuinely doesn't need a visible status or cancel button, but nothing in
+this app currently qualifies - every datasource operation is user-visible
+and worth letting the user cancel.
 
 Cancellation is best-effort, not a guarantee: cancel() flips this task to
 CANCELING and invokes whatever `on_cancel_requested` was registered at

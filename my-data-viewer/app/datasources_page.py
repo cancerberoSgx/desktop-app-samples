@@ -2,10 +2,10 @@ from typing import Callable, List, Optional
 
 import wx
 
-from .async_task import AsyncTaskRunner
 from .datasources_dialog import DatasourceDialog
 from .models import DATASOURCE_TYPES, Datasource
 from .repositories import DatasourceRepository
+from .task_manager import TaskManager
 
 
 def _details_for(datasource: Datasource) -> str:
@@ -25,14 +25,15 @@ class DatasourcesPage(wx.Panel):
         parent: wx.Window,
         repository: DatasourceRepository,
         profile_id: int,
+        task_manager: TaskManager,
         on_connected: Callable[[Datasource], None],
     ) -> None:
         super().__init__(parent)
         self._repository = repository
         self._profile_id = profile_id
+        self._task_manager = task_manager
         self._on_connected = on_connected
         self._datasources: List[Datasource] = []
-        self._async = AsyncTaskRunner(self)
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Datasources"), 0, wx.ALL, 12)
@@ -79,6 +80,7 @@ class DatasourcesPage(wx.Panel):
         self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_connect)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
+        self._task_manager.subscribe(lambda status, label: self._update_button_states(None))
 
         self.reload()
 
@@ -111,9 +113,12 @@ class DatasourcesPage(wx.Panel):
 
     def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
         has_selection = self._selected_datasource() is not None
+        # Connect is also gated on the app-wide TaskManager, not just this
+        # page's own state - only one task (this connection attempt, an
+        # export, a running script, ...) may run at a time anywhere in the app.
         self._edit_btn.Enable(has_selection)
         self._delete_btn.Enable(has_selection)
-        self._connect_btn.Enable(has_selection)
+        self._connect_btn.Enable(has_selection and not self._task_manager.is_busy())
 
     def _on_filter_changed(self, event: wx.CommandEvent) -> None:
         self.reload()
@@ -126,7 +131,9 @@ class DatasourcesPage(wx.Panel):
         self._show_new_dialog()
 
     def _show_new_dialog(self, initial_file_path: Optional[str] = None, initial_type: Optional[str] = None) -> None:
-        dlg = DatasourceDialog(self, initial_file_path=initial_file_path, initial_type=initial_type)
+        dlg = DatasourceDialog(
+            self, self._task_manager, initial_file_path=initial_file_path, initial_type=initial_type
+        )
         if dlg.ShowModal() == wx.ID_OK:
             datasource = dlg.get_datasource()
             datasource.profile_id = self._profile_id
@@ -151,7 +158,7 @@ class DatasourcesPage(wx.Panel):
         if datasource is None:
             return
         fields = self._repository.list_fields(datasource.id) if datasource.type in ("csv", "json") else []
-        dlg = DatasourceDialog(self, datasource, fields=fields)
+        dlg = DatasourceDialog(self, self._task_manager, datasource, fields=fields)
         if dlg.ShowModal() == wx.ID_OK:
             self._repository.update(dlg.get_datasource())
             self.reload()
@@ -186,9 +193,22 @@ class DatasourcesPage(wx.Panel):
                 self,
             )
 
-        self._async.run(
+        started = self._task_manager.start(
+            label=f"Connecting to {datasource.name}",
             work=lambda: self._repository.test_connection(datasource),
-            on_success=lambda _: self._on_connected(datasource),
+            # Deferred via CallAfter: on_connected (DataExplorePage.load_datasource)
+            # itself starts another task (loading tables) - TaskManager only
+            # resets back to IDLE right after this callback returns, so
+            # calling it synchronously here would find the manager still
+            # marked busy with this "Connecting..." task and silently do
+            # nothing.
+            on_success=lambda _: wx.CallAfter(self._on_connected, datasource),
             on_error=on_error,
-            disable=[self._connect_btn],
         )
+        if not started:
+            wx.MessageBox(
+                "Another task is already running - wait for it to finish or cancel it first.",
+                "Connect",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )

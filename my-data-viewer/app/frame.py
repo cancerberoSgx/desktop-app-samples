@@ -177,6 +177,7 @@ class MainFrame(wx.Frame):
             self.book,
             self.datasource_repository,
             self.active_profile_id,
+            self.task_manager,
             on_connected=self._on_datasource_connected,
         )
         self.book.AddPage(self.profiles_page, "Profiles")
@@ -262,7 +263,11 @@ class MainFrame(wx.Frame):
     # Datasource connect / Data Explore navigation
     # ------------------------------------------------------------------
     def _on_datasource_connected(self, datasource: Datasource) -> None:
-        self.data_explore_page.load_datasource(datasource)
+        # Deferred via CallAfter: this fires from inside the Connect button's
+        # own TaskManager callback (test_connection), before TaskManager has
+        # reset itself back to IDLE - load_datasource's own task_manager.start()
+        # call (list_tables) would find it still marked busy and be ignored.
+        wx.CallAfter(self.data_explore_page.load_datasource, datasource)
         self.book.ChangeSelection(self.data_explore_page_index)
         self.settings_repository.set_last_datasource_id(datasource.id)
         self._set_idle_status(f"Connected to: {datasource.name}")

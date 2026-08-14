@@ -181,11 +181,9 @@ class DatasourceRepository:
         return drivers.get_driver(datasource, column_types=column_types)
 
     def list_tables(self, datasource: Datasource) -> List[str]:
-        sleep(2)
         return self._driver_for(datasource).list_tables()
 
     def list_columns(self, datasource: Datasource, table: str) -> List[ColumnInfo]:
-        sleep(2)
         return self._driver_for(datasource).list_columns(table)
 
     def list_indexes(self, datasource: Datasource, table: str) -> List[IndexInfo]:
@@ -201,7 +199,6 @@ class DatasourceRepository:
         params: Optional[list] = None,
         cancel_token: Optional["drivers.CancelToken"] = None,
     ) -> QueryResult:
-        sleep(2)
         return self._driver_for(datasource).execute_sql(sql, params, cancel_token=cancel_token)
 
     # ------------------------------------------------------------------

@@ -5,8 +5,8 @@ import wx
 import wx.grid
 
 from . import drivers
-from .async_task import AsyncTaskRunner
 from .models import DATASOURCE_TYPES, Datasource, DatasourceField
+from .task_manager import TaskManager
 
 # Config for the two file-based datasource types ("csv", "json"), which share
 # an (almost) identical dialog panel: a file picker, a name auto-filled from
@@ -34,6 +34,7 @@ class DatasourceDialog(wx.Dialog):
     def __init__(
         self,
         parent: wx.Window,
+        task_manager: TaskManager,
         datasource: Optional[Datasource] = None,
         fields: Optional[List[DatasourceField]] = None,
         initial_file_path: Optional[str] = None,
@@ -44,7 +45,7 @@ class DatasourceDialog(wx.Dialog):
         self._datasource = datasource
         self._result = None
         self._initial_fields = fields or []
-        self._async = AsyncTaskRunner(self)
+        self._task_manager = task_manager
         # Only meaningful when `datasource` is None (e.g. a file dropped onto
         # the app that doesn't match any existing datasource yet) - prefills
         # the file picker/type for a still-to-be-created record.
@@ -177,13 +178,17 @@ class DatasourceDialog(wx.Dialog):
             wx.MessageBox(f"Pick a {kind.upper()} file first.", "Infer types", wx.OK | wx.ICON_WARNING, self)
             return
 
+        infer_btn = self._infer_btns[kind]
+
         def on_success(columns) -> None:
+            infer_btn.Enable(True)
             self._set_grid_fields(
                 self._fields_grids[kind],
                 [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)],
             )
 
         def on_error(exc: Exception) -> None:
+            infer_btn.Enable(True)
             wx.MessageBox(
                 f"Could not infer types from this {kind.upper()} file:\n\n{exc}",
                 "Infer types",
@@ -191,12 +196,21 @@ class DatasourceDialog(wx.Dialog):
                 self,
             )
 
-        self._async.run(
+        started = self._task_manager.start(
+            label=f"Inferring types: {os.path.basename(file_path)}",
             work=lambda: _FILE_KINDS[kind]["infer"](file_path),
             on_success=on_success,
             on_error=on_error,
-            disable=[self._infer_btns[kind]],
         )
+        if not started:
+            wx.MessageBox(
+                "Another task is already running - wait for it to finish or cancel it first.",
+                "Infer types",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+        infer_btn.Enable(False)
 
     def _build_sqlite_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
         """SQLite is file-based like csv/json, but - unlike them - the file

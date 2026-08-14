@@ -6,7 +6,6 @@ import wx
 import wx.grid
 import wx.stc as stc
 
-from .async_task import AsyncTaskRunner
 from .drivers import CancelToken
 from .models import ColumnInfo, Datasource, IndexInfo, QueryResult, Script
 from .repositories import DatasourceRepository, ScriptRepository
@@ -15,6 +14,80 @@ from .task_manager import TaskManager
 
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
+
+
+class TableMetadataCache:
+    """In-memory cache of a datasource's table list, each table's
+    columns/indexes, and each table's *default* Data-tab view (page 0, no
+    filter, no sort - exactly what selecting a table first shows). Selecting
+    a table used to always run list_columns + list_indexes + a COUNT/SELECT
+    in serial, even for a table already looked at this session; each of
+    those is a real driver round-trip (throttled with a deliberate sleep(2)
+    for csv/json/sqlite/postgres alike in DatasourceRepository), so
+    re-selecting the same table was slow every single time - and, since a
+    "Reload" button now exists as the explicit way to force a re-fetch,
+    there's no reason to keep silently re-hitting the DB in the background
+    just because a table was clicked again.
+
+    Interactive changes within a table - sort, filter, pagination - always
+    query live and never touch this cache: only the exact default view
+    `DataTab.load()` produces is cached/served (see its `cache_result` param
+    on `_reload_data`), since those are the same query being asked again;
+    anything else is a genuinely different query the user is actively
+    requesting.
+
+    Keyed by datasource id (tables) or (datasource id, table)
+    (columns/indexes/data), so different datasources - or the same
+    datasource reconnected to after edits - don't bleed into each other
+    except via an explicit invalidate(). Owned by DataExplorePage for the
+    page's lifetime, so it also survives switching away to another
+    datasource and back within the same session; the "Reload" button next
+    to the datasource name calls invalidate() to force a fresh fetch when
+    the user knows the underlying schema or data changed."""
+
+    def __init__(self) -> None:
+        self._tables: Dict[int, List[str]] = {}
+        self._columns: Dict[Tuple[int, str], List[ColumnInfo]] = {}
+        self._indexes: Dict[Tuple[int, str], List[IndexInfo]] = {}
+        self._data: Dict[Tuple[int, str], Tuple[int, QueryResult]] = {}
+
+    def get_tables(self, datasource: Datasource) -> Optional[List[str]]:
+        return self._tables.get(datasource.id)
+
+    def set_tables(self, datasource: Datasource, tables: List[str]) -> None:
+        self._tables[datasource.id] = tables
+
+    def get_columns(self, datasource: Datasource, table: str) -> Optional[List[ColumnInfo]]:
+        return self._columns.get((datasource.id, table))
+
+    def set_columns(self, datasource: Datasource, table: str, columns: List[ColumnInfo]) -> None:
+        self._columns[(datasource.id, table)] = columns
+
+    def get_indexes(self, datasource: Datasource, table: str) -> Optional[List[IndexInfo]]:
+        return self._indexes.get((datasource.id, table))
+
+    def set_indexes(self, datasource: Datasource, table: str, indexes: List[IndexInfo]) -> None:
+        self._indexes[(datasource.id, table)] = indexes
+
+    def get_data(self, datasource: Datasource, table: str) -> Optional[Tuple[int, QueryResult]]:
+        """Returns (total_records, QueryResult) for `table`'s default view,
+        or None if it hasn't been loaded (or was invalidated) this session."""
+        return self._data.get((datasource.id, table))
+
+    def set_data(self, datasource: Datasource, table: str, total_records: int, result: QueryResult) -> None:
+        self._data[(datasource.id, table)] = (total_records, result)
+
+    def invalidate(self, datasource: Datasource) -> None:
+        """Drop every cached entry for `datasource` - its table list and
+        every table's columns/indexes/default-view data - so the next load
+        re-fetches everything from scratch."""
+        self._tables.pop(datasource.id, None)
+        for key in [k for k in self._columns if k[0] == datasource.id]:
+            del self._columns[key]
+        for key in [k for k in self._indexes if k[0] == datasource.id]:
+            del self._indexes[key]
+        for key in [k for k in self._data if k[0] == datasource.id]:
+            del self._data[key]
 
 
 @dataclass
@@ -365,10 +438,17 @@ class DataTab(wx.Panel):
 
     DEFAULT_PAGE_SIZE = 50
 
-    def __init__(self, parent: wx.Window, repository: DatasourceRepository) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        repository: DatasourceRepository,
+        task_manager: TaskManager,
+        cache: TableMetadataCache,
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
-        self._async = AsyncTaskRunner(self)
+        self._task_manager = task_manager
+        self._cache = cache
         self._datasource: Optional[Datasource] = None
         self._table: Optional[str] = None
         self._columns: List[str] = []
@@ -435,25 +515,49 @@ class DataTab(wx.Panel):
         self._page = 0
         self._page_size = self.DEFAULT_PAGE_SIZE
 
+        cached_columns = self._cache.get_columns(datasource, table)
+        cached_data = self._cache.get_data(datasource, table)
+        if cached_columns is not None and cached_data is not None:
+            # Both this table's schema AND its default view are cached - no
+            # driver round-trip at all, not even a "Querying" task.
+            self._apply_columns(cached_columns)
+            total_records, result = cached_data
+            self._apply_data(total_records, result, autosize=True)
+            return
+
+        if cached_columns is not None:
+            self._apply_columns(cached_columns)
+            self._reload_data(autosize=True, cache_result=True)
+            return
+
         def on_success(columns: List[ColumnInfo]) -> None:
             if datasource is not self._datasource or table != self._table:
                 return  # a different table was selected before this came back
-            self._columns = [c.name for c in columns]
-            self._filter_col_choice.Set(self._columns)
-            if self._columns:
-                self._filter_col_choice.SetSelection(0)
-            self._grid.set_columns(self._columns)
-            # Deferred via CallAfter: this callback runs from inside
-            # self._async's own consumer, which only marks the runner free
-            # again right after returning - calling self._async.run()
-            # (_reload_data, below) synchronously here would find it still
-            # marked busy and be silently ignored.
-            wx.CallAfter(self._reload_data, autosize=True)
+            self._cache.set_columns(datasource, table, columns)
+            self._apply_columns(columns)
+            # Deferred via CallAfter: this callback runs before TaskManager
+            # resets itself back to IDLE (that happens right after this
+            # returns) - calling _reload_data (which starts another task)
+            # synchronously here would find it still marked busy and be
+            # silently ignored.
+            wx.CallAfter(self._reload_data, autosize=True, cache_result=True)
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Could not load columns for \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
 
-        self._async.run(work=lambda: self._repository.list_columns(datasource, table), on_success=on_success, on_error=on_error)
+        self._task_manager.start(
+            label=f"Loading columns: {datasource.name}.{table}",
+            work=lambda: self._repository.list_columns(datasource, table),
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    def _apply_columns(self, columns: List[ColumnInfo]) -> None:
+        self._columns = [c.name for c in columns]
+        self._filter_col_choice.Set(self._columns)
+        if self._columns:
+            self._filter_col_choice.SetSelection(0)
+        self._grid.set_columns(self._columns)
 
     def clear(self) -> None:
         self._datasource = None
@@ -467,10 +571,24 @@ class DataTab(wx.Panel):
         self._top_pagination.update(0, self._page_size, 0)
         self._bottom_pagination.update(0, self._page_size, 0)
 
+    def _apply_data(self, total_records: int, result: QueryResult, autosize: bool = False) -> None:
+        self._total_records = total_records
+        self._grid.set_rows(result.rows)
+        if autosize:
+            self._grid.autosize_columns(self._columns, result.rows)
+        self._update_sort_indicators()
+        self._top_pagination.update(self._page, self._page_size, self._total_records)
+        self._bottom_pagination.update(self._page, self._page_size, self._total_records)
+
     # ------------------------------------------------------------------
     # Querying
     # ------------------------------------------------------------------
-    def _reload_data(self, autosize: bool = False) -> None:
+    def _reload_data(self, autosize: bool = False, cache_result: bool = False) -> None:
+        """`cache_result` is only ever True from `load()`'s first call for a
+        table (page 0, no filter/sort - the exact default view
+        TableMetadataCache stores) - sort/filter/pagination changes always
+        query live and leave the cache alone, since those are a genuinely
+        different query each time, not the same one being re-asked."""
         if self._datasource is None or self._table is None:
             return
 
@@ -482,10 +600,11 @@ class DataTab(wx.Panel):
         sort_ascending = self._sort_ascending
         page = self._page
         page_size = self._page_size
+        cancel_token = CancelToken()
 
         def work() -> Tuple[int, int, QueryResult]:
             count_result = self._repository.execute_sql(
-                datasource, f"SELECT COUNT(*) FROM {table_ident}{where_sql}", where_params
+                datasource, f"SELECT COUNT(*) FROM {table_ident}{where_sql}", where_params, cancel_token=cancel_token
             )
             total_records = int(count_result.rows[0][0]) if count_result.rows else 0
 
@@ -499,26 +618,30 @@ class DataTab(wx.Panel):
 
             offset = clamped_page * page_size
             query = f"SELECT * FROM {table_ident}{where_sql}{order_sql} LIMIT ? OFFSET ?"
-            result = self._repository.execute_sql(datasource, query, where_params + [page_size, offset])
+            result = self._repository.execute_sql(
+                datasource, query, where_params + [page_size, offset], cancel_token=cancel_token
+            )
             return total_records, clamped_page, result
 
         def on_success(payload: Tuple[int, int, QueryResult]) -> None:
             if datasource is not self._datasource or table != self._table:
                 return  # a different table was selected before this came back
             total_records, clamped_page, result = payload
-            self._total_records = total_records
             self._page = clamped_page
-            self._grid.set_rows(result.rows)
-            if autosize:
-                self._grid.autosize_columns(self._columns, result.rows)
-            self._update_sort_indicators()
-            self._top_pagination.update(self._page, self._page_size, self._total_records)
-            self._bottom_pagination.update(self._page, self._page_size, self._total_records)
+            if cache_result:
+                self._cache.set_data(datasource, table, total_records, result)
+            self._apply_data(total_records, result, autosize=autosize)
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Could not load data for \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
 
-        self._async.run(work=work, on_success=on_success, on_error=on_error)
+        self._task_manager.start(
+            label=f"Querying: {datasource.name}.{table}",
+            work=work,
+            on_success=on_success,
+            on_error=on_error,
+            on_cancel_requested=cancel_token.cancel,
+        )
 
     # ------------------------------------------------------------------
     # Sorting
@@ -608,14 +731,21 @@ class DataTab(wx.Panel):
 class TableDetailPanel(wx.Panel):
     """Fields / Data / Indexes tabs for whichever table is selected."""
 
-    def __init__(self, parent: wx.Window, repository: DatasourceRepository) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        repository: DatasourceRepository,
+        task_manager: TaskManager,
+        cache: TableMetadataCache,
+    ) -> None:
         super().__init__(parent)
         self._repository = repository
-        self._async = AsyncTaskRunner(self)
+        self._task_manager = task_manager
+        self._cache = cache
 
         notebook = wx.Notebook(self)
         self._fields_tab = FieldsTab(notebook)
-        self._data_tab = DataTab(notebook, repository)
+        self._data_tab = DataTab(notebook, repository, task_manager, cache)
         self._indexes_tab = IndexesTab(notebook)
         notebook.AddPage(self._fields_tab, "Fields")
         notebook.AddPage(self._data_tab, "Data")
@@ -628,16 +758,30 @@ class TableDetailPanel(wx.Panel):
     def load_table(self, datasource: Datasource, table: str) -> None:
         self.clear()
 
+        cached_columns = self._cache.get_columns(datasource, table)
+        cached_indexes = self._cache.get_indexes(datasource, table)
+        if cached_columns is not None and cached_indexes is not None:
+            self._fields_tab.load(cached_columns)
+            self._indexes_tab.load(cached_indexes)
+            self._data_tab.load(datasource, table)
+            return
+
         def on_success(payload: Tuple[List[ColumnInfo], List[IndexInfo]]) -> None:
             columns, indexes = payload
+            self._cache.set_columns(datasource, table, columns)
+            self._cache.set_indexes(datasource, table, indexes)
             self._fields_tab.load(columns)
             self._indexes_tab.load(indexes)
-            self._data_tab.load(datasource, table)
+            # Deferred via CallAfter - see DataTab.load's comment: TaskManager
+            # hasn't reset itself back to IDLE yet at this point in the
+            # callback, so calling it synchronously would be ignored.
+            wx.CallAfter(self._data_tab.load, datasource, table)
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Could not load table \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
 
-        self._async.run(
+        self._task_manager.start(
+            label=f"Loading table: {datasource.name}.{table}",
             work=lambda: (
                 self._repository.list_columns(datasource, table),
                 self._repository.list_indexes(datasource, table),
@@ -1358,8 +1502,9 @@ class DataExplorePage(wx.Panel):
     ) -> None:
         super().__init__(parent)
         self._repository = repository
-        self._async = AsyncTaskRunner(self)
+        self._task_manager = task_manager
         self._on_back = on_back
+        self._cache = TableMetadataCache()
         self._datasource: Optional[Datasource] = None
         self._tables: List[str] = []
 
@@ -1373,7 +1518,12 @@ class DataExplorePage(wx.Panel):
         font.MakeBold()
         self._title_label.SetFont(font)
         header.Add(self._title_label, 0, wx.ALIGN_CENTER_VERTICAL)
-        outer.Add(header, 0, wx.ALL, 12)
+        header.AddStretchSpacer()
+        self._reload_btn = wx.Button(self, label="Reload")
+        self._reload_btn.SetToolTip("Discard cached tables/columns/indexes and re-fetch them from the datasource")
+        self._reload_btn.Enable(False)
+        header.Add(self._reload_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+        outer.Add(header, 0, wx.EXPAND | wx.ALL, 12)
 
         self._notebook = notebook = wx.Notebook(self)
 
@@ -1386,7 +1536,7 @@ class DataExplorePage(wx.Panel):
         left.Add(self._tables_list, 1, wx.EXPAND)
         body.Add(left, 0, wx.EXPAND | wx.RIGHT, 12)
 
-        self._detail = TableDetailPanel(tables_panel, repository)
+        self._detail = TableDetailPanel(tables_panel, repository, task_manager, self._cache)
         body.Add(self._detail, 1, wx.EXPAND)
 
         tables_outer = wx.BoxSizer(wx.VERTICAL)
@@ -1404,31 +1554,52 @@ class DataExplorePage(wx.Panel):
         self.SetSizer(outer)
 
         self._back_btn.Bind(wx.EVT_BUTTON, lambda evt: self._on_back())
+        self._reload_btn.Bind(wx.EVT_BUTTON, self._on_reload)
         self._tables_list.Bind(wx.EVT_LISTBOX, self._on_table_selected)
+        self._task_manager.subscribe(lambda status, label: self._update_reload_button_state())
 
     def load_datasource(self, datasource: Datasource) -> None:
         self._datasource = datasource
         self._title_label.SetLabel(f"Data Explore — {datasource.name}")
         self._tables_list.Set([])
         self._detail.clear()
+        self._update_reload_button_state()
+
+        cached_tables = self._cache.get_tables(datasource)
+        if cached_tables is not None:
+            self._on_tables_loaded(datasource, cached_tables)
+            return
 
         def on_success(tables: List[str]) -> None:
             if datasource is not self._datasource:
                 return  # the user connected to a different datasource before this came back
-            self._tables = tables
-            self._tables_list.Set(self._tables)
-            if self._tables:
-                self._tables_list.SetSelection(0)
-                self._detail.load_table(datasource, self._tables[0])
-            self._scripts_tab.load_datasource(datasource, self._tables)
-            self._actions_tab.load_datasource(datasource)
+            self._cache.set_tables(datasource, tables)
+            # Deferred via CallAfter - see DataTab.load's comment:
+            # TaskManager hasn't reset itself back to IDLE yet at this point
+            # in the callback, and _on_tables_loaded may itself start
+            # another task (loading the first table) if it isn't cached.
+            wx.CallAfter(self._on_tables_loaded, datasource, tables)
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(
                 f'Could not load tables for "{datasource.name}":\n\n{exc}', "Load datasource", wx.OK | wx.ICON_ERROR, self
             )
 
-        self._async.run(work=lambda: self._repository.list_tables(datasource), on_success=on_success, on_error=on_error)
+        self._task_manager.start(
+            label=f"Loading tables: {datasource.name}",
+            work=lambda: self._repository.list_tables(datasource),
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    def _on_tables_loaded(self, datasource: Datasource, tables: List[str]) -> None:
+        self._tables = tables
+        self._tables_list.Set(self._tables)
+        if self._tables:
+            self._tables_list.SetSelection(0)
+            self._detail.load_table(datasource, self._tables[0])
+        self._scripts_tab.load_datasource(datasource, self._tables)
+        self._actions_tab.load_datasource(datasource)
 
     def _on_table_selected(self, event: wx.CommandEvent) -> None:
         if self._datasource is None:
@@ -1437,6 +1608,19 @@ class DataExplorePage(wx.Panel):
         if index == wx.NOT_FOUND:
             return
         self._detail.load_table(self._datasource, self._tables[index])
+
+    # ------------------------------------------------------------------
+    # Reload - discards this datasource's cached tables/columns/indexes
+    # (see TableMetadataCache) and re-fetches everything from scratch.
+    # ------------------------------------------------------------------
+    def _on_reload(self, event: wx.CommandEvent) -> None:
+        if self._datasource is None:
+            return
+        self._cache.invalidate(self._datasource)
+        self.load_datasource(self._datasource)
+
+    def _update_reload_button_state(self) -> None:
+        self._reload_btn.Enable(self._datasource is not None and not self._task_manager.is_busy())
 
     # ------------------------------------------------------------------
     # Unsaved scripts (used by MainFrame's exit confirmation)
