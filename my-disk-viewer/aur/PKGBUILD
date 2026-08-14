@@ -10,7 +10,7 @@
 # the full local-test/publish workflow.
 
 pkgname=my-disk-viewer-git
-pkgver=r1.0000000
+pkgver=r53.9e4f04a
 pkgrel=1
 pkgdesc="Native wxWidgets desktop viewer for recursive disk usage - see which subfolders and file types are eating the most space"
 arch=('any')

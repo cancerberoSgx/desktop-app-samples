@@ -36,6 +36,7 @@
       <span class="badge">wxPython</span>
       <span class="badge">DuckDB</span>
       <span class="badge">SQL editor</span>
+      <span class="badge">PostgreSQL</span>
       <span class="badge">Linux</span>
       <span class="badge">macOS</span>
       <span class="badge">Windows</span>
@@ -112,6 +113,36 @@
         <div class="caption">Export results or schema straight to Parquet</div>
       </div>
 
+      <!-- Replace with: <img src="media/postgres-datasource.png" alt="New Datasource dialog connecting to a PostgreSQL database"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">New Datasource dialog — connecting to PostgreSQL</div>
+          <div class="ph-file">media/postgres-datasource.png</div>
+        </div>
+        <div class="caption">CSV, JSON or a live PostgreSQL database</div>
+      </div>
+
+      <!-- Replace with: <img src="media/point-and-click.png" alt="Data tab with column sort and filter dropdowns, no SQL written"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Data tab — sort/filter by clicking, no SQL required</div>
+          <div class="ph-file">media/point-and-click.png</div>
+        </div>
+        <div class="caption">Browse and filter without writing a query</div>
+      </div>
+
+      <!-- Replace with: <img src="media/infer-types.png" alt="Infer types dialog showing detected column types before saving a datasource"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Infer types — review detected column types before saving</div>
+          <div class="ph-file">media/infer-types.png</div>
+        </div>
+        <div class="caption">Get column types right once, reuse them on every query</div>
+      </div>
+
     </div>
   </div>
 </section>
@@ -171,6 +202,45 @@
         <p>
           Group datasources into profiles so unrelated projects don't clutter
           each other's list — switch the active one from the Profiles screen.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Connect to PostgreSQL, not just files</h3>
+        <p>
+          Add a datasource backed by a live PostgreSQL database — via a
+          connection URL or individual host/port/user/password fields — and
+          get the exact same schema browser, SQL editor and Parquet export as
+          a CSV or JSON file.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Infer and lock in column types</h3>
+        <p>
+          "Infer types" sniffs a CSV/JSON file's columns and lets you review
+          or correct them in a grid before saving — those types are then
+          reused on every future query instead of being re-guessed each time.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Point-and-click browsing, no SQL required</h3>
+        <p>
+          The Data tab lets you sort by clicking a column header and add
+          <code>=</code>/<code>LIKE</code> filters per column from dropdowns,
+          paging through results — all pushed down into generated SQL
+          automatically, for whenever you don't want to write a query by hand.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Excel-like result grid</h3>
+        <p>
+          Click, Ctrl-click or Shift-click to select cells, whole rows or
+          whole columns, then Ctrl+C to copy the selection as
+          tab/newline-separated text — ready to paste straight into a
+          spreadsheet.
         </p>
       </div>
 

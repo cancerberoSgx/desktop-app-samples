@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>My Disk Viewer</title>
+<meta name="description" content="A lightweight desktop app that scans a folder and shows exactly what's eating your disk space — sortable table and pie chart, no background scanning, never deletes anything." />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  body { --accent: #f59e0b; }
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">Desktop Apps</a>
+    <nav>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-disk-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="eyebrow">wxPython &middot; Linux / macOS / Windows</div>
+    <h1>My Disk Viewer</h1>
+    <p class="tagline">
+      Point it at a folder and see real, on-disk usage — not just apparent
+      size — broken down by subfolder or by file type. Drill down with a
+      breadcrumb trail to find the exact thing worth deleting, then reveal it
+      in your file manager. It's strictly read-only: it never deletes
+      anything itself.
+    </p>
+
+    <div class="badges">
+      <span class="badge">wxPython</span>
+      <span class="badge">Real disk usage</span>
+      <span class="badge">Pie charts</span>
+      <span class="badge">Linux</span>
+      <span class="badge">macOS</span>
+      <span class="badge">Windows</span>
+    </div>
+
+    <!--
+      These point at the "mydiskviewer-latest" rolling release, republished
+      by .github/workflows/my-disk-viewer-build.yml on every manual run - the
+      URLs are permanent and never need editing here, even as new builds are
+      published. For version history, see releases tagged mydiskviewer-build.*
+      on the repo's Releases page.
+    -->
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydiskviewer-latest/mydiskviewer-linux.zip">⬇ Download for Linux</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydiskviewer-latest/mydiskviewer-macos.zip">⬇ Download for macOS</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydiskviewer-latest/mydiskviewer-windows.zip">⬇ Download for Windows</a>
+    </div>
+    <div class="downloads-note">Prebuilt binaries via GitHub Releases &middot; unzip and run, no install</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="section-sub">Open a folder, drill down the breadcrumb, watch a scan run, see the pie chart.</p>
+    <div class="gallery">
+
+      <!-- Replace with: <img src="media/hero.png" alt="Drill-down table of a scanned folder's disk usage in My Disk Viewer"> -->
+      <div class="shot wide">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Table view — breadcrumb, sorted columns, folder summary — main hero shot</div>
+          <div class="ph-file">media/hero.png</div>
+        </div>
+      </div>
+
+      <!-- Replace with: <video src="media/scan-progress.mp4" poster="media/scan-progress.png" autoplay muted loop playsinline></video> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">🎬</div>
+          <div class="ph-label">Recording: press Reload, watch "Scanning... (n/total)" progress, results land</div>
+          <div class="ph-file">media/scan-progress.mp4</div>
+        </div>
+        <div class="caption">A real disk scan, with live progress</div>
+      </div>
+
+      <!-- Replace with: <img src="media/breadcrumb.png" alt="Clickable breadcrumb trail mid-navigation"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Breadcrumb drill-down — clickable path, current folder in bold</div>
+          <div class="ph-file">media/breadcrumb.png</div>
+        </div>
+        <div class="caption">Jump back to any ancestor folder in one click</div>
+      </div>
+
+      <!-- Replace with: <img src="media/chart-by-folder.png" alt="Pie chart tab grouped by subfolder"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Chart tab — "By subfolder/file" pie, legend and hover tooltip</div>
+          <div class="ph-file">media/chart-by-folder.png</div>
+        </div>
+        <div class="caption">See the split at a glance, not just as a table</div>
+      </div>
+
+      <!-- Replace with: <img src="media/chart-by-type.png" alt="Pie chart tab grouped by file type/extension"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Chart tab — "By file type" pie, grouped by extension</div>
+          <div class="ph-file">media/chart-by-type.png</div>
+        </div>
+        <div class="caption">Find out it's really the .mp4s, not the .logs</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <div class="features">
+
+      <div class="feature">
+        <h3>Real, on-disk usage — not apparent size</h3>
+        <p>
+          A scan reports actual allocated disk usage recursively, the same
+          number <code>du</code> would give you, instead of the misleading
+          apparent size a plain file listing shows.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Breadcrumb drill-down navigation</h3>
+        <p>
+          A clickable path breadcrumb sits above the table — every ancestor
+          segment jumps straight back to it — and double-clicking a folder
+          row (or the Up button) moves you further down or back up the tree.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Sortable spreadsheet-style table</h3>
+        <p>
+          Click any column header — Name, Type, Size, % of Folder, Items —
+          to sort by it, click again to reverse, with an arrow indicator
+          showing the active sort.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Manual scan with live progress</h3>
+        <p>
+          Reload computes real disk usage on demand — never automatically,
+          since even one pass is comparatively expensive — with a live
+          "Scanning... (n/total)" indicator as per-subfolder jobs finish.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Instant cached reopen</h3>
+        <p>
+          Every scanned folder's sizes are cached locally, so reopening or
+          navigating back into it shows the last-known breakdown immediately
+          — no need to rescan just to look again.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Pie chart — by folder or by file type</h3>
+        <p>
+          Toggle the Chart tab between the current folder's immediate
+          children and a recursive breakdown by file extension (.mp4, .log,
+          .jpg...) — useful for spotting which file type is really dominating.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Reveal in File Manager — strictly read-only</h3>
+        <p>
+          The app never deletes anything itself. Select a file or folder and
+          click "Reveal in File Manager" to open its location in Finder,
+          Explorer or your file manager, and act on it yourself.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p class="section-sub">Grab a binary above, or run it from source.</p>
+    <pre><code>git clone https://github.com/cancerberoSgx/desktop-app-samples.git
+cd desktop-app-samples/my-disk-viewer
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python3 main.py</code></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>Part of the <a href="../index.html">Desktop Apps</a> collection.</div>
+    <div class="footer-links">
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-disk-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<div class="lightbox"><div class="lightbox-content"></div></div>
+<script src="../assets/site.js"></script>
+
+</body>
+</html>

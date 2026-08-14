@@ -12,6 +12,9 @@ right above it).
 | `datasources.png` | screenshot | The Datasources screen with at least one real datasource in the list. |
 | `schema-browser.png` | screenshot | The tables/columns/indexes panel for an open datasource. |
 | `export.png` | screenshot | The "Export as Parquet" dialog/flow. |
+| `postgres-datasource.png` | screenshot | The New Datasource dialog with the PostgreSQL connection fields (or a connection URL) filled in. |
+| `point-and-click.png` | screenshot | The Data tab with a column filter dropdown open and a sort arrow visible on a column header — no SQL editor in view. |
+| `infer-types.png` | screenshot | The "Infer types" grid showing detected column names/types for a CSV or JSON file before saving. |
 
 Suggested specs: 1280×800 or larger, PNG for stills. For the recording, export as
 MP4 or WebM rather than GIF (much smaller file for the same quality) — any raw

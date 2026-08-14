@@ -1,1 +1,1 @@
-These are collections of desktop apps of mine - just learning some native libraries to build GUIs for linux/win/macos desktop
+[Home page](https://cancerberosgx.github.io/desktop-app-samples/)

@@ -12,6 +12,7 @@ right above it).
 | `tree-search.png` | screenshot | The Search tab with a glob pattern typed in and a type filter selected. |
 | `key-details.png` | screenshot | The Key Details dialog for a real key — type, TTL, encoding, memory, value all visible. |
 | `scripts.png` | screenshot | The Scripts tab with a named, saved command script and its output pane showing a result. |
+| `script-results.png` | screenshot | A script run whose output has multiple per-command blocks, at least one with a "View keys..." button visible (e.g. from a `KEYS pattern` command). |
 
 Suggested specs: 1280×800 or larger, PNG for stills. For the recording, export as
 MP4 or WebM rather than GIF (much smaller file for the same quality) — any raw

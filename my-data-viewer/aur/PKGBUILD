@@ -9,7 +9,7 @@
 # /AUR.md at the repo root for the full local-test/publish workflow.
 
 pkgname=my-data-viewer-git
-pkgver=r1.0000000
+pkgver=r53.9e4f04a
 pkgrel=1
 pkgdesc="Native wxWidgets desktop viewer for CSV/JSON files and databases - browse tables/columns/indexes and run SQL"
 arch=('any')

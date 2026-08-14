@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>My Docker Viewer</title>
+<meta name="description" content="A lightweight desktop GUI for local Docker: containers, images, volumes and networks — live stats, real disk usage, cascading cleanup — no Docker SDK, just the docker CLI you already have." />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  body { --accent: #38bdf8; }
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">Desktop Apps</a>
+    <nav>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-docker-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="eyebrow">wxPython &middot; Linux / macOS / Windows</div>
+    <h1>My Docker Viewer</h1>
+    <p class="tagline">
+      A desktop GUI for admin'ing local Docker: see every container's status,
+      live CPU/memory, and real disk footprint at a glance, then stop, start,
+      remove or clean up containers, images, volumes and networks — without
+      memorizing <code>docker</code> CLI flags. No Docker SDK, no Engine API
+      — it shells out to whatever <code>docker</code> binary is already on
+      your PATH.
+    </p>
+
+    <div class="badges">
+      <span class="badge">wxPython</span>
+      <span class="badge">Docker CLI</span>
+      <span class="badge">Live stats</span>
+      <span class="badge">Linux</span>
+      <span class="badge">macOS</span>
+      <span class="badge">Windows</span>
+    </div>
+
+    <!--
+      These point at the "mydockerviewer-latest" rolling release, republished
+      by .github/workflows/my-docker-viewer-build.yml on every manual run - the
+      URLs are permanent and never need editing here, even as new builds are
+      published. For version history, see releases tagged mydockerviewer-build.*
+      on the repo's Releases page.
+    -->
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydockerviewer-latest/mydockerviewer-linux.zip">⬇ Download for Linux</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydockerviewer-latest/mydockerviewer-macos.zip">⬇ Download for macOS</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/mydockerviewer-latest/mydockerviewer-windows.zip">⬇ Download for Windows</a>
+    </div>
+    <div class="downloads-note">Prebuilt binaries via GitHub Releases &middot; unzip and run, no install</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="section-sub">Containers with live stats, disk usage, image cleanup, volumes.</p>
+    <div class="gallery">
+
+      <!-- Replace with: <img src="media/hero.png" alt="Container list with live CPU and memory stats in My Docker Viewer"> -->
+      <div class="shot wide">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Containers screen — live CPU/Mem stats, filter toolbar — main hero shot</div>
+          <div class="ph-file">media/hero.png</div>
+        </div>
+      </div>
+
+      <!-- Replace with: <video src="media/container-details.mp4" poster="media/container-details.png" autoplay muted loop playsinline></video> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">🎬</div>
+          <div class="ph-label">Recording: double-click a container, Details dialog opens, disk usage calculates</div>
+          <div class="ph-file">media/container-details.mp4</div>
+        </div>
+        <div class="caption">Ports, networks and real disk usage in one popup</div>
+      </div>
+
+      <!-- Replace with: <img src="media/containers-disk.png" alt="Containers Disk screen with per-container size breakdown"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Containers Disk — writable layer + mounts, shared-mount flag</div>
+          <div class="ph-file">media/containers-disk.png</div>
+        </div>
+        <div class="caption">What's actually eating your disk, container by container</div>
+      </div>
+
+      <!-- Replace with: <img src="media/image-cascade.png" alt="Remove Image dialog with cascade cleanup option"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Remove Image dialog — image-only vs. cascading cleanup</div>
+          <div class="ph-file">media/image-cascade.png</div>
+        </div>
+        <div class="caption">Reclaim the most space in one step, shared resources preserved</div>
+      </div>
+
+      <!-- Replace with: <img src="media/volumes.png" alt="Volumes screen with Used By containers and images columns"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Volumes — Used By containers/images, on-demand size</div>
+          <div class="ph-file">media/volumes.png</div>
+        </div>
+        <div class="caption">See who's actually using a volume before you remove it</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <div class="features">
+
+      <div class="feature">
+        <h3>Live container list, filterable and sortable</h3>
+        <p>
+          Every container, running and stopped, with name, image, status,
+          created date, size and live CPU%/memory usage — filter by name,
+          image or status, and click any column header to sort.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Start, stop and remove with instant feedback</h3>
+        <p>
+          Start a stopped container, stop a running one, or remove any of
+          them (with a force-remove confirmation while it's still running)
+          — the list updates immediately instead of waiting on a reload.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Container Details in one popup</h3>
+        <p>
+          Double-click any container for its full identity, live CPU/mem,
+          published ports, attached networks, and computed disk usage —
+          writable layer plus every mount — without leaving the list.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Containers Disk — what's really eating space</h3>
+        <p>
+          A dedicated screen lists every container's writable layer and
+          mounted volumes/binds, computed on demand via a disposable helper
+          container, with a combined total and a "(shared)" flag for mounts
+          used by more than one container.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Images: status, cascading remove, prune</h3>
+        <p>
+          See every image's In use / Unused / Dangling status. Removing an
+          image still referenced by containers offers "image only" or
+          "image + its containers/volumes/networks" — showing exactly what's
+          kept vs. deleted — plus one-click pruning of dangling or unused
+          images.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Volumes &amp; networks: who's actually using it</h3>
+        <p>
+          Unlike raw <code>docker volume/network ls</code>, both screens show
+          which containers and images actually reference each entry, refuse
+          to force-remove something still in use (explaining why instead),
+          and offer one-click pruning of anything unused.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>No Docker SDK — just the CLI you already have</h3>
+        <p>
+          Every action shells out to the <code>docker</code> binary on your
+          PATH and parses its JSON output — nothing to configure, no API
+          version to pin, no separate daemon client library to install.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p class="section-sub">Grab a binary above, or run it from source.</p>
+    <pre><code>git clone https://github.com/cancerberoSgx/desktop-app-samples.git
+cd desktop-app-samples/my-docker-viewer
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python3 main.py</code></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>Part of the <a href="../index.html">Desktop Apps</a> collection.</div>
+    <div class="footer-links">
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-docker-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<div class="lightbox"><div class="lightbox-content"></div></div>
+<script src="../assets/site.js"></script>
+
+</body>
+</html>
