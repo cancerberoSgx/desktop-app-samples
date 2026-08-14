@@ -1560,6 +1560,12 @@ class DataExplorePage(wx.Panel):
 
     def load_datasource(self, datasource: Datasource) -> None:
         self._datasource = datasource
+        # Must happen here, synchronously on the UI thread - list_tables
+        # below, and everything list_tables leads into afterwards (loading
+        # columns/indexes, running scripts, export), runs on a background
+        # thread via TaskManager and can't touch the shared sqlite3
+        # connection itself (see warm_column_types).
+        self._repository.warm_column_types(datasource)
         self._title_label.SetLabel(f"Data Explore — {datasource.name}")
         self._tables_list.Set([])
         self._detail.clear()

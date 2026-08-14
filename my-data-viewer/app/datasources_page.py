@@ -185,6 +185,11 @@ class DatasourcesPage(wx.Panel):
         self._connect(datasource)
 
     def _connect(self, datasource: Datasource) -> None:
+        # Must happen here, synchronously on the UI thread - test_connection
+        # below runs on a background thread via TaskManager, and can't touch
+        # the shared sqlite3 connection itself (see warm_column_types).
+        self._repository.warm_column_types(datasource)
+
         def on_error(exc: Exception) -> None:
             wx.MessageBox(
                 f'Could not connect to "{datasource.name}":\n\n{exc}',

@@ -22,6 +22,9 @@ class DatasourceRepository:
 
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
+        # datasource_id -> column_types dict (or None), populated by
+        # warm_column_types() - see the thread-affinity note on _driver_for.
+        self._column_types_cache: dict = {}
 
     # ------------------------------------------------------------------
     # CRUD
@@ -158,6 +161,10 @@ class DatasourceRepository:
             [(datasource_id, f.name, f.type, position) for position, f in enumerate(fields)],
         )
         self._conn.commit()
+        # Stale now the user has changed them via create/edit - the next
+        # warm_column_types() call (always on the UI thread, see
+        # _driver_for) will re-read and repopulate this.
+        self._column_types_cache.pop(datasource_id, None)
 
     @staticmethod
     def _row_to_field(row: sqlite3.Row) -> DatasourceField:
@@ -172,12 +179,34 @@ class DatasourceRepository:
     # ------------------------------------------------------------------
     # Operations against the underlying data source
     # ------------------------------------------------------------------
+    def warm_column_types(self, datasource: Datasource) -> None:
+        """Resolve and cache datasource's csv/json column-type overrides (see
+        list_fields) ahead of time.
+
+        MUST be called on the UI thread, before handing a `datasource` to
+        TaskManager for any of list_tables/list_columns/list_indexes/
+        test_connection/execute_sql/export_to_parquet/export_schema_to_parquet
+        - those run on a worker thread (TaskManager -> wx.lib.delayedresult),
+        and `_driver_for` below only ever reads the cache dict (thread-safe),
+        never sqlite3 directly, to avoid "SQLite objects created in a thread
+        can only be used in that same thread" errors. The two current entry
+        points already do this: DatasourcesPage._connect (test_connection)
+        and DataExplorePage.load_datasource (everything downstream of it -
+        table/column/index loads, running scripts, export - all reuse the
+        same datasource).
+        """
+        if datasource.id is None:
+            return
+        if datasource.type in ("csv", "json"):
+            fields = self.list_fields(datasource.id)
+            self._column_types_cache[datasource.id] = {f.name: f.type for f in fields} if fields else None
+        else:
+            self._column_types_cache.pop(datasource.id, None)
+
     def _driver_for(self, datasource: Datasource):
         column_types = None
         if datasource.type in ("csv", "json") and datasource.id is not None:
-            fields = self.list_fields(datasource.id)
-            if fields:
-                column_types = {f.name: f.type for f in fields}
+            column_types = self._column_types_cache.get(datasource.id)
         return drivers.get_driver(datasource, column_types=column_types)
 
     def list_tables(self, datasource: Datasource) -> List[str]:
