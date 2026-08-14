@@ -1,12 +1,17 @@
 import sqlite3
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 import redis
 
 from .models import Datasource, Profile, Script
 from .redis_command_parser import parse_commands
-from .redis_value_format import build_value_text, format_command_result
+from .redis_value_format import (
+    build_value_text,
+    fetch_hash_fields,
+    fetch_json_value,
+    format_command_result,
+)
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 CONNECTION_TIMEOUT_SECONDS = 5
@@ -31,6 +36,11 @@ class KeyDetails:
     idle_seconds: Optional[int]
     value_text: str
     value_truncated: bool
+    # Populated only for their respective types - see get_key_details.
+    # KeyDetailsDialog uses these for the Table/Json tabs; value_text
+    # above still carries the flattened/pretty-printed fallback text.
+    hash_fields: Optional[List[Tuple[str, str]]] = None
+    json_value: Optional[Any] = None
 
 
 @dataclass
@@ -238,7 +248,10 @@ class DatasourceRepository:
         """Fetch everything the Key Details view shows for `key`: type,
         TTL, encoding, memory footprint, idle time, and the value itself
         (rendered as text - see redis_value_format.build_value_text for how
-        binary values, e.g. vectors, are handled). Redis has no notion of a
+        binary values, e.g. vectors, are handled). Hash and RedisJSON
+        ("ReJSON-RL") keys additionally get a structured value
+        (hash_fields/json_value) for KeyDetailsDialog's Table/Json tabs -
+        see fetch_hash_fields/fetch_json_value. Redis has no notion of a
         key's creation time, so that's not included - OBJECT IDLETIME
         (seconds since last access) is the closest available proxy."""
         client = self._make_client(datasource, decode_responses=False)
@@ -277,7 +290,18 @@ class DatasourceRepository:
             except redis.ResponseError:
                 idle_seconds = None
 
-            value_text, value_truncated = build_value_text(client, key, redis_type)
+            hash_fields = None
+            json_value = None
+            if redis_type == "hash":
+                hash_fields, value_truncated = fetch_hash_fields(client, key)
+                value_text = "\n".join(f"{field}: {value}" for field, value in hash_fields)
+            elif redis_type == "ReJSON-RL":
+                try:
+                    json_value, value_text, value_truncated = fetch_json_value(client, key)
+                except redis.ResponseError as exc:
+                    value_text, value_truncated = f"(Could not fetch JSON value: {exc})", False
+            else:
+                value_text, value_truncated = build_value_text(client, key, redis_type)
 
             return KeyDetails(
                 key=key,
@@ -289,6 +313,8 @@ class DatasourceRepository:
                 idle_seconds=idle_seconds,
                 value_text=value_text,
                 value_truncated=value_truncated,
+                hash_fields=hash_fields,
+                json_value=json_value,
             )
         finally:
             client.close()

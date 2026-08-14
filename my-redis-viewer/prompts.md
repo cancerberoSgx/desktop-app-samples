@@ -124,7 +124,7 @@ Question I would like to implement a view that displays me relevant stats like m
 
 # keys details
 
-key details, if it's a hash, display the Value both as raw text (as now) and also as a table field: value in two separate tabs (table, value). By default show "table". In the table user can select a field value and copy to clipboard with ctrl-c. If value is longer than 20 chars, truncate it
+in key details screen, if it's a hash, display the Value both as raw text (as now) and also as a table field: value in two separate tabs (table, value). By default show "table". In the table user can select a field value and copy to clipboard with ctrl-c. If value is longer than 20 chars, truncate it
 Do something similar for json keys, display two Value tabs, "json" which uses a json tree viewer and a "Raw" tab which display raw json text but with pretty format
 
 # refresh

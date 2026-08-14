@@ -1,21 +1,52 @@
 import wx
 
 from .async_task import AsyncTaskRunner
+from .hash_table_ctrl import HashTableCtrl
+from .json_tree_ctrl import JsonTreeCtrl
 from .models import Datasource
 from .repositories import DatasourceRepository
 
 NO_EXPIRATION_TEXT = "No expiration"
 LOADING_TEXT = "Loading..."
 
+# Pages of the Value wx.Simplebook - which one is shown depends on the
+# key's type (see _load's on_success).
+_PAGE_PLAIN = 0
+_PAGE_HASH = 1
+_PAGE_JSON = 2
+
+
+def _make_readonly_text(parent: wx.Window) -> wx.TextCtrl:
+    text = wx.TextCtrl(parent, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP | wx.BORDER_SUNKEN)
+    text.SetFont(wx.Font(wx.FontInfo().Family(wx.FONTFAMILY_TELETYPE)))
+    return text
+
+
+def _tabbed_panel(parent: wx.Window, pages) -> wx.Panel:
+    """A Panel wrapping a Notebook with (label, page_window) tabs, sized to
+    fill its parent - used for both the hash and json Value pages."""
+    panel = wx.Panel(parent)
+    notebook = wx.Notebook(panel)
+    for label, page in pages(notebook):
+        notebook.AddPage(page, label)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(notebook, 1, wx.EXPAND)
+    panel.SetSizer(sizer)
+    return panel
+
 
 class KeyDetailsDialog(wx.Dialog):
     """Shows everything known about a single Redis key: type, TTL,
-    encoding, memory footprint, idle time, and its value rendered as text
-    (binary values, e.g. vectors, fall back to a hex preview - see
-    redis_value_format.format_bytes_as_text). Self-contained so any screen
-    can open it with just a repository, a datasource, and a key name -
-    currently opened by double-clicking a key in the Data Explorer's tree
-    view, but not tied to it."""
+    encoding, memory footprint, idle time, and its value. Most types
+    render the value as a single read-only text block (binary values,
+    e.g. vectors, fall back to a hex preview - see
+    redis_value_format.format_bytes_as_text). Hash and RedisJSON
+    ("ReJSON-RL") keys get a small Value sub-notebook instead - a
+    structured view (Table / Json) as the default tab, plus a Value/Raw
+    tab with the same flattened/pretty-printed text other types show.
+    Self-contained so any screen can open it with just a repository, a
+    datasource, and a key name - currently opened by double-clicking a
+    key in the Data Explorer's tree view, but not tied to it."""
 
     def __init__(
         self,
@@ -48,12 +79,26 @@ class KeyDetailsDialog(wx.Dialog):
         outer.Add(grid, 0, wx.EXPAND | wx.ALL, 12)
 
         outer.Add(wx.StaticText(self, label="Value:"), 0, wx.LEFT | wx.RIGHT, 12)
-        self._value_text = wx.TextCtrl(
-            self,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP | wx.BORDER_SUNKEN,
-        )
-        self._value_text.SetFont(wx.Font(wx.FontInfo().Family(wx.FONTFAMILY_TELETYPE)))
-        outer.Add(self._value_text, 1, wx.EXPAND | wx.ALL, 12)
+        self._value_book = wx.Simplebook(self)
+
+        self._value_text = _make_readonly_text(self._value_book)
+        self._value_book.AddPage(self._value_text, "value")
+
+        def hash_pages(notebook):
+            self._hash_table = HashTableCtrl(notebook)
+            self._hash_value_text = _make_readonly_text(notebook)
+            return [("Table", self._hash_table), ("Value", self._hash_value_text)]
+
+        self._value_book.AddPage(_tabbed_panel(self._value_book, hash_pages), "hash")
+
+        def json_pages(notebook):
+            self._json_tree = JsonTreeCtrl(notebook)
+            self._json_raw_text = _make_readonly_text(notebook)
+            return [("Json", self._json_tree), ("Raw", self._json_raw_text)]
+
+        self._value_book.AddPage(_tabbed_panel(self._value_book, json_pages), "json")
+
+        outer.Add(self._value_book, 1, wx.EXPAND | wx.ALL, 12)
 
         button_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._refresh_btn = wx.Button(self, label="Refresh")
@@ -89,6 +134,7 @@ class KeyDetailsDialog(wx.Dialog):
             self._idle_value,
         ):
             value_widget.SetLabel(LOADING_TEXT)
+        self._value_book.ChangeSelection(_PAGE_PLAIN)
         self._value_text.SetValue(LOADING_TEXT)
 
         def on_success(details) -> None:
@@ -98,6 +144,7 @@ class KeyDetailsDialog(wx.Dialog):
                 self._encoding_value.SetLabel("")
                 self._memory_value.SetLabel("")
                 self._idle_value.SetLabel("")
+                self._value_book.ChangeSelection(_PAGE_PLAIN)
                 self._value_text.SetValue("")
                 return
 
@@ -112,10 +159,22 @@ class KeyDetailsDialog(wx.Dialog):
             self._idle_value.SetLabel(
                 f"{details.idle_seconds}s" if details.idle_seconds is not None else "?"
             )
+
             value_text = details.value_text
             if details.value_truncated:
                 value_text += "\n\n... (truncated - showing a limited number of entries)"
-            self._value_text.SetValue(value_text)
+
+            if details.type == "hash":
+                self._hash_table.set_fields(details.hash_fields or [])
+                self._hash_value_text.SetValue(value_text)
+                self._value_book.ChangeSelection(_PAGE_HASH)
+            elif details.type == "ReJSON-RL":
+                self._json_tree.set_value(details.json_value)
+                self._json_raw_text.SetValue(value_text)
+                self._value_book.ChangeSelection(_PAGE_JSON)
+            else:
+                self._value_text.SetValue(value_text)
+                self._value_book.ChangeSelection(_PAGE_PLAIN)
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(

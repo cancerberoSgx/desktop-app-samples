@@ -3,7 +3,8 @@ renders a key's value (currently KeyDetailsDialog) or a raw command's
 result (currently ScriptsView). Kept separate from DatasourceRepository
 because it's pure formatting, not I/O."""
 
-from typing import Any, Tuple
+import json
+from typing import Any, List, Tuple
 
 MAX_TEXT_LEN = 4096
 MAX_ELEMENTS = 200
@@ -30,20 +31,14 @@ def format_bytes_as_text(raw: bytes) -> str:
 def build_value_text(client, key: str, redis_type: str) -> Tuple[str, bool]:
     """Fetch `key`'s value via the command appropriate for `redis_type` and
     render it as text, capped at MAX_ELEMENTS entries for collection types
-    so a huge hash/list/set/zset can't stall the UI. Returns
-    (text, truncated)."""
+    so a huge list/set/zset/stream can't stall the UI. Returns
+    (text, truncated). Hash and RedisJSON ("ReJSON-RL") keys are handled
+    separately by fetch_hash_fields/fetch_json_value instead - both need a
+    structured value (a field/value table, a JSON tree) alongside the flat
+    text this function returns, so DatasourceRepository.get_key_details
+    calls them directly rather than through this dispatcher."""
     if redis_type == "string":
         return format_bytes_as_text(client.get(key)), False
-
-    if redis_type == "hash":
-        items = []
-        truncated = False
-        for field, value in client.hscan_iter(key, count=1000):
-            if len(items) >= MAX_ELEMENTS:
-                truncated = True
-                break
-            items.append(f"{format_bytes_as_text(field)}: {format_bytes_as_text(value)}")
-        return "\n".join(items), truncated
 
     if redis_type == "list":
         length = client.llen(key)
@@ -79,6 +74,39 @@ def build_value_text(client, key: str, redis_type: str) -> Tuple[str, bool]:
         return "\n".join(lines), len(entries) >= MAX_ELEMENTS
 
     return "", False
+
+
+def fetch_hash_fields(client, key: str) -> Tuple[List[Tuple[str, str]], bool]:
+    """Field/value pairs for a hash key, each already rendered as safe
+    display text (see format_bytes_as_text) - one HSCAN pass shared by
+    both the Table tab's HashTableCtrl and the flattened text used for the
+    Value tab/fallback, rather than fetching the hash twice. Capped at
+    MAX_ELEMENTS like build_value_text's collection branches."""
+    items = []
+    truncated = False
+    for field, value in client.hscan_iter(key, count=1000):
+        if len(items) >= MAX_ELEMENTS:
+            truncated = True
+            break
+        items.append((format_bytes_as_text(field), format_bytes_as_text(value)))
+    return items, truncated
+
+
+def fetch_json_value(client, key: str) -> Tuple[Any, str, bool]:
+    """The parsed value of a RedisJSON ("ReJSON-RL") key - redis-py's JSON
+    module client (client.json()) already decodes JSON.GET's reply into
+    plain Python values, so no manual json.loads is needed. Also returns a
+    pretty-printed text rendering for the Raw tab. Returns
+    (value, text, truncated) - `truncated` describes the *text* rendering
+    only (see MAX_TEXT_LEN); JsonTreeCtrl applies its own bounded
+    per-level rendering when building the tree, so a huge document can't
+    stall the UI either way."""
+    value = client.json().get(key)
+    text = json.dumps(value, indent=2, ensure_ascii=False)
+    truncated = len(text) > MAX_TEXT_LEN
+    if truncated:
+        text = text[:MAX_TEXT_LEN] + f"... (truncated, {len(text):,} chars total)"
+    return value, text, truncated
 
 
 def format_command_result(value: Any) -> str:
