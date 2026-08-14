@@ -7,6 +7,7 @@ from . import drivers
 from .models import ColumnInfo, Datasource, DatasourceField, IndexInfo, Profile, QueryResult, Script
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
+LAST_DATASOURCE_SETTING_KEY = "last_datasource_id"
 
 
 def _quote_ident(name: str) -> str:
@@ -194,34 +195,68 @@ class DatasourceRepository:
         self._driver_for(datasource).test_connection()
 
     def execute_sql(
-        self, datasource: Datasource, sql: str, params: Optional[list] = None
+        self,
+        datasource: Datasource,
+        sql: str,
+        params: Optional[list] = None,
+        cancel_token: Optional["drivers.CancelToken"] = None,
     ) -> QueryResult:
         sleep(2)
-        return self._driver_for(datasource).execute_sql(sql, params)
+        return self._driver_for(datasource).execute_sql(sql, params, cancel_token=cancel_token)
 
     # ------------------------------------------------------------------
     # Export - same code path regardless of datasource type, since it's
     # built entirely on list_tables/list_columns/execute_sql above.
     # ------------------------------------------------------------------
-    def export_to_parquet(self, datasource: Datasource, output_dir: str) -> List[str]:
+    def export_to_parquet(
+        self,
+        datasource: Datasource,
+        output_dir: str,
+        cancel_token: Optional["drivers.CancelToken"] = None,
+    ) -> List[str]:
         """Dump every table in `datasource` into its own '<table>.parquet'
-        file inside `output_dir`. Returns the paths written."""
+        file inside `output_dir`. Returns the paths written.
+
+        `cancel_token`, if given, is checked between tables (so a cancel
+        doesn't start a new table's export) and passed into `execute_sql` so
+        a table's query in flight when cancel is requested aborts too, on
+        drivers that support it (see CancelToken/SqlAlchemyDriver in
+        drivers.py) - either way, once cancelled this stops early and
+        returns only what was written so far."""
         written = []
         for table in self.list_tables(datasource):
-            result = self.execute_sql(datasource, f"SELECT * FROM {_quote_ident(table)}")
+            if cancel_token is not None and cancel_token.is_cancelled:
+                break
+            result = self.execute_sql(
+                datasource, f"SELECT * FROM {_quote_ident(table)}", cancel_token=cancel_token
+            )
+            if cancel_token is not None and cancel_token.is_cancelled:
+                break
             output_path = os.path.join(output_dir, f"{table}.parquet")
             drivers.write_rows_to_parquet(result.columns, result.rows, output_path)
             written.append(output_path)
         return written
 
-    def export_schema_to_parquet(self, datasource: Datasource, output_path: str) -> None:
+    def export_schema_to_parquet(
+        self,
+        datasource: Datasource,
+        output_path: str,
+        cancel_token: Optional["drivers.CancelToken"] = None,
+    ) -> None:
         """Dump one row per column across every table in `datasource`
         (table_name, column_name, type, constraints) into a single Parquet
-        file - schema only, no data."""
+        file - schema only, no data. `cancel_token`, if given and cancelled
+        partway through, stops before writing anything - a partial schema
+        dump would be misleading, so the caller sees this as cancelled
+        rather than a truncated success."""
         rows = []
         for table in self.list_tables(datasource):
+            if cancel_token is not None and cancel_token.is_cancelled:
+                return
             for column in self.list_columns(datasource, table):
                 rows.append((table, column.name, column.type, column.constraints or ""))
+        if cancel_token is not None and cancel_token.is_cancelled:
+            return
         columns = ["table_name", "column_name", "type", "constraints"]
         drivers.write_rows_to_parquet(columns, rows, output_path)
 
@@ -346,3 +381,10 @@ class SettingsRepository:
 
     def set_current_profile_id(self, profile_id: Optional[int]) -> None:
         self.set(CURRENT_PROFILE_SETTING_KEY, str(profile_id) if profile_id is not None else None)
+
+    def get_last_datasource_id(self) -> Optional[int]:
+        value = self.get(LAST_DATASOURCE_SETTING_KEY)
+        return int(value) if value is not None else None
+
+    def set_last_datasource_id(self, datasource_id: Optional[int]) -> None:
+        self.set(LAST_DATASOURCE_SETTING_KEY, str(datasource_id) if datasource_id is not None else None)

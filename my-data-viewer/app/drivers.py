@@ -1,12 +1,68 @@
 import os
 import re
+import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, List, Optional, Sequence, Union
 
 import duckdb
 import sqlalchemy
 
 from .models import ColumnInfo, Datasource, IndexInfo, QueryResult
+
+
+class CancelToken:
+    """Best-effort cancellation handle for one long-running `execute_sql`
+    call (and the per-table loops in export_to_parquet/
+    export_schema_to_parquet) - held by TaskManager (see app/task_manager.py)
+    on the UI thread while the actual work runs on a background thread.
+
+    A driver about to block on a query registers a zero-arg `interrupt`
+    callable (e.g. a DuckDB connection's `.interrupt()`, sqlite3's
+    `.interrupt()`, psycopg2's `.cancel()`) via `_register` right before the
+    blocking call, and `_unregister`s it right after. `cancel()` - called
+    from the UI thread when the user clicks Cancel - fires every
+    interrupt currently registered, which aborts the in-flight statement
+    almost immediately; a driver with no such hook simply doesn't register
+    one, and the call runs to completion unobserved (whatever it returns is
+    then discarded, since the caller already treats this as canceled).
+
+    `is_cancelled` additionally lets a pure-Python loop (no single query to
+    interrupt) check between steps - e.g. export_to_parquet stops starting
+    new tables once this is set, even though whichever table's query is
+    already in flight can only be stopped via the interrupt above.
+    """
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self._interrupts: List[Callable[[], None]] = []
+        self._lock = threading.Lock()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def _register(self, interrupt: Callable[[], None]) -> None:
+        with self._lock:
+            already_cancelled = self._event.is_set()
+            if not already_cancelled:
+                self._interrupts.append(interrupt)
+        if already_cancelled:
+            interrupt()  # cancel() ran before this call even started - abort right away
+
+    def _unregister(self, interrupt: Callable[[], None]) -> None:
+        with self._lock:
+            if interrupt in self._interrupts:
+                self._interrupts.remove(interrupt)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._event.set()
+            interrupts, self._interrupts = self._interrupts, []
+        for interrupt in interrupts:
+            try:
+                interrupt()
+            except Exception:
+                pass  # best-effort - the call may already be finishing on its own
 
 
 def get_driver(
@@ -72,14 +128,23 @@ class CsvDriver:
         con = self._connect()
         con.close()
 
-    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
+    def execute_sql(
+        self,
+        sql: str,
+        params: Optional[Sequence[object]] = None,
+        cancel_token: Optional[CancelToken] = None,
+    ) -> QueryResult:
         con = self._connect()
+        if cancel_token is not None:
+            cancel_token._register(con.interrupt)
         try:
             cursor = con.execute(sql, params or [])
             columns = [col[0] for col in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
             return QueryResult(columns=columns, rows=rows)
         finally:
+            if cancel_token is not None:
+                cancel_token._unregister(con.interrupt)
             con.close()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
@@ -125,14 +190,23 @@ class JsonDriver:
         con = self._connect()
         con.close()
 
-    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
+    def execute_sql(
+        self,
+        sql: str,
+        params: Optional[Sequence[object]] = None,
+        cancel_token: Optional[CancelToken] = None,
+    ) -> QueryResult:
         con = self._connect()
+        if cancel_token is not None:
+            cancel_token._register(con.interrupt)
         try:
             cursor = con.execute(sql, params or [])
             columns = [col[0] for col in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
             return QueryResult(columns=columns, rows=rows)
         finally:
+            if cancel_token is not None:
+                cancel_token._unregister(con.interrupt)
             con.close()
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
@@ -202,11 +276,19 @@ class SqlAlchemyDriver:
         finally:
             engine.dispose()
 
-    def execute_sql(self, sql: str, params: Optional[Sequence[object]] = None) -> QueryResult:
+    def execute_sql(
+        self,
+        sql: str,
+        params: Optional[Sequence[object]] = None,
+        cancel_token: Optional[CancelToken] = None,
+    ) -> QueryResult:
         engine = self._make_engine()
         try:
             sql = self._translate_placeholders(engine, sql)
             raw_conn = engine.raw_connection()
+            interrupt = self._interrupt_for(raw_conn, engine.dialect.name) if cancel_token is not None else None
+            if interrupt is not None:
+                cancel_token._register(interrupt)
             try:
                 cursor = raw_conn.cursor()
                 try:
@@ -217,12 +299,26 @@ class SqlAlchemyDriver:
                 finally:
                     cursor.close()
             finally:
+                if interrupt is not None:
+                    cancel_token._unregister(interrupt)
                 raw_conn.close()
         finally:
             engine.dispose()
 
     def _make_engine(self) -> sqlalchemy.engine.Engine:
         return sqlalchemy.create_engine(self.target)
+
+    @staticmethod
+    def _interrupt_for(raw_conn, dialect_name: str) -> Optional[Callable[[], None]]:
+        """A zero-arg callable that aborts `raw_conn`'s in-flight statement
+        if invoked from another thread, or None if this dialect's DBAPI
+        doesn't expose one - CancelToken then falls back to a plain abandon
+        (the call runs to completion, its result just gets discarded)."""
+        if dialect_name == "sqlite":
+            return raw_conn.interrupt  # sqlite3.Connection.interrupt()
+        if dialect_name == "postgresql":
+            return raw_conn.cancel  # psycopg2 connection.cancel()
+        return None
 
     @staticmethod
     def _translate_placeholders(engine: sqlalchemy.engine.Engine, sql: str) -> str:

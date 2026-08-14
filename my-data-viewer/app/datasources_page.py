@@ -2,6 +2,7 @@ from typing import Callable, List, Optional
 
 import wx
 
+from .async_task import AsyncTaskRunner
 from .datasources_dialog import DatasourceDialog
 from .models import DATASOURCE_TYPES, Datasource
 from .repositories import DatasourceRepository
@@ -31,6 +32,7 @@ class DatasourcesPage(wx.Panel):
         self._profile_id = profile_id
         self._on_connected = on_connected
         self._datasources: List[Datasource] = []
+        self._async = AsyncTaskRunner(self)
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Datasources"), 0, wx.ALL, 12)
@@ -176,14 +178,17 @@ class DatasourcesPage(wx.Panel):
         self._connect(datasource)
 
     def _connect(self, datasource: Datasource) -> None:
-        try:
-            self._repository.test_connection(datasource)
-        except Exception as exc:
+        def on_error(exc: Exception) -> None:
             wx.MessageBox(
                 f'Could not connect to "{datasource.name}":\n\n{exc}',
                 "Connection failed",
                 wx.OK | wx.ICON_ERROR,
                 self,
             )
-            return
-        self._on_connected(datasource)
+
+        self._async.run(
+            work=lambda: self._repository.test_connection(datasource),
+            on_success=lambda _: self._on_connected(datasource),
+            on_error=on_error,
+            disable=[self._connect_btn],
+        )

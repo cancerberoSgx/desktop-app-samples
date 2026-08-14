@@ -6,8 +6,11 @@ import wx
 import wx.grid
 import wx.stc as stc
 
+from .async_task import AsyncTaskRunner
+from .drivers import CancelToken
 from .models import ColumnInfo, Datasource, IndexInfo, QueryResult, Script
 from .repositories import DatasourceRepository, ScriptRepository
+from .task_manager import TaskManager
 
 
 def _quote_ident(name: str) -> str:
@@ -365,6 +368,7 @@ class DataTab(wx.Panel):
     def __init__(self, parent: wx.Window, repository: DatasourceRepository) -> None:
         super().__init__(parent)
         self._repository = repository
+        self._async = AsyncTaskRunner(self)
         self._datasource: Optional[Datasource] = None
         self._table: Optional[str] = None
         self._columns: List[str] = []
@@ -422,11 +426,6 @@ class DataTab(wx.Panel):
     def load(self, datasource: Datasource, table: str) -> None:
         self._datasource = datasource
         self._table = table
-        self._columns = [c.name for c in self._repository.list_columns(datasource, table)]
-
-        self._filter_col_choice.Set(self._columns)
-        if self._columns:
-            self._filter_col_choice.SetSelection(0)
         self._filter_value_ctrl.SetValue("")
         self._filters = []
         self._filters_list.Set([])
@@ -436,8 +435,25 @@ class DataTab(wx.Panel):
         self._page = 0
         self._page_size = self.DEFAULT_PAGE_SIZE
 
-        self._grid.set_columns(self._columns)
-        self._reload_data(autosize=True)
+        def on_success(columns: List[ColumnInfo]) -> None:
+            if datasource is not self._datasource or table != self._table:
+                return  # a different table was selected before this came back
+            self._columns = [c.name for c in columns]
+            self._filter_col_choice.Set(self._columns)
+            if self._columns:
+                self._filter_col_choice.SetSelection(0)
+            self._grid.set_columns(self._columns)
+            # Deferred via CallAfter: this callback runs from inside
+            # self._async's own consumer, which only marks the runner free
+            # again right after returning - calling self._async.run()
+            # (_reload_data, below) synchronously here would find it still
+            # marked busy and be silently ignored.
+            wx.CallAfter(self._reload_data, autosize=True)
+
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(f"Could not load columns for \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
+
+        self._async.run(work=lambda: self._repository.list_columns(datasource, table), on_success=on_success, on_error=on_error)
 
     def clear(self) -> None:
         self._datasource = None
@@ -458,34 +474,51 @@ class DataTab(wx.Panel):
         if self._datasource is None or self._table is None:
             return
 
+        datasource = self._datasource
+        table = self._table
         where_sql, where_params = _build_where(self._filters)
-        table_ident = _quote_ident(self._table)
+        table_ident = _quote_ident(table)
+        sort_column = self._sort_column
+        sort_ascending = self._sort_ascending
+        page = self._page
+        page_size = self._page_size
 
-        count_result = self._repository.execute_sql(
-            self._datasource, f"SELECT COUNT(*) FROM {table_ident}{where_sql}", where_params
-        )
-        self._total_records = int(count_result.rows[0][0]) if count_result.rows else 0
+        def work() -> Tuple[int, int, QueryResult]:
+            count_result = self._repository.execute_sql(
+                datasource, f"SELECT COUNT(*) FROM {table_ident}{where_sql}", where_params
+            )
+            total_records = int(count_result.rows[0][0]) if count_result.rows else 0
 
-        total_pages = max(1, math.ceil(self._total_records / self._page_size))
-        self._page = max(0, min(self._page, total_pages - 1))
+            total_pages = max(1, math.ceil(total_records / page_size))
+            clamped_page = max(0, min(page, total_pages - 1))
 
-        order_sql = ""
-        if self._sort_column:
-            direction = "ASC" if self._sort_ascending else "DESC"
-            order_sql = f" ORDER BY {_quote_ident(self._sort_column)} {direction}"
+            order_sql = ""
+            if sort_column:
+                direction = "ASC" if sort_ascending else "DESC"
+                order_sql = f" ORDER BY {_quote_ident(sort_column)} {direction}"
 
-        offset = self._page * self._page_size
-        query = f"SELECT * FROM {table_ident}{where_sql}{order_sql} LIMIT ? OFFSET ?"
-        result = self._repository.execute_sql(
-            self._datasource, query, where_params + [self._page_size, offset]
-        )
+            offset = clamped_page * page_size
+            query = f"SELECT * FROM {table_ident}{where_sql}{order_sql} LIMIT ? OFFSET ?"
+            result = self._repository.execute_sql(datasource, query, where_params + [page_size, offset])
+            return total_records, clamped_page, result
 
-        self._grid.set_rows(result.rows)
-        if autosize:
-            self._grid.autosize_columns(self._columns, result.rows)
-        self._update_sort_indicators()
-        self._top_pagination.update(self._page, self._page_size, self._total_records)
-        self._bottom_pagination.update(self._page, self._page_size, self._total_records)
+        def on_success(payload: Tuple[int, int, QueryResult]) -> None:
+            if datasource is not self._datasource or table != self._table:
+                return  # a different table was selected before this came back
+            total_records, clamped_page, result = payload
+            self._total_records = total_records
+            self._page = clamped_page
+            self._grid.set_rows(result.rows)
+            if autosize:
+                self._grid.autosize_columns(self._columns, result.rows)
+            self._update_sort_indicators()
+            self._top_pagination.update(self._page, self._page_size, self._total_records)
+            self._bottom_pagination.update(self._page, self._page_size, self._total_records)
+
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(f"Could not load data for \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
+
+        self._async.run(work=work, on_success=on_success, on_error=on_error)
 
     # ------------------------------------------------------------------
     # Sorting
@@ -578,6 +611,7 @@ class TableDetailPanel(wx.Panel):
     def __init__(self, parent: wx.Window, repository: DatasourceRepository) -> None:
         super().__init__(parent)
         self._repository = repository
+        self._async = AsyncTaskRunner(self)
 
         notebook = wx.Notebook(self)
         self._fields_tab = FieldsTab(notebook)
@@ -592,9 +626,25 @@ class TableDetailPanel(wx.Panel):
         self.SetSizer(sizer)
 
     def load_table(self, datasource: Datasource, table: str) -> None:
-        self._fields_tab.load(self._repository.list_columns(datasource, table))
-        self._indexes_tab.load(self._repository.list_indexes(datasource, table))
-        self._data_tab.load(datasource, table)
+        self.clear()
+
+        def on_success(payload: Tuple[List[ColumnInfo], List[IndexInfo]]) -> None:
+            columns, indexes = payload
+            self._fields_tab.load(columns)
+            self._indexes_tab.load(indexes)
+            self._data_tab.load(datasource, table)
+
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(f"Could not load table \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
+
+        self._async.run(
+            work=lambda: (
+                self._repository.list_columns(datasource, table),
+                self._repository.list_indexes(datasource, table),
+            ),
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     def clear(self) -> None:
         self._fields_tab.clear()
@@ -829,11 +879,16 @@ class ScriptsTab(wx.Panel):
     needs to be able to list and act on."""
 
     def __init__(
-        self, parent: wx.Window, script_repository: ScriptRepository, datasource_repository: DatasourceRepository
+        self,
+        parent: wx.Window,
+        script_repository: ScriptRepository,
+        datasource_repository: DatasourceRepository,
+        task_manager: TaskManager,
     ) -> None:
         super().__init__(parent)
         self._script_repository = script_repository
         self._datasource_repository = datasource_repository
+        self._task_manager = task_manager
         self._datasource: Optional[Datasource] = None
         self._scripts: List[Script] = []
         self._current_script: Optional[Script] = None
@@ -885,6 +940,7 @@ class ScriptsTab(wx.Panel):
         self._run_selected_btn.Bind(wx.EVT_BUTTON, self._on_run_selected)
 
         self._editor.clear_and_disable()
+        self._task_manager.subscribe(lambda status, label: self._update_button_states())
         self._update_button_states()
 
     # ------------------------------------------------------------------
@@ -973,12 +1029,16 @@ class ScriptsTab(wx.Panel):
     def _update_button_states(self) -> None:
         has_datasource = self._datasource is not None
         has_selection = self._current_script is not None
+        # Running/Run Selected are also gated on the app-wide TaskManager,
+        # not just this tab's own state - only one task (this script, an
+        # export, ...) may run at a time anywhere in the app.
+        can_run = has_selection and not self._task_manager.is_busy()
         self._new_btn.Enable(has_datasource)
         self._rename_btn.Enable(has_selection)
         self._delete_btn.Enable(has_selection)
         self._save_btn.Enable(has_selection)
-        self._run_all_btn.Enable(has_selection)
-        self._run_selected_btn.Enable(has_selection)
+        self._run_all_btn.Enable(can_run)
+        self._run_selected_btn.Enable(can_run)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -1112,14 +1172,43 @@ class ScriptsTab(wx.Panel):
         if not statements:
             wx.MessageBox("Nothing to run.", "Run", wx.OK | wx.ICON_WARNING, self)
             return
-        try:
+
+        datasource = self._datasource
+        cancel_token = CancelToken()
+
+        def work() -> Optional[QueryResult]:
             result = None
             for statement in statements:
-                result = self._datasource_repository.execute_sql(self._datasource, statement)
-        except Exception as exc:
+                if cancel_token.is_cancelled:
+                    break
+                result = self._datasource_repository.execute_sql(datasource, statement, cancel_token=cancel_token)
+            return result
+
+        def on_success(result: Optional[QueryResult]) -> None:
+            if result is not None:
+                self._result_panel.load(result)
+
+        def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Query failed:\n\n{exc}", "Execution error", wx.OK | wx.ICON_ERROR, self)
-            return
-        self._result_panel.load(result)
+
+        def on_cancelled() -> None:
+            wx.MessageBox("Query cancelled.", "Run", wx.OK | wx.ICON_INFORMATION, self)
+
+        started = self._task_manager.start(
+            label=f"Run script on {datasource.name}",
+            work=work,
+            on_success=on_success,
+            on_error=on_error,
+            on_cancelled=on_cancelled,
+            on_cancel_requested=cancel_token.cancel,
+        )
+        if not started:
+            wx.MessageBox(
+                "Another task is already running - wait for it to finish or cancel it first.",
+                "Run",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
 
 
 class ActionsTab(wx.Panel):
@@ -1128,9 +1217,10 @@ class ActionsTab(wx.Panel):
     work the same way regardless of datasource type (csv, json, postgres,
     ...)."""
 
-    def __init__(self, parent: wx.Window, repository: DatasourceRepository) -> None:
+    def __init__(self, parent: wx.Window, repository: DatasourceRepository, task_manager: TaskManager) -> None:
         super().__init__(parent)
         self._repository = repository
+        self._task_manager = task_manager
         self._datasource: Optional[Datasource] = None
 
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -1145,9 +1235,28 @@ class ActionsTab(wx.Panel):
 
         self._export_data_btn.Bind(wx.EVT_BUTTON, self._on_export_data)
         self._export_schema_btn.Bind(wx.EVT_BUTTON, self._on_export_schema)
+        self._task_manager.subscribe(lambda status, label: self._update_button_states())
 
     def load_datasource(self, datasource: Datasource) -> None:
         self._datasource = datasource
+        self._update_button_states()
+
+    def _update_button_states(self) -> None:
+        # Export is also gated on the app-wide TaskManager, not just this
+        # tab's own state - only one task (this export, a running script,
+        # ...) may run at a time anywhere in the app.
+        can_run = self._datasource is not None and not self._task_manager.is_busy()
+        self._export_data_btn.Enable(can_run)
+        self._export_schema_btn.Enable(can_run)
+
+    def _start_or_warn(self, **start_kwargs) -> None:
+        if not self._task_manager.start(**start_kwargs):
+            wx.MessageBox(
+                "Another task is already running - wait for it to finish or cancel it first.",
+                "Export",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
 
     def _on_export_data(self, event: wx.CommandEvent) -> None:
         if self._datasource is None:
@@ -1160,16 +1269,30 @@ class ActionsTab(wx.Panel):
         finally:
             dlg.Destroy()
 
-        try:
-            written = self._repository.export_to_parquet(self._datasource, output_dir)
-        except Exception as exc:
+        datasource = self._datasource
+        cancel_token = CancelToken()
+
+        def on_success(written: List[str]) -> None:
+            wx.MessageBox(
+                f"Exported {len(written)} table(s) to:\n\n{output_dir}",
+                "Export as Parquet",
+                wx.OK | wx.ICON_INFORMATION,
+                self,
+            )
+
+        def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Export failed:\n\n{exc}", "Export as Parquet", wx.OK | wx.ICON_ERROR, self)
-            return
-        wx.MessageBox(
-            f"Exported {len(written)} table(s) to:\n\n{output_dir}",
-            "Export as Parquet",
-            wx.OK | wx.ICON_INFORMATION,
-            self,
+
+        def on_cancelled() -> None:
+            wx.MessageBox("Export cancelled.", "Export as Parquet", wx.OK | wx.ICON_INFORMATION, self)
+
+        self._start_or_warn(
+            label=f"Export {datasource.name} as Parquet",
+            work=lambda: self._repository.export_to_parquet(datasource, output_dir, cancel_token=cancel_token),
+            on_success=on_success,
+            on_error=on_error,
+            on_cancelled=on_cancelled,
+            on_cancel_requested=cancel_token.cancel,
         )
 
     def _on_export_schema(self, event: wx.CommandEvent) -> None:
@@ -1191,16 +1314,30 @@ class ActionsTab(wx.Panel):
         if not output_path.lower().endswith(".parquet"):
             output_path += ".parquet"
 
-        try:
-            self._repository.export_schema_to_parquet(self._datasource, output_path)
-        except Exception as exc:
+        datasource = self._datasource
+        cancel_token = CancelToken()
+
+        def on_success(_: None) -> None:
+            wx.MessageBox(
+                f"Schema exported to:\n\n{output_path}",
+                "Export schema as Parquet",
+                wx.OK | wx.ICON_INFORMATION,
+                self,
+            )
+
+        def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Export failed:\n\n{exc}", "Export schema as Parquet", wx.OK | wx.ICON_ERROR, self)
-            return
-        wx.MessageBox(
-            f"Schema exported to:\n\n{output_path}",
-            "Export schema as Parquet",
-            wx.OK | wx.ICON_INFORMATION,
-            self,
+
+        def on_cancelled() -> None:
+            wx.MessageBox("Export cancelled.", "Export schema as Parquet", wx.OK | wx.ICON_INFORMATION, self)
+
+        self._start_or_warn(
+            label=f"Export {datasource.name} schema as Parquet",
+            work=lambda: self._repository.export_schema_to_parquet(datasource, output_path, cancel_token=cancel_token),
+            on_success=on_success,
+            on_error=on_error,
+            on_cancelled=on_cancelled,
+            on_cancel_requested=cancel_token.cancel,
         )
 
 
@@ -1216,10 +1353,12 @@ class DataExplorePage(wx.Panel):
         parent: wx.Window,
         repository: DatasourceRepository,
         script_repository: ScriptRepository,
+        task_manager: TaskManager,
         on_back: Callable[[], None],
     ) -> None:
         super().__init__(parent)
         self._repository = repository
+        self._async = AsyncTaskRunner(self)
         self._on_back = on_back
         self._datasource: Optional[Datasource] = None
         self._tables: List[str] = []
@@ -1255,10 +1394,10 @@ class DataExplorePage(wx.Panel):
         tables_panel.SetSizer(tables_outer)
         notebook.AddPage(tables_panel, "Tables")
 
-        self._scripts_tab = ScriptsTab(notebook, script_repository, repository)
+        self._scripts_tab = ScriptsTab(notebook, script_repository, repository, task_manager)
         notebook.AddPage(self._scripts_tab, "Scripts")
 
-        self._actions_tab = ActionsTab(notebook, repository)
+        self._actions_tab = ActionsTab(notebook, repository, task_manager)
         notebook.AddPage(self._actions_tab, "Actions")
 
         outer.Add(notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
@@ -1270,14 +1409,26 @@ class DataExplorePage(wx.Panel):
     def load_datasource(self, datasource: Datasource) -> None:
         self._datasource = datasource
         self._title_label.SetLabel(f"Data Explore — {datasource.name}")
-        self._tables = self._repository.list_tables(datasource)
-        self._tables_list.Set(self._tables)
+        self._tables_list.Set([])
         self._detail.clear()
-        if self._tables:
-            self._tables_list.SetSelection(0)
-            self._detail.load_table(datasource, self._tables[0])
-        self._scripts_tab.load_datasource(datasource, self._tables)
-        self._actions_tab.load_datasource(datasource)
+
+        def on_success(tables: List[str]) -> None:
+            if datasource is not self._datasource:
+                return  # the user connected to a different datasource before this came back
+            self._tables = tables
+            self._tables_list.Set(self._tables)
+            if self._tables:
+                self._tables_list.SetSelection(0)
+                self._detail.load_table(datasource, self._tables[0])
+            self._scripts_tab.load_datasource(datasource, self._tables)
+            self._actions_tab.load_datasource(datasource)
+
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(
+                f'Could not load tables for "{datasource.name}":\n\n{exc}', "Load datasource", wx.OK | wx.ICON_ERROR, self
+            )
+
+        self._async.run(work=lambda: self._repository.list_tables(datasource), on_success=on_success, on_error=on_error)
 
     def _on_table_selected(self, event: wx.CommandEvent) -> None:
         if self._datasource is None:

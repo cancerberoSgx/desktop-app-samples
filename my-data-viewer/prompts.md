@@ -257,15 +257,34 @@ when the user exists the app, we first check if there are no unsaved scripts. If
 
 
 
+# remember the user's last UI
+Currently when the app starts, the user is placed in the profiles screen
+Instead I would like to remember the last main datasource the user was and when the app opens display that datasource directly
+
 
 # sqlite
 Add support for sqlite datasource so user can load sqlite database file
 p2
 both after creating sqlite datasource from a small local db local file or after selecting a table for inspecting, the window is frozen. Do you know if in this project there exist a pattern or technique to prevent UI freeze when executing long tasks ? 
+p3 FUTURE
+too slow - why? can't we use a faster implementation like python's sqlite native driver ? 
+
 
 # collapsible sidebar
 make the sidebar collapsible to save space. Also remember this in user's preferences. Don't e2e test it
 
+# async tasks
+ in this particular project I would like to control some actions that can take a long time like exporting or executing complex
+  queries. When they execute users need to see the task status (running, finished, canceled) and be able to cancel them. Or very simplifying, being able to see that there's a task currently running - no other tasks can be executed until that finish but without freezing the UI. Also being able to cancel it. Do you think the current suggestion of using the app/async_task.py facade will work for this case ? Or should we implement ssomething else ? 
+p2
+ok now the app never freezes but, good, I would like to ALWAYS see the "Running: X" on any action against the database. For example when inspecting Tables it takes some seconds to display the information and user don't know what's happening. Make sure every operation on a datasource displays the "Running" feedback. By default there's no need to implement "Cancel" button - only for the actions already implemented (run script, export actions, etc)
+
+
+
+# FUTURE
+
+# file->open
+In File menu, add option "Open..." which allows users to select a local file like .csv, .json, parquet, sqlite db. When user open the file, the logic is exactly what the app already does on file drop.
 
 
 ---

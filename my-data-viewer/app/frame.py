@@ -1,5 +1,5 @@
 import os
-from typing import Callable, List
+from typing import Callable, List, Optional
 from urllib.parse import unquote, urlparse
 
 import wx
@@ -15,6 +15,7 @@ from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
 from app.repositories import DatasourceRepository, ProfileRepository, ScriptRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
+from app.task_manager import TaskManager, TaskStatus
 
 DEFAULT_PROFILE_NAME = "default"
 DATASOURCES_SIDEBAR_INDEX = 1
@@ -56,6 +57,48 @@ class _FileDropTarget(wx.FileDropTarget):
     def OnDropFiles(self, x: int, y: int, filenames: List[str]) -> bool:
         self._on_files_dropped(filenames)
         return True
+
+
+class TaskStatusBar(wx.StatusBar):
+    """Standard two-field wx.StatusBar, plus a Cancel button overlaid on the
+    right field - shown only while TaskManager reports a task RUNNING/
+    CANCELING, so the app's one background task (export, running a script)
+    is always visible and stoppable no matter which page is on screen. A
+    plain child wx.Button positioned in EVT_SIZE (there's no native way to
+    put a real widget inside a status bar field) rather than a second frame-
+    level toolbar, so it doesn't compete for space with page content."""
+
+    def __init__(self, parent: wx.Window) -> None:
+        super().__init__(parent)
+        self.SetFieldsCount(2)
+        self.SetStatusWidths([-1, 110])
+
+        self._cancel_btn = wx.Button(self, label="Cancel", size=(100, -1))
+        self._cancel_btn.Hide()
+
+        self.Bind(wx.EVT_SIZE, self._on_size)
+        self._on_size(None)
+
+    def _on_size(self, event: Optional[wx.SizeEvent]) -> None:
+        rect = self.GetFieldRect(1)
+        self._cancel_btn.SetPosition((rect.x + 2, rect.y + 2))
+        self._cancel_btn.SetSize((rect.width - 4, rect.height - 4))
+        if event is not None:
+            event.Skip()
+
+    def bind_cancel(self, handler: Callable[[wx.CommandEvent], None]) -> None:
+        self._cancel_btn.Bind(wx.EVT_BUTTON, handler)
+
+    def show_idle(self, text: str) -> None:
+        self.SetStatusText(text, 0)
+        self.SetStatusText("", 1)
+        self._cancel_btn.Hide()
+
+    def show_task(self, status: TaskStatus, label: str) -> None:
+        verb = "Canceling" if status == TaskStatus.CANCELING else "Running"
+        self.SetStatusText(f"{verb}: {label}", 0)
+        self._cancel_btn.Show()
+        self._cancel_btn.Enable(status == TaskStatus.RUNNING)
 
 
 class UnsavedScriptsDialog(wx.Dialog):
@@ -107,9 +150,14 @@ class MainFrame(wx.Frame):
 
         self.active_profile_id = self._bootstrap_active_profile()
 
+        self.task_manager = TaskManager()
+
         self._build_menu_bar()
-        self.CreateStatusBar()
-        self.SetStatusText("Ready")
+        self.status_bar = TaskStatusBar(self)
+        self.SetStatusBar(self.status_bar)
+        self.status_bar.bind_cancel(lambda evt: self.task_manager.cancel())
+        self.task_manager.subscribe(self._on_task_status_changed)
+        self.status_bar.show_idle("Ready")
 
         root_panel = wx.Panel(self)
         root_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -137,7 +185,11 @@ class MainFrame(wx.Frame):
 
         # Not a sidebar destination - reached only via "Connect" on Datasources.
         self.data_explore_page = DataExplorePage(
-            self.book, self.datasource_repository, self.script_repository, on_back=self._go_to_datasources
+            self.book,
+            self.datasource_repository,
+            self.script_repository,
+            self.task_manager,
+            on_back=self._go_to_datasources,
         )
         self.book.AddPage(self.data_explore_page, "Data Explore")
         self.data_explore_page_index = self.book.GetPageCount() - 1
@@ -150,6 +202,8 @@ class MainFrame(wx.Frame):
 
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self._install_drop_target(self)
+
+        self._restore_last_datasource()
 
     # ------------------------------------------------------------------
     # Profile bootstrap / switching
@@ -174,7 +228,23 @@ class MainFrame(wx.Frame):
         self.datasources_page.set_profile(profile_id)
         self.profiles_page.reload()
         profile = self.profile_repository.get(profile_id)
-        self.SetStatusText(f"Active profile: {profile.name if profile else '?'}")
+        self._set_idle_status(f"Active profile: {profile.name if profile else '?'}")
+
+    # ------------------------------------------------------------------
+    # Task status (TaskManager) - a global export/script-run task is shown
+    # in the status bar regardless of which page is on screen; ordinary page
+    # navigation status (below) is only allowed to overwrite it while idle,
+    # so switching pages mid-export doesn't hide that it's still running.
+    # ------------------------------------------------------------------
+    def _on_task_status_changed(self, status: TaskStatus, label: Optional[str]) -> None:
+        if status == TaskStatus.IDLE:
+            self.status_bar.show_idle("Ready")
+        else:
+            self.status_bar.show_task(status, label)
+
+    def _set_idle_status(self, text: str) -> None:
+        if not self.task_manager.is_busy():
+            self.status_bar.show_idle(text)
 
     def _on_profiles_changed(self) -> None:
         """Called after a profile is created/edited/deleted - re-validate
@@ -194,12 +264,31 @@ class MainFrame(wx.Frame):
     def _on_datasource_connected(self, datasource: Datasource) -> None:
         self.data_explore_page.load_datasource(datasource)
         self.book.ChangeSelection(self.data_explore_page_index)
-        self.SetStatusText(f"Connected to: {datasource.name}")
+        self.settings_repository.set_last_datasource_id(datasource.id)
+        self._set_idle_status(f"Connected to: {datasource.name}")
+
+    def _restore_last_datasource(self) -> None:
+        """On startup, jump straight into the last datasource the user had
+        open (in the active profile) instead of landing on the Profiles
+        screen - mirrors the profile restore in _bootstrap_active_profile,
+        but is best-effort: a missing/deleted datasource, or one that now
+        belongs to a different profile, just falls back to the normal
+        startup screen rather than erroring."""
+        datasource_id = self.settings_repository.get_last_datasource_id()
+        if datasource_id is None:
+            return
+        datasource = self.datasource_repository.get(datasource_id)
+        if datasource is None or datasource.profile_id != self.active_profile_id:
+            return
+        self.data_explore_page.load_datasource(datasource)
+        self.book.ChangeSelection(self.data_explore_page_index)
+        self.sidebar.select(DATASOURCES_SIDEBAR_INDEX)
+        self._set_idle_status(f"Connected to: {datasource.name}")
 
     def _go_to_datasources(self) -> None:
         self.sidebar.select(DATASOURCES_SIDEBAR_INDEX)
         self.book.ChangeSelection(DATASOURCES_SIDEBAR_INDEX)
-        self.SetStatusText("Viewing: Datasources")
+        self._set_idle_status("Viewing: Datasources")
 
     # ------------------------------------------------------------------
     # Drag-and-drop: a .csv/.json/.db(sqlite) file dropped anywhere in the app
@@ -270,12 +359,24 @@ class MainFrame(wx.Frame):
     def _on_sidebar_select(self, index: int) -> None:
         self.book.ChangeSelection(index)
         label = SIDEBAR_ITEMS[index][0]
-        self.SetStatusText(f"Viewing: {label}")
+        self._set_idle_status(f"Viewing: {label}")
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()
 
     def _on_close(self, event: wx.CloseEvent) -> None:
+        if self.task_manager.is_busy():
+            confirm = wx.MessageBox(
+                "A task is still running. Exit anyway and abandon it?",
+                "Task in progress",
+                wx.YES_NO | wx.ICON_WARNING,
+                self,
+            )
+            if confirm != wx.YES:
+                if event.CanVeto():
+                    event.Veto()
+                return
+
         unsaved = self.data_explore_page.list_unsaved_scripts()
         if not unsaved:
             self.Destroy()

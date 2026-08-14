@@ -5,6 +5,7 @@ import wx
 import wx.grid
 
 from . import drivers
+from .async_task import AsyncTaskRunner
 from .models import DATASOURCE_TYPES, Datasource, DatasourceField
 
 # Config for the two file-based datasource types ("csv", "json"), which share
@@ -43,6 +44,7 @@ class DatasourceDialog(wx.Dialog):
         self._datasource = datasource
         self._result = None
         self._initial_fields = fields or []
+        self._async = AsyncTaskRunner(self)
         # Only meaningful when `datasource` is None (e.g. a file dropped onto
         # the app that doesn't match any existing datasource yet) - prefills
         # the file picker/type for a still-to-be-created record.
@@ -174,19 +176,26 @@ class DatasourceDialog(wx.Dialog):
         if not file_path:
             wx.MessageBox(f"Pick a {kind.upper()} file first.", "Infer types", wx.OK | wx.ICON_WARNING, self)
             return
-        try:
-            columns = _FILE_KINDS[kind]["infer"](file_path)
-        except Exception as exc:
+
+        def on_success(columns) -> None:
+            self._set_grid_fields(
+                self._fields_grids[kind],
+                [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)],
+            )
+
+        def on_error(exc: Exception) -> None:
             wx.MessageBox(
                 f"Could not infer types from this {kind.upper()} file:\n\n{exc}",
                 "Infer types",
                 wx.OK | wx.ICON_ERROR,
                 self,
             )
-            return
-        self._set_grid_fields(
-            self._fields_grids[kind],
-            [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)],
+
+        self._async.run(
+            work=lambda: _FILE_KINDS[kind]["infer"](file_path),
+            on_success=on_success,
+            on_error=on_error,
+            disable=[self._infer_btns[kind]],
         )
 
     def _build_sqlite_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
