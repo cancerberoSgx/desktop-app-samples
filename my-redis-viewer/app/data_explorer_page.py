@@ -19,10 +19,31 @@ class KeyTreeView(wx.Panel):
     Right: the leaf keys of whichever branch is selected - double-clicking
     one opens KeyDetailsDialog. The tree is built once from an in-memory
     prefix trie (see redis_key_tree.py), so expanding a branch or selecting
-    one is just a dict lookup - no further Redis round-trips."""
+    one is just a dict lookup - no further Redis round-trips. That trie is
+    a snapshot from whenever it was last (re)built though, so it won't show
+    keys created since - `refresh_btn` (wired by DataExplorerPage to the
+    same bounded scan_keys() call used at connect time) is the way to pick
+    those up on demand, without paying for a live Redis round-trip on
+    every expand/select the way the old no-cache design would have."""
 
-    def __init__(self, parent: wx.Window, on_activate_key: Optional[Callable[[str], None]] = None) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        on_activate_key: Optional[Callable[[str], None]] = None,
+        on_refresh: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__(parent)
+        self._on_refresh = on_refresh or (lambda: None)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        toolbar = wx.BoxSizer(wx.HORIZONTAL)
+        self.refresh_btn = wx.Button(self, label="Refresh")
+        self.refresh_btn.SetToolTip(
+            "Re-scan the keyspace - picks up keys created since this tree was last built."
+        )
+        toolbar.Add(self.refresh_btn, 0)
+        sizer.Add(toolbar, 0, wx.ALL, 8)
 
         splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
         self._tree = wx.TreeCtrl(
@@ -33,10 +54,10 @@ class KeyTreeView(wx.Panel):
         splitter.SplitVertically(self._tree, self._list, 280)
         splitter.SetMinimumPaneSize(150)
 
-        sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(splitter, 1, wx.EXPAND)
         self.SetSizer(sizer)
 
+        self.refresh_btn.Bind(wx.EVT_BUTTON, lambda event: self._on_refresh())
         self._tree.Bind(wx.EVT_TREE_ITEM_EXPANDING, self._on_expanding)
         self._tree.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_select)
 
@@ -77,10 +98,14 @@ class KeyTreeView(wx.Panel):
 class KeySearchView(wx.Panel):
     """Search box (Redis glob pattern, e.g. "doc:foo:*") plus an optional
     type filter. Pattern-only searches filter the key list already cached
-    from the Tree tab's scan - instant, no Redis round-trip. Turning on a
-    type filter switches to a live, debounced SCAN ... TYPE ... call
-    instead, since key types aren't captured by that initial scan (see
-    DatasourceRepository.search_keys)."""
+    from the Tree tab's scan - instant, no Redis round-trip - so it won't
+    show a key created after that scan until `refresh_btn` (wired by
+    DataExplorerPage to the same scan_keys() call, shared with the Tree
+    tab) is used to pull a fresh one. Turning on a type filter switches to
+    a live, debounced SCAN ... TYPE ... call instead, since key types
+    aren't captured by that initial scan (see
+    DatasourceRepository.search_keys) - that path already hits Redis on
+    every query, so it sees new keys immediately without needing Refresh."""
 
     TYPE_CHOICES = ["Any type", "string", "hash", "list", "set", "zset", "stream"]
     DEBOUNCE_MS = 250
@@ -90,12 +115,14 @@ class KeySearchView(wx.Panel):
         parent: wx.Window,
         repository: DatasourceRepository,
         on_activate_key: Optional[Callable[[str], None]] = None,
+        on_refresh: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._repository = repository
         self._datasource: Optional[Datasource] = None
         self._cached_keys: List[str] = []
         self._cached_truncated = False
+        self._on_refresh = on_refresh or (lambda: None)
         self._async = AsyncTaskRunner(self)
         self._timer = wx.Timer(self)
 
@@ -110,7 +137,13 @@ class KeySearchView(wx.Panel):
         toolbar.Add(wx.StaticText(self, label="Type:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self._type_choice = wx.Choice(self, choices=self.TYPE_CHOICES)
         self._type_choice.SetSelection(0)
-        toolbar.Add(self._type_choice, 0, wx.ALIGN_CENTER_VERTICAL)
+        toolbar.Add(self._type_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+        self.refresh_btn = wx.Button(self, label="Refresh")
+        self.refresh_btn.SetToolTip(
+            "Re-scan the keyspace - picks up keys created since the cached list was last built "
+            "(only affects pattern-only searches; a type filter always searches live)."
+        )
+        toolbar.Add(self.refresh_btn, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(toolbar, 0, wx.EXPAND | wx.ALL, 12)
 
         self._status = wx.StaticText(self, label="")
@@ -124,6 +157,7 @@ class KeySearchView(wx.Panel):
         self._pattern_ctrl.Bind(wx.EVT_TEXT, self._on_query_changed)
         self._pattern_ctrl.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_cancel)
         self._type_choice.Bind(wx.EVT_CHOICE, self._on_query_changed)
+        self.refresh_btn.Bind(wx.EVT_BUTTON, lambda event: self._on_refresh())
         self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
 
     def set_datasource(self, datasource: Datasource) -> None:
@@ -224,9 +258,13 @@ class DataExplorerPage(wx.Panel):
         sizer.Add(self._title, 0, wx.ALL, 12)
 
         notebook = wx.Notebook(self)
-        self._tree_view = KeyTreeView(notebook, on_activate_key=self._on_key_activated)
+        self._tree_view = KeyTreeView(
+            notebook, on_activate_key=self._on_key_activated, on_refresh=self._rescan_keys
+        )
         notebook.AddPage(self._tree_view, "Tree")
-        self._search_view = KeySearchView(notebook, repository, on_activate_key=self._on_key_activated)
+        self._search_view = KeySearchView(
+            notebook, repository, on_activate_key=self._on_key_activated, on_refresh=self._rescan_keys
+        )
         notebook.AddPage(self._search_view, "Search")
         self._scripts_view = ScriptsView(notebook, repository, script_repository)
         notebook.AddPage(self._scripts_view, "Scripts")
@@ -257,6 +295,21 @@ class DataExplorerPage(wx.Panel):
         self._indexes_view.set_datasource(datasource)
         self._stats_view.clear()
         self._stats_view.set_datasource(datasource)
+        self._rescan_keys()
+
+    def _rescan_keys(self) -> None:
+        """Run (or re-run) the keyspace scan and push the result to both
+        the Tree and Search tabs - the same bounded, background-thread
+        SCAN used once at connect time by open_datasource, just made
+        re-triggerable via either tab's Refresh button. Keeping this as
+        one shared scan (rather than each tab re-scanning independently)
+        means Tree and Search never disagree about what currently exists,
+        and Refresh costs exactly what the initial connect-time scan
+        already cost - no new always-on polling or per-keystroke cost is
+        introduced."""
+        if self._datasource is None:
+            return
+        datasource = self._datasource
         self._on_status("Scanning keys... 0")
 
         def progress(count: int) -> None:
@@ -281,4 +334,5 @@ class DataExplorerPage(wx.Panel):
             work=lambda: self._repository.scan_keys(datasource, on_progress=progress),
             on_success=on_success,
             on_error=on_error,
+            disable=[self._tree_view.refresh_btn, self._search_view.refresh_btn],
         )

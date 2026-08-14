@@ -119,7 +119,16 @@ question. I want to visualize redis indexes. Currently in my apps I'm using libr
 p2
 OK, let's add a four tab in datasource to list redis indexes, When an index is clicked the index details screen is shown displaying all index fields and meta information
 
+# stats 
+Question I would like to implement a view that displays me relevant stats like memory usage, cpu, disk, etc of a redis instance. Can you list here all the metrics you can think about would be relevant for those having to diagnose performance or scalability issues?
 
+# keys details
 
+key details, if it's a hash, display the Value both as raw text (as now) and also as a table field: value in two separate tabs (table, value). By default show "table". In the table user can select a field value and copy to clipboard with ctrl-c. If value is longer than 20 chars, truncate it
+Do something similar for json keys, display two Value tabs, "json" which uses a json tree viewer and a "Raw" tab which display raw json text but with pretty format
+
+# refresh
+in datasource search  tab, it will only search for existing keys. After it loads the first time, if I create new keys I cannot see them. There should be a "refresh" or a way to force search to hit redis to update local data without loosing current performance
+Something similar happens for the Tree view. Suggest an approach that don't detriment current performance but allows to get fresh data
 
 # FUTURE
