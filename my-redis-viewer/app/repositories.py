@@ -14,6 +14,7 @@ from .redis_value_format import (
 )
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
+LAST_DATASOURCE_SETTING_KEY = "last_datasource_id"
 CONNECTION_TIMEOUT_SECONDS = 5
 KEY_SCAN_BATCH_SIZE = 1000
 KEY_SCAN_LIMIT = 200_000
@@ -571,7 +572,8 @@ class ProfileRepository:
 
 class SettingsRepository:
     """Key/value app settings (pure SQL against SQLite), used to remember
-    which profile was last active so it can be reloaded on startup."""
+    which profile was last active and which datasource was last opened in
+    the Data Explorer, so both can be restored on startup."""
 
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
@@ -594,6 +596,13 @@ class SettingsRepository:
 
     def set_current_profile_id(self, profile_id: Optional[int]) -> None:
         self.set(CURRENT_PROFILE_SETTING_KEY, str(profile_id) if profile_id is not None else None)
+
+    def get_last_datasource_id(self) -> Optional[int]:
+        value = self.get(LAST_DATASOURCE_SETTING_KEY)
+        return int(value) if value is not None else None
+
+    def set_last_datasource_id(self, datasource_id: Optional[int]) -> None:
+        self.set(LAST_DATASOURCE_SETTING_KEY, str(datasource_id) if datasource_id is not None else None)
 
 
 class ScriptRepository:

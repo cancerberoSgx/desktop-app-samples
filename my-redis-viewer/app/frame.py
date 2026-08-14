@@ -1,3 +1,5 @@
+from typing import Optional
+
 import wx
 
 from app.data_explorer_page import DataExplorerPage
@@ -26,6 +28,7 @@ class MainFrame(wx.Frame):
         self.script_repository = ScriptRepository(conn)
 
         self.active_profile_id = self._bootstrap_active_profile()
+        self._startup_datasource = self._resolve_last_datasource()
 
         self._build_menu_bar()
         self.CreateStatusBar(2)
@@ -72,6 +75,15 @@ class MainFrame(wx.Frame):
 
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
+        if self._startup_datasource is not None:
+            # Land directly on the datasource the user last had open in the
+            # Data Explorer, instead of the Profiles screen - visually
+            # matches what manually clicking Connect from Data Sources
+            # would have done, so the sidebar highlight is set to match
+            # (index 1 = "Data Sources" - see SIDEBAR_ITEMS).
+            self.sidebar.select(1)
+            self._on_connect_datasource(self._startup_datasource)
+
     # ------------------------------------------------------------------
     # Profile bootstrap / switching
     # ------------------------------------------------------------------
@@ -88,6 +100,30 @@ class MainFrame(wx.Frame):
 
         self.settings_repository.set_current_profile_id(active.id)
         return active.id
+
+    def _resolve_last_datasource(self) -> Optional[Datasource]:
+        """If a datasource was last opened in the Data Explorer (see
+        _on_connect_datasource), look it up so startup can land directly
+        on it instead of the Profiles screen. A remembered datasource is a
+        more specific "where the user left off" signal than the
+        separately-stored current profile id, so it wins: the active
+        profile is switched to match rather than second-guessed, the same
+        way it already would be if the user manually navigated to that
+        datasource's profile and clicked Connect. Returns None (leaving
+        the normal profile-based startup untouched) if nothing was
+        recorded, or if the datasource/its profile no longer exist."""
+        last_id = self.settings_repository.get_last_datasource_id()
+        if last_id is None:
+            return None
+        datasource = self.datasource_repository.get(last_id)
+        if datasource is None or datasource.profile_id is None:
+            return None
+        if self.profile_repository.get(datasource.profile_id) is None:
+            return None
+
+        self.active_profile_id = datasource.profile_id
+        self.settings_repository.set_current_profile_id(datasource.profile_id)
+        return datasource
 
     def _on_activate_profile(self, profile_id: int) -> None:
         self.active_profile_id = profile_id
@@ -142,6 +178,7 @@ class MainFrame(wx.Frame):
         self.book.ChangeSelection(self._data_explorer_index)
         self.SetStatusText(f"Viewing: Data Explorer - {datasource.name}", 0)
         self.data_explorer_page.open_datasource(datasource)
+        self.settings_repository.set_last_datasource_id(datasource.id)
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()

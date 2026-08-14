@@ -131,4 +131,8 @@ Do something similar for json keys, display two Value tabs, "json" which uses a 
 in datasource search  tab, it will only search for existing keys. After it loads the first time, if I create new keys I cannot see them. There should be a "refresh" or a way to force search to hit redis to update local data without loosing current performance
 Something similar happens for the Tree view. Suggest an approach that don't detriment current performance but allows to get fresh data
 
+# remember the user's last UI
+Currently when the app starts, the user is placed in the profiles screen
+Instead I would like to remember the last main datasource the user was and when the app opens display that datasource directly
+
 # FUTURE
