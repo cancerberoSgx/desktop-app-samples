@@ -345,6 +345,8 @@ class MainFrame(wx.Frame):
         menu_bar = wx.MenuBar()
 
         file_menu = wx.Menu()
+        file_menu.Append(wx.ID_OPEN, "Open...\tCtrl+O")
+        file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
 
         help_menu = wx.Menu()
@@ -355,6 +357,7 @@ class MainFrame(wx.Frame):
 
         self.SetMenuBar(menu_bar)
 
+        self.Bind(wx.EVT_MENU, self._on_open, id=wx.ID_OPEN)
         self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
 
@@ -365,6 +368,25 @@ class MainFrame(wx.Frame):
         self.book.ChangeSelection(index)
         label = SIDEBAR_ITEMS[index][0]
         self._set_idle_status(f"Viewing: {label}")
+
+    def _on_open(self, event: wx.CommandEvent) -> None:
+        wildcard = (
+            "Supported files (*.csv;*.json;*.jsonl;*.ndjson;*.parquet;*.db;*.sqlite;*.sqlite3)"
+            "|*.csv;*.json;*.jsonl;*.ndjson;*.parquet;*.db;*.sqlite;*.sqlite3"
+            "|All files (*.*)|*.*"
+        )
+        with wx.FileDialog(
+            self,
+            "Open file",
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            # Same handling as a drag-and-drop, so both entry points behave
+            # identically (extension-based type detection, existing-datasource
+            # lookup, profile scoping).
+            self._handle_dropped_file(dlg.GetPath())
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()
