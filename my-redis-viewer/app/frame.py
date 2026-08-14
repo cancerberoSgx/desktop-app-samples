@@ -38,7 +38,11 @@ class MainFrame(wx.Frame):
         root_panel = wx.Panel(self)
         root_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.sidebar = Sidebar(root_panel, on_select=self._on_sidebar_select)
+        self.sidebar = Sidebar(
+            root_panel,
+            on_select=self._on_sidebar_select,
+            on_toggle_collapsed=self._on_sidebar_toggle_collapsed,
+        )
         root_sizer.Add(self.sidebar, 0, wx.EXPAND)
 
         self.book = wx.Simplebook(root_panel)
@@ -70,6 +74,9 @@ class MainFrame(wx.Frame):
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
 
         root_panel.SetSizer(root_sizer)
+
+        if self.settings_repository.get_sidebar_collapsed():
+            self.sidebar.set_collapsed(True)
 
         self.Centre()
 
@@ -173,6 +180,9 @@ class MainFrame(wx.Frame):
         label = SIDEBAR_ITEMS[index][0]
         self.SetStatusText(f"Viewing: {label}", 0)
         self.SetStatusText("", 1)
+
+    def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
+        self.settings_repository.set_sidebar_collapsed(collapsed)
 
     def _on_connect_datasource(self, datasource: Datasource) -> None:
         self.book.ChangeSelection(self._data_explorer_index)

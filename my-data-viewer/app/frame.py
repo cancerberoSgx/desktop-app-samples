@@ -21,7 +21,15 @@ DATASOURCES_SIDEBAR_INDEX = 1
 
 # Extensions droppable onto the app -> the datasource `type` they map to (see
 # DATASOURCE_TYPES / the file wildcards in datasources_dialog.py).
-_DROPPABLE_FILE_TYPES = {"csv": "csv", "json": "json", "ndjson": "json", "jsonl": "json"}
+_DROPPABLE_FILE_TYPES = {
+    "csv": "csv",
+    "json": "json",
+    "ndjson": "json",
+    "jsonl": "json",
+    "db": "sqlite",
+    "sqlite": "sqlite",
+    "sqlite3": "sqlite",
+}
 
 # Controls with their own meaningful native drag/drop or text-drag behavior -
 # left alone by the recursive drop-target install below so dropping a file
@@ -194,9 +202,9 @@ class MainFrame(wx.Frame):
         self.SetStatusText("Viewing: Datasources")
 
     # ------------------------------------------------------------------
-    # Drag-and-drop: a .csv/.json file dropped anywhere in the app opens (and
-    # refreshes) the matching datasource in the current profile, or prefills
-    # "New Datasource" if none points at that file yet.
+    # Drag-and-drop: a .csv/.json/.db(sqlite) file dropped anywhere in the app
+    # opens (and refreshes) the matching datasource in the current profile,
+    # or prefills "New Datasource" if none points at that file yet.
     # ------------------------------------------------------------------
     def _install_drop_target(self, window: wx.Window) -> None:
         if not isinstance(window, _DROP_TARGET_EXCLUDED_TYPES):
@@ -221,7 +229,7 @@ class MainFrame(wx.Frame):
         if type_ is None:
             wx.MessageBox(
                 f'Unsupported file type: "{os.path.basename(path)}".\n'
-                "Only CSV and JSON files can be opened this way.",
+                "Only CSV, JSON, and SQLite files can be opened this way.",
                 "Open file",
                 wx.OK | wx.ICON_WARNING,
                 self,

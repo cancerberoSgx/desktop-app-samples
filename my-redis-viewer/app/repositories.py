@@ -15,6 +15,7 @@ from .redis_value_format import (
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 LAST_DATASOURCE_SETTING_KEY = "last_datasource_id"
+SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
 CONNECTION_TIMEOUT_SECONDS = 5
 KEY_SCAN_BATCH_SIZE = 1000
 KEY_SCAN_LIMIT = 200_000
@@ -572,8 +573,9 @@ class ProfileRepository:
 
 class SettingsRepository:
     """Key/value app settings (pure SQL against SQLite), used to remember
-    which profile was last active and which datasource was last opened in
-    the Data Explorer, so both can be restored on startup."""
+    which profile was last active, which datasource was last opened in the
+    Data Explorer, and whether the sidebar was collapsed, so all three can
+    be restored on startup."""
 
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
@@ -603,6 +605,12 @@ class SettingsRepository:
 
     def set_last_datasource_id(self, datasource_id: Optional[int]) -> None:
         self.set(LAST_DATASOURCE_SETTING_KEY, str(datasource_id) if datasource_id is not None else None)
+
+    def get_sidebar_collapsed(self) -> bool:
+        return self.get(SIDEBAR_COLLAPSED_SETTING_KEY) == "1"
+
+    def set_sidebar_collapsed(self, collapsed: bool) -> None:
+        self.set(SIDEBAR_COLLAPSED_SETTING_KEY, "1" if collapsed else "0")
 
 
 class ScriptRepository:

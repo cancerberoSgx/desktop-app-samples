@@ -8,7 +8,7 @@ from .repositories import DatasourceRepository
 
 
 def _details_for(datasource: Datasource) -> str:
-    if datasource.type in ("csv", "json"):
+    if datasource.type in ("csv", "json", "sqlite"):
         return datasource.file_path or ""
     host = datasource.db_host or ""
     port = f":{datasource.db_port}" if datasource.db_port else ""

@@ -135,4 +135,9 @@ Something similar happens for the Tree view. Suggest an approach that don't detr
 Currently when the app starts, the user is placed in the profiles screen
 Instead I would like to remember the last main datasource the user was and when the app opens display that datasource directly
 
+# collapsible sidebar
+make the sidebar collapsible to save space. Also remember this in user's preferences
+
+
+
 # FUTURE

@@ -82,6 +82,7 @@ class DatasourceDialog(wx.Dialog):
         self._book.AddPage(self._build_file_panel(datasource, "csv"), "csv")
         self._book.AddPage(self._build_file_panel(datasource, "json"), "json")
         self._book.AddPage(self._build_db_panel(datasource), "db")
+        self._book.AddPage(self._build_sqlite_panel(datasource), "sqlite")
         outer.Add(self._book, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 16)
 
         outer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 16)
@@ -188,6 +189,32 @@ class DatasourceDialog(wx.Dialog):
             [DatasourceField(name=col.name, type=col.type, position=i) for i, col in enumerate(columns)],
         )
 
+    def _build_sqlite_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
+        """SQLite is file-based like csv/json, but - unlike them - the file
+        already declares real column types and indexes, so there's no
+        "Infer types" grid to confirm/override here."""
+        panel = wx.Panel(self._book)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(wx.StaticText(panel, label="SQLite file:"), 0, wx.BOTTOM, 4)
+        if datasource and datasource.type == "sqlite" and datasource.file_path:
+            initial = datasource.file_path
+        elif not datasource and self._initial_type == "sqlite" and self._initial_file_path:
+            initial = self._initial_file_path
+        else:
+            initial = ""
+        file_picker = wx.FilePickerCtrl(
+            panel,
+            path=initial,
+            wildcard="SQLite files (*.db;*.sqlite;*.sqlite3)|*.db;*.sqlite;*.sqlite3|All files (*.*)|*.*",
+            style=wx.FLP_USE_TEXTCTRL | wx.FLP_OPEN | wx.FLP_FILE_MUST_EXIST,
+        )
+        self._sqlite_file_picker = file_picker
+        sizer.Add(file_picker, 0, wx.EXPAND)
+        panel.SetSizer(sizer)
+
+        file_picker.Bind(wx.EVT_FILEPICKER_CHANGED, self._on_file_changed)
+        return panel
+
     def _build_db_panel(self, datasource: Optional[Datasource]) -> wx.Panel:
         panel = wx.Panel(self._book)
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -258,7 +285,7 @@ class DatasourceDialog(wx.Dialog):
 
     def _on_type_changed(self, event: Optional[wx.CommandEvent]) -> None:
         selected_type = self._type_choice.GetStringSelection()
-        page_index = {"csv": 0, "json": 1}.get(selected_type, 2)
+        page_index = {"csv": 0, "json": 1, "sqlite": 3}.get(selected_type, 2)
         self._book.SetSelection(page_index)
 
     def _on_ok(self, event: wx.CommandEvent) -> None:
@@ -278,6 +305,15 @@ class DatasourceDialog(wx.Dialog):
                     "Validation error",
                     wx.OK | wx.ICON_WARNING,
                     self,
+                )
+                return
+            if not name:
+                name = os.path.splitext(os.path.basename(file_path))[0]
+        elif selected_type == "sqlite":
+            file_path = self._sqlite_file_picker.GetPath().strip()
+            if not file_path:
+                wx.MessageBox(
+                    "A SQLite file path is required.", "Validation error", wx.OK | wx.ICON_WARNING, self
                 )
                 return
             if not name:

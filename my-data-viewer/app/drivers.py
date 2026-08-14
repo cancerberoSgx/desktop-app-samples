@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
@@ -10,7 +11,7 @@ from .models import ColumnInfo, Datasource, IndexInfo, QueryResult
 
 def get_driver(
     datasource: Datasource, column_types: Optional[Dict[str, str]] = None
-) -> Union["CsvDriver", "JsonDriver", "PostgresDriver"]:
+) -> Union["CsvDriver", "JsonDriver", "SqliteDriver", "PostgresDriver"]:
     """Return the driver object able to run operations against `datasource`.
     `column_types` (name -> DuckDB type) overrides auto-detection for csv -
     see DatasourceRepository, which loads them from `datasources_fields`."""
@@ -18,6 +19,8 @@ def get_driver(
         return CsvDriver(datasource.file_path, column_types=column_types)
     if datasource.type == "json":
         return JsonDriver(datasource.file_path, column_types=column_types)
+    if datasource.type == "sqlite":
+        return SqliteDriver(datasource)
     if datasource.type == "postgres":
         return PostgresDriver(datasource)
     if datasource.type == "mysql":
@@ -232,6 +235,29 @@ class SqlAlchemyDriver:
         if paramstyle in ("format", "pyformat"):
             return sql.replace("?", "%s")
         raise NotImplementedError(f"Unsupported DBAPI paramstyle: {paramstyle!r}")
+
+
+class SqliteDriver(SqlAlchemyDriver):
+    """A local SQLite file (`datasource.file_path`), via SQLAlchemy - the
+    sqlite3 DBAPI driver ships with the Python standard library, so unlike
+    postgres this needs no extra dependency. Unlike CsvDriver/JsonDriver, an
+    existing SQLite file already declares real column types and indexes, so
+    table/column/index introspection is inherited as-is from
+    SqlAlchemyDriver rather than needing a DuckDB-style type override.
+
+    SQLAlchemy's sqlite driver silently creates an empty database file if
+    the path doesn't exist yet, which would turn a typo'd path into a
+    connection that "succeeds" against an empty db - `_make_engine` guards
+    against that so a missing file surfaces as a clear error instead."""
+
+    def __init__(self, datasource: Datasource):
+        self.file_path = datasource.file_path
+        super().__init__(sqlalchemy.engine.URL.create(drivername="sqlite", database=self.file_path))
+
+    def _make_engine(self) -> sqlalchemy.engine.Engine:
+        if not self.file_path or not os.path.exists(self.file_path):
+            raise FileNotFoundError(f"SQLite file not found: {self.file_path!r}")
+        return super()._make_engine()
 
 
 class PostgresDriver(SqlAlchemyDriver):

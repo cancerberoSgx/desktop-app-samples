@@ -258,7 +258,18 @@ when the user exists the app, we first check if there are no unsaved scripts. If
 
 
 
+# sqlite
+Add support for sqlite datasource so user can load sqlite database file
+p2
+both after creating sqlite datasource from a small local db local file or after selecting a table for inspecting, the window is frozen. Do you know if in this project there exist a pattern or technique to prevent UI freeze when executing long tasks ? 
+
+# collapsible sidebar
+make the sidebar collapsible to save space. Also remember this in user's preferences. Don't e2e test it
+
+
+
 ---
+
 
 
 
