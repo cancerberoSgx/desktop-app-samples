@@ -1,19 +1,13 @@
-import math
-from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 import wx
-import wx.grid
 import wx.stc as stc
 
 from .drivers import CancelToken
 from .models import ColumnInfo, Datasource, IndexInfo, QueryResult, Script
+from .query_result_view import QueryResultPanel, StaticQuerySource, TableQuerySource
 from .repositories import DatasourceRepository, ScriptRepository
 from .task_manager import TaskManager
-
-
-def _quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
 
 
 class TableMetadataCache:
@@ -31,10 +25,10 @@ class TableMetadataCache:
 
     Interactive changes within a table - sort, filter, pagination - always
     query live and never touch this cache: only the exact default view
-    `DataTab.load()` produces is cached/served (see its `cache_result` param
-    on `_reload_data`), since those are the same query being asked again;
-    anything else is a genuinely different query the user is actively
-    requesting.
+    `DataTab.load()` produces is cached/served (see its `on_first_result`
+    callback into `QueryResultPanel.load()`), since those are the same query
+    being asked again; anything else is a genuinely different query the user
+    is actively requesting.
 
     Keyed by datasource id (tables) or (datasource id, table)
     (columns/indexes/data), so different datasources - or the same
@@ -90,29 +84,6 @@ class TableMetadataCache:
             del self._data[key]
 
 
-@dataclass
-class _Filter:
-    column: str
-    operator: str  # "=" or "LIKE"
-    value: str
-
-
-def _build_where(filters: List[_Filter]) -> Tuple[str, list]:
-    if not filters:
-        return "", []
-    clauses = []
-    params: list = []
-    for f in filters:
-        ident = _quote_ident(f.column)
-        if f.operator == "LIKE":
-            clauses.append(f"{ident} LIKE ?")
-            params.append(f"%{f.value}%")
-        else:
-            clauses.append(f"{ident} = ?")
-            params.append(f.value)
-    return " WHERE " + " AND ".join(clauses), params
-
-
 def _split_sql_statements(script: str) -> List[str]:
     """Split a script into individual statements on top-level ';' characters
     - quote-aware (a ';' inside a '...' or "..." string doesn't end the
@@ -143,244 +114,6 @@ def _split_sql_statements(script: str) -> List[str]:
     if tail:
         statements.append(tail)
     return statements
-
-
-class PaginationBar(wx.Panel):
-    """Page size / prev-next / current-page / total-records controls. Used
-    twice per DataTab (top and bottom of the grid) - both instances are
-    driven by the same callbacks so they always agree with each other."""
-
-    PAGE_SIZES = ("25", "50", "100", "500")
-
-    def __init__(
-        self,
-        parent: wx.Window,
-        on_page_size_changed: Callable[[int], None],
-        on_prev: Callable[[], None],
-        on_next: Callable[[], None],
-    ) -> None:
-        super().__init__(parent)
-
-        sizer = wx.BoxSizer(wx.HORIZONTAL)
-        sizer.Add(wx.StaticText(self, label="Page size:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._page_size_choice = wx.Choice(self, choices=list(self.PAGE_SIZES))
-        self._page_size_choice.SetSelection(1)
-        sizer.Add(self._page_size_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
-
-        self._prev_btn = wx.Button(self, label="< Prev")
-        sizer.Add(self._prev_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        self._page_label = wx.StaticText(self, label="Page 1 of 1")
-        sizer.Add(self._page_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        self._next_btn = wx.Button(self, label="Next >")
-        sizer.Add(self._next_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
-
-        self._total_label = wx.StaticText(self, label="0 records")
-        sizer.Add(self._total_label, 0, wx.ALIGN_CENTER_VERTICAL)
-
-        self.SetSizer(sizer)
-
-        self._page_size_choice.Bind(
-            wx.EVT_CHOICE,
-            lambda evt: on_page_size_changed(int(self._page_size_choice.GetStringSelection())),
-        )
-        self._prev_btn.Bind(wx.EVT_BUTTON, lambda evt: on_prev())
-        self._next_btn.Bind(wx.EVT_BUTTON, lambda evt: on_next())
-
-    def update(self, page: int, page_size: int, total_records: int) -> None:
-        total_pages = max(1, math.ceil(total_records / page_size)) if page_size else 1
-        self._page_label.SetLabel(f"Page {page + 1} of {total_pages}")
-        self._total_label.SetLabel(f"{total_records:,} records")
-        self._prev_btn.Enable(page > 0)
-        self._next_btn.Enable(page + 1 < total_pages)
-        self._page_size_choice.SetStringSelection(str(page_size))
-
-
-_COLUMN_HANDLE_GLYPH = "▤"
-
-
-class _QueryResultTable(wx.grid.GridTableBase):
-    """Virtual data source for `_QueryResultGrid` - holds only whatever rows
-    the owner last handed it (see `_QueryResultGrid.set_rows`), same
-    lazy/replace-in-place model the old `_QueryResultListCtrl.rows` used."""
-
-    def __init__(self, columns: List[str], rows: List[tuple]) -> None:
-        super().__init__()
-        self.columns = columns
-        self.rows = rows
-        self.column_labels = list(columns)
-
-    def GetNumberRows(self) -> int:
-        return len(self.rows)
-
-    def GetNumberCols(self) -> int:
-        return len(self.columns)
-
-    def IsEmptyCell(self, row: int, col: int) -> bool:
-        return False
-
-    def GetValue(self, row: int, col: int):
-        value = self.rows[row][col]
-        return "" if value is None else str(value)
-
-    def SetValue(self, row: int, col: int, value) -> None:
-        pass
-
-    # `wx.grid.Grid.SetColLabelValue`/`GetColLabelValue` forward to these -
-    # without an override the base class silently no-ops on Set and
-    # GetColLabelValue falls back to spreadsheet-style "A"/"B"/"C" labels.
-    def GetColLabelValue(self, col: int) -> str:
-        return self.column_labels[col]
-
-    def SetColLabelValue(self, col: int, value: str) -> None:
-        self.column_labels[col] = value
-
-
-class _QueryResultGrid(wx.grid.Grid):
-    """Read-only Excel-like grid for query results: click selects a single
-    cell, ctrl-click adds cells, shift-click extends a block (all native
-    `wx.grid.Grid` behavior in the default GridSelectCells mode - no extra
-    code needed), the row-number column on the left selects whole rows, and
-    a thin glyph strip above each column name selects that whole column -
-    clicking the name itself still sorts, same as before. Ctrl+C or the
-    right-click menu copies the current selection as tab/newline-separated
-    text."""
-
-    def __init__(self, parent: wx.Window, on_sort_click: Optional[Callable[[int], None]] = None) -> None:
-        super().__init__(parent)
-        self._on_sort_click = on_sort_click
-        self.SetTable(_QueryResultTable([], []), takeOwnership=True)
-        self.EnableEditing(False)
-        self.SetSelectionMode(wx.grid.Grid.GridSelectCells)
-        self.DisableDragRowSize()
-
-        dc = wx.ClientDC(self)
-        dc.SetFont(self.GetLabelFont())
-        line_height = dc.GetTextExtent("Xy")[1]
-        self._handle_band_height = line_height + 4
-        self.SetColLabelSize(2 * line_height + 12)
-
-        self.Bind(wx.grid.EVT_GRID_LABEL_LEFT_CLICK, self._on_label_left_click)
-        self.Bind(wx.grid.EVT_GRID_CELL_RIGHT_CLICK, self._on_cell_right_click)
-        self.Bind(wx.grid.EVT_GRID_LABEL_RIGHT_CLICK, self._on_label_right_click)
-        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
-
-    # ------------------------------------------------------------------
-    # Data
-    # ------------------------------------------------------------------
-    def set_columns(self, columns: List[str]) -> None:
-        self.SetTable(_QueryResultTable(columns, []), takeOwnership=True)
-        self.set_header_labels(columns)
-
-    def set_rows(self, rows: List[tuple]) -> None:
-        table = self.GetTable()
-        old_count = table.GetNumberRows()
-        table.rows = rows
-        new_count = len(rows)
-        if new_count > old_count:
-            msg = wx.grid.GridTableMessage(
-                table, wx.grid.GRIDTABLE_NOTIFY_ROWS_APPENDED, new_count - old_count
-            )
-            self.ProcessTableMessage(msg)
-        elif new_count < old_count:
-            msg = wx.grid.GridTableMessage(
-                table, wx.grid.GRIDTABLE_NOTIFY_ROWS_DELETED, 0, old_count - new_count
-            )
-            self.ProcessTableMessage(msg)
-        self.ClearSelection()
-        self.ForceRefresh()
-
-    def set_header_labels(self, labels: List[str]) -> None:
-        for i, label in enumerate(labels):
-            self.SetColLabelValue(i, f"{_COLUMN_HANDLE_GLYPH}\n{label}")
-        self.ForceRefresh()
-
-    def autosize_columns(self, columns: List[str], rows: List[tuple]) -> None:
-        # Only call this on column/schema changes (load), never from a
-        # sort/filter reload - AutoSizeColumns() measures every cell with no
-        # sampling, so re-running it per-keystroke on a large result set
-        # would visibly lag.
-        self.AutoSizeColumns(setAsMin=False)
-        for i in range(len(columns)):
-            self.SetColSize(i, max(80, min(self.GetColSize(i), 400)))
-
-    # ------------------------------------------------------------------
-    # Selection via headers
-    # ------------------------------------------------------------------
-    def _on_label_left_click(self, event: wx.grid.GridEvent) -> None:
-        row, col = event.GetRow(), event.GetCol()
-        if col == -1 and row >= 0:
-            event.Skip()  # let native row selection (with ctrl/shift extend) happen
-            return
-        if row == -1 and col >= 0:
-            if event.GetPosition().y <= self._handle_band_height:
-                self.SelectCol(col, addToSelected=event.ControlDown())
-            elif self._on_sort_click is not None:
-                self._on_sort_click(col)
-            return
-        event.Skip()
-
-    # ------------------------------------------------------------------
-    # Context menu
-    # ------------------------------------------------------------------
-    def _on_cell_right_click(self, event: wx.grid.GridEvent) -> None:
-        row, col = event.GetRow(), event.GetCol()
-        if not self.IsInSelection(row, col):
-            self.SetGridCursor(row, col)
-            self.SelectBlock(row, col, row, col)
-        menu = wx.Menu()
-        self.Bind(wx.EVT_MENU, lambda evt: self._copy_selection_to_clipboard(), menu.Append(wx.ID_ANY, "Copy"))
-        self.Bind(wx.EVT_MENU, lambda evt: self.SelectRow(row), menu.Append(wx.ID_ANY, "Select Row"))
-        self.Bind(wx.EVT_MENU, lambda evt: self.SelectCol(col), menu.Append(wx.ID_ANY, "Select Column"))
-        self.PopupMenu(menu)
-        menu.Destroy()
-
-    def _on_label_right_click(self, event: wx.grid.GridEvent) -> None:
-        row, col = event.GetRow(), event.GetCol()
-        if col == -1 and row >= 0:
-            if not self.IsInSelection(row, 0):
-                self.SelectRow(row)
-        elif row == -1 and col >= 0:
-            if not self.IsInSelection(0, col):
-                self.SelectCol(col)
-        else:
-            return
-        menu = wx.Menu()
-        self.Bind(wx.EVT_MENU, lambda evt: self._copy_selection_to_clipboard(), menu.Append(wx.ID_ANY, "Copy"))
-        self.PopupMenu(menu)
-        menu.Destroy()
-
-    # ------------------------------------------------------------------
-    # Clipboard
-    # ------------------------------------------------------------------
-    def _on_key_down(self, event: wx.KeyEvent) -> None:
-        if event.ControlDown() and event.GetKeyCode() == ord("C"):
-            self._copy_selection_to_clipboard()
-        else:
-            event.Skip()
-
-    def _copy_selection_to_clipboard(self) -> None:
-        blocks = list(self.GetSelectedBlocks())
-        if not blocks:
-            row, col = self.GetGridCursorRow(), self.GetGridCursorCol()
-            if row < 0 or col < 0:
-                return
-            blocks = [wx.grid.GridBlockCoords(row, col, row, col)]
-
-        top = min(b.GetTopRow() for b in blocks)
-        bottom = max(b.GetBottomRow() for b in blocks)
-        left = min(b.GetLeftCol() for b in blocks)
-        right = max(b.GetRightCol() for b in blocks)
-
-        table = self.GetTable()
-        lines = []
-        for r in range(top, bottom + 1):
-            cells = [table.GetValue(r, c) if self.IsInSelection(r, c) else "" for c in range(left, right + 1)]
-            lines.append("\t".join(cells))
-        text = "\n".join(lines)
-
-        if wx.TheClipboard.Open():
-            wx.TheClipboard.SetData(wx.TextDataObject(text))
-            wx.TheClipboard.Close()
 
 
 class FieldsTab(wx.Panel):
@@ -430,13 +163,12 @@ class IndexesTab(wx.Panel):
 
 
 class DataTab(wx.Panel):
-    """Table data view: `SELECT * FROM <table> WHERE ... ORDER BY ... LIMIT
-    ... OFFSET ...` - sort (column header click), filter (per-column '='
-    exact or LIKE contains) and pagination are all pushed down into that SQL,
-    so only the current page of rows is ever fetched regardless of table
-    size. Pagination controls are duplicated above and below the grid."""
-
-    DEFAULT_PAGE_SIZE = 50
+    """Table data view: thin wrapper around `QueryResultPanel` (filter/sort/
+    pagination pushed down into SQL via `TableQuerySource`) that adds the
+    `TableMetadataCache` check for a table's *default* view (page 0, no
+    filter, no sort) - see `TableMetadataCache` for why that one exact query
+    is worth remembering across table switches while everything else always
+    queries live."""
 
     def __init__(
         self,
@@ -451,96 +183,58 @@ class DataTab(wx.Panel):
         self._cache = cache
         self._datasource: Optional[Datasource] = None
         self._table: Optional[str] = None
-        self._columns: List[str] = []
-        self._filters: List[_Filter] = []
-        self._sort_column: Optional[str] = None
-        self._sort_ascending = True
-        self._page = 0
-        self._page_size = self.DEFAULT_PAGE_SIZE
-        self._total_records = 0
 
-        outer = wx.BoxSizer(wx.VERTICAL)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self._panel = QueryResultPanel(self, task_manager)
+        sizer.Add(self._panel, 1, wx.EXPAND)
+        self.SetSizer(sizer)
 
-        filter_row = wx.BoxSizer(wx.HORIZONTAL)
-        filter_row.Add(wx.StaticText(self, label="Column:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._filter_col_choice = wx.Choice(self)
-        filter_row.Add(self._filter_col_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
-        filter_row.Add(wx.StaticText(self, label="Match:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._filter_op_choice = wx.Choice(self, choices=["= (exact)", "LIKE (contains)"])
-        self._filter_op_choice.SetSelection(0)
-        filter_row.Add(self._filter_op_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
-        self._filter_value_ctrl = wx.TextCtrl(self, size=(160, -1))
-        filter_row.Add(self._filter_value_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
-        self._add_filter_btn = wx.Button(self, label="Add filter")
-        filter_row.Add(self._add_filter_btn, 0, wx.RIGHT, 8)
-        self._remove_filter_btn = wx.Button(self, label="Remove selected")
-        filter_row.Add(self._remove_filter_btn, 0, wx.RIGHT, 8)
-        self._clear_filters_btn = wx.Button(self, label="Clear filters")
-        filter_row.Add(self._clear_filters_btn, 0)
-        outer.Add(filter_row, 0, wx.EXPAND | wx.ALL, 8)
-
-        self._filters_list = wx.ListBox(self, size=(-1, 50))
-        outer.Add(self._filters_list, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        self._top_pagination = PaginationBar(self, self._on_page_size_changed, self._on_prev, self._on_next)
-        outer.Add(self._top_pagination, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        self._grid = _QueryResultGrid(self, on_sort_click=self._on_col_click)
-        outer.Add(self._grid, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        self._bottom_pagination = PaginationBar(self, self._on_page_size_changed, self._on_prev, self._on_next)
-        outer.Add(self._bottom_pagination, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
-        self.SetSizer(outer)
-
-        self._add_filter_btn.Bind(wx.EVT_BUTTON, self._on_add_filter)
-        self._remove_filter_btn.Bind(wx.EVT_BUTTON, self._on_remove_filter)
-        self._clear_filters_btn.Bind(wx.EVT_BUTTON, self._on_clear_filters)
-
-    # ------------------------------------------------------------------
-    # Loading
-    # ------------------------------------------------------------------
     def load(self, datasource: Datasource, table: str) -> None:
         self._datasource = datasource
         self._table = table
-        self._filter_value_ctrl.SetValue("")
-        self._filters = []
-        self._filters_list.Set([])
-
-        self._sort_column = None
-        self._sort_ascending = True
-        self._page = 0
-        self._page_size = self.DEFAULT_PAGE_SIZE
+        source = TableQuerySource(self._repository, datasource, table)
 
         cached_columns = self._cache.get_columns(datasource, table)
         cached_data = self._cache.get_data(datasource, table)
         if cached_columns is not None and cached_data is not None:
             # Both this table's schema AND its default view are cached - no
             # driver round-trip at all, not even a "Querying" task.
-            self._apply_columns(cached_columns)
-            total_records, result = cached_data
-            self._apply_data(total_records, result, autosize=True)
+            self._panel.load([c.name for c in cached_columns], source, initial=cached_data)
             return
 
         if cached_columns is not None:
-            self._apply_columns(cached_columns)
-            self._reload_data(autosize=True, cache_result=True)
+            self._panel.load(
+                [c.name for c in cached_columns],
+                source,
+                error_title="Load table",
+                error_message=f'Could not load data for "{table}"',
+                task_label=f"Querying: {datasource.name}.{table}",
+                on_first_result=lambda total_records, result: self._cache.set_data(
+                    datasource, table, total_records, result
+                ),
+            )
             return
 
         def on_success(columns: List[ColumnInfo]) -> None:
             if datasource is not self._datasource or table != self._table:
                 return  # a different table was selected before this came back
             self._cache.set_columns(datasource, table, columns)
-            self._apply_columns(columns)
             # Deferred via CallAfter: this callback runs before TaskManager
             # resets itself back to IDLE (that happens right after this
-            # returns) - calling _reload_data (which starts another task)
-            # synchronously here would find it still marked busy and be
-            # silently ignored.
-            wx.CallAfter(self._reload_data, autosize=True, cache_result=True)
+            # returns) - calling self._panel.load (which starts another
+            # task) synchronously here would find it still marked busy and
+            # be silently ignored.
+            wx.CallAfter(
+                self._panel.load,
+                [c.name for c in columns],
+                source,
+                error_title="Load table",
+                error_message=f'Could not load data for "{table}"',
+                task_label=f"Querying: {datasource.name}.{table}",
+                on_first_result=lambda total_records, result: self._cache.set_data(
+                    datasource, table, total_records, result
+                ),
+            )
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Could not load columns for \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
@@ -552,180 +246,10 @@ class DataTab(wx.Panel):
             on_error=on_error,
         )
 
-    def _apply_columns(self, columns: List[ColumnInfo]) -> None:
-        self._columns = [c.name for c in columns]
-        self._filter_col_choice.Set(self._columns)
-        if self._columns:
-            self._filter_col_choice.SetSelection(0)
-        self._grid.set_columns(self._columns)
-
     def clear(self) -> None:
         self._datasource = None
         self._table = None
-        self._columns = []
-        self._filters = []
-        self._filters_list.Set([])
-        self._filter_col_choice.Set([])
-        self._grid.set_columns([])
-        self._grid.set_rows([])
-        self._top_pagination.update(0, self._page_size, 0)
-        self._bottom_pagination.update(0, self._page_size, 0)
-
-    def _apply_data(self, total_records: int, result: QueryResult, autosize: bool = False) -> None:
-        self._total_records = total_records
-        self._grid.set_rows(result.rows)
-        if autosize:
-            self._grid.autosize_columns(self._columns, result.rows)
-        self._update_sort_indicators()
-        self._top_pagination.update(self._page, self._page_size, self._total_records)
-        self._bottom_pagination.update(self._page, self._page_size, self._total_records)
-
-    # ------------------------------------------------------------------
-    # Querying
-    # ------------------------------------------------------------------
-    def _reload_data(self, autosize: bool = False, cache_result: bool = False) -> None:
-        """`cache_result` is only ever True from `load()`'s first call for a
-        table (page 0, no filter/sort - the exact default view
-        TableMetadataCache stores) - sort/filter/pagination changes always
-        query live and leave the cache alone, since those are a genuinely
-        different query each time, not the same one being re-asked."""
-        if self._datasource is None or self._table is None:
-            return
-
-        datasource = self._datasource
-        table = self._table
-        where_sql, where_params = _build_where(self._filters)
-        table_ident = _quote_ident(table)
-        sort_column = self._sort_column
-        sort_ascending = self._sort_ascending
-        page = self._page
-        page_size = self._page_size
-        cancel_token = CancelToken()
-
-        def work() -> Tuple[int, int, QueryResult]:
-            count_result = self._repository.execute_sql(
-                datasource, f"SELECT COUNT(*) FROM {table_ident}{where_sql}", where_params, cancel_token=cancel_token
-            )
-            total_records = int(count_result.rows[0][0]) if count_result.rows else 0
-
-            total_pages = max(1, math.ceil(total_records / page_size))
-            clamped_page = max(0, min(page, total_pages - 1))
-
-            order_sql = ""
-            if sort_column:
-                direction = "ASC" if sort_ascending else "DESC"
-                order_sql = f" ORDER BY {_quote_ident(sort_column)} {direction}"
-
-            offset = clamped_page * page_size
-            query = f"SELECT * FROM {table_ident}{where_sql}{order_sql} LIMIT ? OFFSET ?"
-            result = self._repository.execute_sql(
-                datasource, query, where_params + [page_size, offset], cancel_token=cancel_token
-            )
-            return total_records, clamped_page, result
-
-        def on_success(payload: Tuple[int, int, QueryResult]) -> None:
-            if datasource is not self._datasource or table != self._table:
-                return  # a different table was selected before this came back
-            total_records, clamped_page, result = payload
-            self._page = clamped_page
-            if cache_result:
-                self._cache.set_data(datasource, table, total_records, result)
-            self._apply_data(total_records, result, autosize=autosize)
-
-        def on_error(exc: Exception) -> None:
-            wx.MessageBox(f"Could not load data for \"{table}\":\n\n{exc}", "Load table", wx.OK | wx.ICON_ERROR, self)
-
-        self._task_manager.start(
-            label=f"Querying: {datasource.name}.{table}",
-            work=work,
-            on_success=on_success,
-            on_error=on_error,
-            on_cancel_requested=cancel_token.cancel,
-        )
-
-    # ------------------------------------------------------------------
-    # Sorting
-    # ------------------------------------------------------------------
-    def _on_col_click(self, col_index: int) -> None:
-        if col_index < 0 or col_index >= len(self._columns):
-            return
-        column_name = self._columns[col_index]
-        if column_name == self._sort_column:
-            self._sort_ascending = not self._sort_ascending
-        else:
-            self._sort_column = column_name
-            self._sort_ascending = True
-        self._page = 0
-        self._reload_data()
-
-    def _update_sort_indicators(self) -> None:
-        labels = []
-        for name in self._columns:
-            label = name
-            if name == self._sort_column:
-                label += " ▲" if self._sort_ascending else " ▼"
-            labels.append(label)
-        self._grid.set_header_labels(labels)
-
-    # ------------------------------------------------------------------
-    # Filtering
-    # ------------------------------------------------------------------
-    def _on_add_filter(self, event: wx.CommandEvent) -> None:
-        col_index = self._filter_col_choice.GetSelection()
-        if col_index == wx.NOT_FOUND:
-            return
-        value = self._filter_value_ctrl.GetValue().strip()
-        if not value:
-            return
-        column = self._columns[col_index]
-        operator = "=" if self._filter_op_choice.GetSelection() == 0 else "LIKE"
-        self._filters.append(_Filter(column, operator, value))
-        self._filter_value_ctrl.SetValue("")
-        self._refresh_filters_list()
-        self._page = 0
-        self._reload_data()
-
-    def _on_remove_filter(self, event: wx.CommandEvent) -> None:
-        index = self._filters_list.GetSelection()
-        if index == wx.NOT_FOUND:
-            return
-        del self._filters[index]
-        self._refresh_filters_list()
-        self._page = 0
-        self._reload_data()
-
-    def _on_clear_filters(self, event: wx.CommandEvent) -> None:
-        if not self._filters:
-            return
-        self._filters.clear()
-        self._refresh_filters_list()
-        self._page = 0
-        self._reload_data()
-
-    def _refresh_filters_list(self) -> None:
-        self._filters_list.Set(
-            [
-                f"{f.column} = '{f.value}'" if f.operator == "=" else f"{f.column} LIKE '%{f.value}%'"
-                for f in self._filters
-            ]
-        )
-
-    # ------------------------------------------------------------------
-    # Pagination
-    # ------------------------------------------------------------------
-    def _on_page_size_changed(self, page_size: int) -> None:
-        self._page_size = page_size
-        self._page = 0
-        self._reload_data()
-
-    def _on_prev(self) -> None:
-        if self._page > 0:
-            self._page -= 1
-            self._reload_data()
-
-    def _on_next(self) -> None:
-        self._page += 1
-        self._reload_data()
+        self._panel.clear()
 
 
 class TableDetailPanel(wx.Panel):
@@ -847,173 +371,15 @@ class SqlEditor(stc.StyledTextCtrl):
             self.SetSavePoint()
 
 
-class ScriptResultPanel(wx.Panel):
-    """Displays a QueryResult with client-side sort (column header click)
-    and filter (per-column '=' exact or LIKE contains) - unlike DataTab,
-    filtering/sorting here runs in Python over the already-fetched rows,
-    since a script's output can be arbitrary SQL (joins, aggregates, DDL...)
-    rather than a plain `SELECT * FROM <table>` the repository could re-run
-    with a pushed-down WHERE/ORDER BY/LIMIT."""
-
-    def __init__(self, parent: wx.Window) -> None:
-        super().__init__(parent)
-        self._columns: List[str] = []
-        self._all_rows: List[tuple] = []
-        self._filters: List[_Filter] = []
-        self._sort_column: Optional[int] = None
-        self._sort_ascending = True
-
-        outer = wx.BoxSizer(wx.VERTICAL)
-
-        filter_row = wx.BoxSizer(wx.HORIZONTAL)
-        filter_row.Add(wx.StaticText(self, label="Column:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._filter_col_choice = wx.Choice(self)
-        filter_row.Add(self._filter_col_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
-        filter_row.Add(wx.StaticText(self, label="Match:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._filter_op_choice = wx.Choice(self, choices=["= (exact)", "LIKE (contains)"])
-        self._filter_op_choice.SetSelection(0)
-        filter_row.Add(self._filter_op_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
-        self._filter_value_ctrl = wx.TextCtrl(self, size=(160, -1))
-        filter_row.Add(self._filter_value_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
-        self._add_filter_btn = wx.Button(self, label="Add filter")
-        filter_row.Add(self._add_filter_btn, 0, wx.RIGHT, 8)
-        self._remove_filter_btn = wx.Button(self, label="Remove selected")
-        filter_row.Add(self._remove_filter_btn, 0, wx.RIGHT, 8)
-        self._clear_filters_btn = wx.Button(self, label="Clear filters")
-        filter_row.Add(self._clear_filters_btn, 0)
-        outer.Add(filter_row, 0, wx.EXPAND | wx.BOTTOM, 8)
-
-        self._filters_list = wx.ListBox(self, size=(-1, 50))
-        outer.Add(self._filters_list, 0, wx.EXPAND | wx.BOTTOM, 8)
-
-        self._grid = _QueryResultGrid(self, on_sort_click=self._on_col_click)
-        outer.Add(self._grid, 1, wx.EXPAND)
-
-        self._status_label = wx.StaticText(self, label="")
-        outer.Add(self._status_label, 0, wx.TOP, 4)
-
-        self.SetSizer(outer)
-
-        self._add_filter_btn.Bind(wx.EVT_BUTTON, self._on_add_filter)
-        self._remove_filter_btn.Bind(wx.EVT_BUTTON, self._on_remove_filter)
-        self._clear_filters_btn.Bind(wx.EVT_BUTTON, self._on_clear_filters)
-
-    def load(self, result: QueryResult) -> None:
-        self._columns = result.columns
-        self._all_rows = result.rows
-        self._filters = []
-        self._filters_list.Set([])
-        self._sort_column = None
-        self._sort_ascending = True
-        self._filter_col_choice.Set(self._columns)
-        if self._columns:
-            self._filter_col_choice.SetSelection(0)
-        self._filter_value_ctrl.SetValue("")
-        self._grid.set_columns(self._columns)
-        self._apply(autosize=True)
-
-    def clear(self) -> None:
-        self.load(QueryResult(columns=[], rows=[]))
-
-    def _apply(self, autosize: bool = False) -> None:
-        rows = self._all_rows
-        for f in self._filters:
-            idx = self._columns.index(f.column)
-            if f.operator == "LIKE":
-                needle = f.value.lower()
-                rows = [r for r in rows if needle in ("" if r[idx] is None else str(r[idx]).lower())]
-            else:
-                rows = [r for r in rows if ("" if r[idx] is None else str(r[idx])) == f.value]
-
-        if self._sort_column is not None:
-            idx = self._sort_column
-
-            def key(row: tuple):
-                value = row[idx]
-                return (value is None, "" if value is None else value)
-
-            try:
-                rows = sorted(rows, key=key, reverse=not self._sort_ascending)
-            except TypeError:
-                # Mixed/uncomparable types in this column - fall back to string comparison.
-                rows = sorted(
-                    rows,
-                    key=lambda r: (r[idx] is None, "" if r[idx] is None else str(r[idx])),
-                    reverse=not self._sort_ascending,
-                )
-
-        self._grid.set_rows(rows)
-        if autosize:
-            self._grid.autosize_columns(self._columns, rows)
-        self._update_sort_indicators()
-        self._status_label.SetLabel(f"{len(rows):,} of {len(self._all_rows):,} rows")
-
-    def _on_col_click(self, col_index: int) -> None:
-        if col_index < 0 or col_index >= len(self._columns):
-            return
-        if col_index == self._sort_column:
-            self._sort_ascending = not self._sort_ascending
-        else:
-            self._sort_column = col_index
-            self._sort_ascending = True
-        self._apply()
-
-    def _update_sort_indicators(self) -> None:
-        labels = []
-        for i, name in enumerate(self._columns):
-            label = name
-            if i == self._sort_column:
-                label += " ▲" if self._sort_ascending else " ▼"
-            labels.append(label)
-        self._grid.set_header_labels(labels)
-
-    def _on_add_filter(self, event: wx.CommandEvent) -> None:
-        col_index = self._filter_col_choice.GetSelection()
-        if col_index == wx.NOT_FOUND:
-            return
-        value = self._filter_value_ctrl.GetValue().strip()
-        if not value:
-            return
-        column = self._columns[col_index]
-        operator = "=" if self._filter_op_choice.GetSelection() == 0 else "LIKE"
-        self._filters.append(_Filter(column, operator, value))
-        self._filter_value_ctrl.SetValue("")
-        self._refresh_filters_list()
-        self._apply()
-
-    def _on_remove_filter(self, event: wx.CommandEvent) -> None:
-        index = self._filters_list.GetSelection()
-        if index == wx.NOT_FOUND:
-            return
-        del self._filters[index]
-        self._refresh_filters_list()
-        self._apply()
-
-    def _on_clear_filters(self, event: wx.CommandEvent) -> None:
-        if not self._filters:
-            return
-        self._filters.clear()
-        self._refresh_filters_list()
-        self._apply()
-
-    def _refresh_filters_list(self) -> None:
-        self._filters_list.Set(
-            [
-                f"{f.column} = '{f.value}'" if f.operator == "=" else f"{f.column} LIKE '%{f.value}%'"
-                for f in self._filters
-            ]
-        )
-
-
 class ScriptsTab(wx.Panel):
     """Scripts belonging to the current datasource: list/create/rename/
     delete saved SQL scripts, edit their content in a syntax-highlighted
     editor, and run either the whole script or just the selected statement
-    against the datasource - results render in ScriptResultPanel (same
-    list-ctrl grid as the Data tab, sortable/filterable client-side).
+    against the datasource - results render in the same `QueryResultPanel`
+    the Data tab uses, backed by a `StaticQuerySource` since a script's SQL
+    can be a join/aggregate/DDL statement rather than a plain
+    `SELECT * FROM <table>`, so filter/sort/pagination run in Python over
+    the already-fetched rows instead of being pushed down into SQL.
 
     Edits are not persisted until an explicit Save (or the exit "Save All"
     flow) - switching to another script, or to another datasource entirely,
@@ -1066,7 +432,7 @@ class ScriptsTab(wx.Panel):
 
         splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
         self._editor = SqlEditor(splitter)
-        self._result_panel = ScriptResultPanel(splitter)
+        self._result_panel = QueryResultPanel(splitter)
         splitter.SplitHorizontally(self._editor, self._result_panel)
         splitter.SetSashGravity(0.4)
         splitter.SetMinimumPaneSize(80)
@@ -1330,7 +696,7 @@ class ScriptsTab(wx.Panel):
 
         def on_success(result: Optional[QueryResult]) -> None:
             if result is not None:
-                self._result_panel.load(result)
+                self._result_panel.load(result.columns, StaticQuerySource(result))
 
         def on_error(exc: Exception) -> None:
             wx.MessageBox(f"Query failed:\n\n{exc}", "Execution error", wx.OK | wx.ICON_ERROR, self)

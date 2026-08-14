@@ -287,6 +287,7 @@ each time I select a table in Tables view, these actions are always executed loa
 p2
 now I see table data is being cached and displayed fast but nevertheless the calls to "Loading" and "Querying" are still being made in background. Since we now have a refresh button, prevent hitting the DB if the table data is already in cache when clicking tables
 
+# dqlite and threads
 
 I'm getting errors like this: 
 SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 140549989792704 and this is thread id 140549021488832.
