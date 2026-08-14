@@ -342,6 +342,26 @@ class DatasourceRepository:
         return results
 
     # ------------------------------------------------------------------
+    # Server diagnostics for the Data Explorer's Stats tab.
+    # ------------------------------------------------------------------
+    def get_server_info(self, datasource: Datasource) -> dict:
+        """A single INFO everything call, covering server/memory/cpu/
+        clients/persistence/stats/replication/keyspace/commandstats/
+        errorstats/latencystats/cluster/modules in one round-trip.
+        Returned as redis-py's already-parsed flat dict rather than a
+        dataclass: unlike KeyDetails/IndexDetails this response's shape
+        is inherently dynamic - which top-level keys are present depends
+        on the Redis version, which modules are loaded, how many
+        databases/replicas/distinct commands exist - so the view picks
+        out and formats what it needs rather than a fixed schema trying
+        to model all of that up front."""
+        client = self._make_client(datasource, decode_responses=True)
+        try:
+            return client.info("everything")
+        finally:
+            client.close()
+
+    # ------------------------------------------------------------------
     # RediSearch index discovery for the Data Explorer's Indexes tab.
     # ------------------------------------------------------------------
     def list_indexes(self, datasource: Datasource) -> List[str]:

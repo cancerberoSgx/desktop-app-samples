@@ -11,6 +11,7 @@ from .models import Datasource
 from .redis_key_tree import build_key_tree
 from .repositories import DatasourceRepository, ScriptRepository
 from .scripts_view import ScriptsView
+from .stats_view import StatsView
 
 
 class KeyTreeView(wx.Panel):
@@ -231,6 +232,8 @@ class DataExplorerPage(wx.Panel):
         notebook.AddPage(self._scripts_view, "Scripts")
         self._indexes_view = IndexesView(notebook, repository)
         notebook.AddPage(self._indexes_view, "Indexes")
+        self._stats_view = StatsView(notebook, repository)
+        notebook.AddPage(self._stats_view, "Stats")
         sizer.Add(notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self.SetSizer(sizer)
@@ -252,6 +255,8 @@ class DataExplorerPage(wx.Panel):
         self._scripts_view.set_datasource(datasource)
         self._indexes_view.clear()
         self._indexes_view.set_datasource(datasource)
+        self._stats_view.clear()
+        self._stats_view.set_datasource(datasource)
         self._on_status("Scanning keys... 0")
 
         def progress(count: int) -> None:
