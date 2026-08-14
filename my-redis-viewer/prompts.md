@@ -113,5 +113,13 @@ Ideally the script text area should support redis syntax highlighting, or at lea
 p2
 in the case one of the redis commands in scripts returns a list of keys, is it possible to, instead listing all keys as text, add just say "N keys" and a button that opens the keys in a table and when a key is clicked display the key-details view (like in the search screen ) ? 
 
+# indexes
+question. I want to visualize redis indexes. Currently in my apps I'm using library redisvl to create indexes and perform searches. If here I want to list indexes, create, update and perform searches, do you think I should use that same library or access redis indexes directly with redis to be more generic ? (don't write code, just research and answer)
+
+p2
+OK, let's add a four tab in datasource to list redis indexes, When an index is clicked the index details screen is shown displaying all index fields and meta information
+
+
+
 
 # FUTURE

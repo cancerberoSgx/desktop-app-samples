@@ -4,6 +4,7 @@ from typing import Callable, Dict, List, Optional
 import wx
 
 from .async_task import AsyncTaskRunner
+from .indexes_view import IndexesView
 from .key_details_dialog import KeyDetailsDialog
 from .key_list_ctrl import KeyListCtrl
 from .models import Datasource
@@ -228,6 +229,8 @@ class DataExplorerPage(wx.Panel):
         notebook.AddPage(self._search_view, "Search")
         self._scripts_view = ScriptsView(notebook, repository, script_repository)
         notebook.AddPage(self._scripts_view, "Scripts")
+        self._indexes_view = IndexesView(notebook, repository)
+        notebook.AddPage(self._indexes_view, "Indexes")
         sizer.Add(notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self.SetSizer(sizer)
@@ -247,6 +250,8 @@ class DataExplorerPage(wx.Panel):
         self._search_view.set_datasource(datasource)
         self._scripts_view.clear()
         self._scripts_view.set_datasource(datasource)
+        self._indexes_view.clear()
+        self._indexes_view.set_datasource(datasource)
         self._on_status("Scanning keys... 0")
 
         def progress(count: int) -> None:

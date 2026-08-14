@@ -42,6 +42,33 @@ class CommandExecutionResult:
     keys: Optional[List[str]] = None
 
 
+@dataclass
+class IndexField:
+    """One entry from FT.INFO's `attributes` list - a field the index was
+    created with."""
+
+    identifier: str
+    attribute: str
+    type: str
+    flags: List[str]
+    extra: dict
+
+
+@dataclass
+class IndexDetails:
+    """Parsed FT.INFO output for a single RediSearch index."""
+
+    name: str
+    key_type: Optional[str]
+    prefixes: List[str]
+    fields: List[IndexField]
+    num_docs: int
+    num_records: int
+    indexing: bool
+    percent_indexed: Optional[float]
+    hash_indexing_failures: int
+
+
 class DatasourceRepository:
     """CRUD for `datasources` (pure SQL against SQLite), scoped to a profile,
     plus `test_connection`, which opens a real connection to the Redis server
@@ -313,6 +340,131 @@ class DatasourceRepository:
         finally:
             client.close()
         return results
+
+    # ------------------------------------------------------------------
+    # RediSearch index discovery for the Data Explorer's Indexes tab.
+    # ------------------------------------------------------------------
+    def list_indexes(self, datasource: Datasource) -> List[str]:
+        """FT._LIST - names of every RediSearch index on the server. This
+        is intentionally cheap (no per-index FT.INFO round-trip); details
+        are fetched lazily by get_index_details when an index is opened -
+        mirrors the scan_keys/get_key_details split above. Raises
+        redis.ResponseError if the server has no Search module loaded."""
+        client = self._make_client(datasource, decode_responses=True)
+        try:
+            names = client.execute_command("FT._LIST")
+        finally:
+            client.close()
+        return sorted(names)
+
+    def get_index_details(self, datasource: Datasource, index_name: str) -> IndexDetails:
+        """FT.INFO <index_name>, parsed into IndexDetails."""
+        client = self._make_client(datasource, decode_responses=True)
+        try:
+            info = client.ft(index_name).info()
+        finally:
+            client.close()
+        return self._parse_index_info(index_name, info)
+
+    # FT.INFO's flat attribute list alternates key/value pairs (identifier,
+    # attribute, type, WEIGHT, SEPARATOR, PHONETIC, and per-type config like
+    # VECTOR's algorithm/data_type/dim/distance_metric/...) with a handful
+    # of bare flag tokens that take no value. The set of possible per-type
+    # config keys grows with new field types/algorithms, so parsing assumes
+    # "this token starts a key-value pair" by default and only special-cases
+    # the small, stable set of true bare flags - the inverse (assume "flag"
+    # by default) would silently misparse any config key this list doesn't
+    # yet know about, e.g. future VECTOR algorithm parameters.
+    _INDEX_ATTR_BARE_FLAGS = {
+        "SORTABLE",
+        "NOSTEM",
+        "NOINDEX",
+        "CASESENSITIVE",
+        "UNF",
+        "INDEXMISSING",
+        "INDEXEMPTY",
+        "WITHSUFFIXTRIE",
+    }
+
+    @classmethod
+    def _parse_index_info(cls, index_name: str, info: dict) -> IndexDetails:
+        """Parse the dict returned by redis-py's `.ft(name).info()`. Handles
+        both shapes redis-py can hand back depending on version/protocol:
+        `attributes`/`index_definition` entries as flat key-value-flag
+        lists (the classic RESP2 wire shape), or already normalised into
+        dicts - see redis-py's commands/search/commands.py for the exact
+        variants this is defending against."""
+
+        def as_dict(value) -> dict:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, (list, tuple)):
+                return dict(zip(value[::2], value[1::2]))
+            return {}
+
+        def parse_field(raw) -> IndexField:
+            if isinstance(raw, dict):
+                extra = {
+                    k: v for k, v in raw.items() if k not in ("identifier", "attribute", "type", "flags")
+                }
+                return IndexField(
+                    identifier=raw.get("identifier", ""),
+                    attribute=raw.get("attribute", raw.get("identifier", "")),
+                    type=raw.get("type", "?"),
+                    flags=list(raw.get("flags") or []),
+                    extra=extra,
+                )
+            pairs, flags = {}, []
+            tokens = list(raw)
+            i = 0
+            while i < len(tokens):
+                token = tokens[i]
+                if token not in cls._INDEX_ATTR_BARE_FLAGS and i + 1 < len(tokens):
+                    pairs[token] = tokens[i + 1]
+                    i += 2
+                else:
+                    flags.append(token)
+                    i += 1
+            extra = {k: v for k, v in pairs.items() if k not in ("identifier", "attribute", "type")}
+            return IndexField(
+                identifier=pairs.get("identifier", ""),
+                attribute=pairs.get("attribute", pairs.get("identifier", "")),
+                type=pairs.get("type", "?"),
+                flags=flags,
+                extra=extra,
+            )
+
+        index_definition = as_dict(info.get("index_definition"))
+        prefixes = index_definition.get("prefixes") or []
+        if isinstance(prefixes, str):
+            prefixes = [prefixes]
+
+        raw_fields = info.get("attributes") or []
+        fields = [parse_field(raw) for raw in raw_fields]
+
+        def to_int(value, default=0) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        def to_float(value) -> Optional[float]:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        return IndexDetails(
+            name=info.get("index_name", index_name),
+            key_type=index_definition.get("key_type"),
+            prefixes=list(prefixes),
+            fields=fields,
+            num_docs=to_int(info.get("num_docs")),
+            num_records=to_int(info.get("num_records")),
+            indexing=str(info.get("indexing", "0")) not in ("0", "", "false", "False"),
+            percent_indexed=to_float(info.get("percent_indexed")),
+            hash_indexing_failures=to_int(info.get("hash_indexing_failures")),
+        )
 
     @staticmethod
     def _make_client(datasource: Datasource, decode_responses: bool = False) -> redis.Redis:
