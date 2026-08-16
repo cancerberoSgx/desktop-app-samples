@@ -23,7 +23,7 @@ class FileEntry:
     column reads "-" rather than a misleadingly-cheap immediate-children-only
     number. `modified_at` is the epoch seconds from `os.stat().st_mtime`,
     rendered by formatting.format_modified - kept as a raw float here (not a
-    pre-formatted string) so FolderContentsCtrl can sort on the real value
+    pre-formatted string) so FolderTreeCtrl can sort on the real value
     rather than on formatted text.
     """
 

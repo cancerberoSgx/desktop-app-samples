@@ -4,23 +4,28 @@ import sys
 from typing import Callable, List, Optional, Tuple
 
 import wx
+import wx.dataview as dv
 
 from .async_task import AsyncTaskRunner
 from .file_system_service import FileSystemService
-from .folder_contents_ctrl import FolderContentsCtrl
+from .folder_tree_ctrl import FolderTreeCtrl
 from .models import FileEntry, FolderListing
 from .repositories import FavoriteRepository
 
 """The main screen: a toolbar + clickable breadcrumb + the sortable folder
-contents table (FolderContentsCtrl). Loading a folder's contents always goes
-through FileSystemService via AsyncTaskRunner (see async_task.py's
-docstring) - never a direct os.scandir/os.stat call from an event handler -
-so a slow (e.g. network-mounted) folder can't freeze the window. This is
-the pattern every future folder action (rename, delete, recursive size,
-glob search, ...) should also follow: add the blocking method to
-FileSystemService, then call it through self._async.run(...) here (or in
-whatever new page/dialog needs it), the same way my-redis-viewer's
-DatasourcesPage._on_connect calls DatasourceRepository.test_connection.
+contents tree (FolderTreeCtrl). Loading the *currently open* folder's
+top-level contents always goes through FileSystemService via AsyncTaskRunner
+(see async_task.py's docstring) - never a direct os.scandir/os.stat call from
+an event handler - so a slow (e.g. network-mounted) folder can't freeze the
+window. Expanding a subfolder *row* goes through the same FileSystemService
+method, but via its own throwaway AsyncTaskRunner - see _on_expand_folder -
+so several rows can be expanded (and queried) concurrently instead of a
+folder's contents being fetched eagerly. This is the pattern every future
+folder action (rename, delete, recursive size, glob search, ...) should also
+follow: add the blocking method to FileSystemService, then call it through an
+AsyncTaskRunner here (or in whatever new page/dialog needs it), the same way
+my-redis-viewer's DatasourcesPage._on_connect calls
+DatasourceRepository.test_connection.
 """
 
 
@@ -83,7 +88,9 @@ class FolderExplorerPage(wx.Panel):
         outer.Add(self._error_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         self._error_text.Hide()
 
-        self._list = FolderContentsCtrl(self, on_activate_entry=self._on_activate_entry)
+        self._list = FolderTreeCtrl(
+            self, on_activate_entry=self._on_activate_entry, on_expand_folder=self._on_expand_folder
+        )
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self.SetSizer(outer)
@@ -92,8 +99,7 @@ class FolderExplorerPage(wx.Panel):
         self._open_btn.Bind(wx.EVT_BUTTON, self._on_open_folder)
         self._up_btn.Bind(wx.EVT_BUTTON, self._on_up)
         self._favorite_btn.Bind(wx.EVT_BUTTON, self._on_toggle_favorite)
-        self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
-        self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
+        self._list.Bind(dv.EVT_TREELIST_SELECTION_CHANGED, self._update_button_states)
 
     # ------------------------------------------------------------------
     # Navigation
@@ -163,10 +169,10 @@ class FolderExplorerPage(wx.Panel):
             return  # the user navigated elsewhere before this landed
         if listing.error is not None:
             self._set_error(listing.error)
-            self._list.set_entries([])
+            self._list.set_root_entries([])
             return
         self._set_error(None)
-        self._list.set_entries(listing.entries)
+        self._list.set_root_entries(listing.entries)
         note = f"  ·  {listing.skipped} item(s) could not be read" if listing.skipped else ""
         self._header_note.SetLabel(
             f"{len(listing.entries)} item(s){note}"
@@ -174,7 +180,24 @@ class FolderExplorerPage(wx.Panel):
 
     def _on_folder_load_error(self, message: str) -> None:
         self._set_error(message)
-        self._list.set_entries([])
+        self._list.set_root_entries([])
+
+    def _on_expand_folder(self, path: str, on_loaded: Callable[[FolderListing], None]) -> None:
+        """FolderTreeCtrl's callback for "the user expanded this row, and it
+        hasn't been queried yet" - the one place a subfolder's contents get
+        fetched, and only in response to that expand. Uses its own
+        throwaway AsyncTaskRunner rather than self._async: several rows can
+        be expanded before the first fetch lands, and self._async (shared
+        with top-level folder navigation) only runs one job at a time - a
+        second .run() call while busy is silently ignored (see
+        AsyncTaskRunner's docstring) - which would leave some expanded rows
+        stuck on "Loading…" forever."""
+        runner = AsyncTaskRunner(self)
+        runner.run(
+            work=lambda: self._file_service.list_folder(path),
+            on_success=on_loaded,
+            on_error=lambda exc: on_loaded(FolderListing(error=str(exc))),
+        )
 
     # ------------------------------------------------------------------
     # Favorites
@@ -242,7 +265,7 @@ class FolderExplorerPage(wx.Panel):
             self._error_text.Hide()
         self.Layout()
 
-    def _update_button_states(self, event: Optional[wx.ListEvent] = None) -> None:
+    def _update_button_states(self, event: Optional[wx.Event] = None) -> None:
         has_folder = self._current_path is not None
         self._open_btn.Enable(not self._loading)
         self._up_btn.Enable(not self._loading and has_folder and _has_parent(self._current_path))

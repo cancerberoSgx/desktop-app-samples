@@ -5,10 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A wxPython desktop app: a performant local file explorer. Pin folders as
-**favorites** in a collapsible left sidebar, open a folder to see its immediate
-contents in a sortable table (Name, Size, Modified), and pick up where you left
-off - the last folder open is remembered in preferences, same as whether the
-sidebar was collapsed.
+**favorites** in a collapsible left sidebar, open a folder to see its contents
+in a sortable tree (Name, Size, Modified) - expand a subfolder row to reveal
+*its* contents in place, queried lazily only at the moment it's expanded - and
+pick up where you left off - the last folder open is remembered in
+preferences, same as whether the sidebar was collapsed.
 
 This project was templated from the sibling `my-redis-viewer` app for its overall
 architecture (SQLite + migrations under `app/db/`, `AsyncTaskRunner` facade for
@@ -117,17 +118,58 @@ connection from inside them, but never from inside `work`.
   first checks the path/id it was called for still matches what's currently
   open (`if path != self._current_path: return` in
   `FolderExplorerPage._on_folder_loaded`) - guards against a slow background
-  listing landing after the user already navigated elsewhere.
+  listing landing after the user already navigated elsewhere. The per-row
+  equivalent for a lazily-expanded subfolder is `FolderTreeCtrl._Node` itself
+  (see below): `_on_children_loaded` checks `node.wx_item is not None` rather
+  than a path/id, since the node object - not a path string - is what a
+  slow expand's callback closure actually captures.
 
-### Folder contents table (`app/folder_contents_ctrl.py`)
+- **Per-expand throwaway `AsyncTaskRunner`, not the shared one**: expanding a
+  row goes through `FileSystemService.list_folder` too, but via a fresh
+  `AsyncTaskRunner(self)` created on the spot in
+  `FolderExplorerPage._on_expand_folder`, not the page's shared `self._async`.
+  Several rows can be expanded before the first fetch lands, and `self._async`
+  (used for top-level folder navigation) only runs one job at a time - reusing
+  it here would silently drop all but the first concurrent expand, leaving
+  those rows stuck on "Loading…" forever.
 
-`FolderContentsCtrl` is a virtual `wx.ListCtrl` (`LC_VIRTUAL`) - no per-row wx
-item is ever created, so it stays responsive on a folder with a very large
-number of entries; only `OnGetItemText` is called, and only for rows currently
-on screen. Three columns today (Name, Size, Modified); more (file type, glob
-match, recursive size, ...) are meant to be added to `_COLUMNS`/`_SORT_KEYS`
-alongside `FileEntry` gaining the backing field. Clicking a header sorts by it,
-click again to reverse.
+### Folder contents tree (`app/folder_tree_ctrl.py`)
+
+`FolderTreeCtrl` is a `wx.dataview.TreeListCtrl` - top-level items are the
+currently open folder's immediate children, same as before, but a subfolder
+row can be expanded in place to reveal *its* immediate children instead of
+navigating away from it. Three columns today (Name, Size, Modified); more
+(file type, glob match, recursive size, ...) are meant to be added to
+`_COLUMNS`/`_SORT_KEYS` alongside `FileEntry` gaining the backing field.
+Clicking a header sorts by it, click again to reverse.
+
+- **A folder's contents are only ever queried once it's expanded** - the
+  whole point of this control. Expanding a row shows a single "Loading…"
+  placeholder immediately (native `TL_...`/`EVT_TREELIST_ITEM_EXPANDING`
+  behavior lets the arrow flip and the row open before the real data
+  arrives), which `FolderTreeCtrl._on_children_loaded` swaps for the real
+  children once `FolderExplorerPage`'s async fetch completes - each of
+  *those* children that's itself a folder gets its own not-yet-loaded
+  placeholder, so depth is unbounded but nothing below the currently-expanded
+  rows is ever fetched. A `_Node`'s `children`/`loaded` act as a permanent
+  cache: re-expanding an already-loaded folder, or re-sorting, never
+  re-queries `FileSystemService` - see `_Node`'s docstring.
+
+- **Sorting is fully hand-rolled, not `wx.dataview`'s native comparator-driven
+  column sort** - a header click flips `_sort_column`/`_sort_ascending` (same
+  state machine as the old flat-list control) and every currently-loaded
+  level is rebuilt from the cached `_Node` tree. Two things pushed this away
+  from the native mechanism, both found by hand-testing against a real
+  `wx.App` (see "Verification performed"): the native sort's comparator gets
+  called and `EVT_TREELIST_COLUMN_SORTED` does fire, but it does **not**
+  reorder what `GetFirstChild`/`GetNextSibling` actually traverse, so relying
+  on it would desync our own bookkeeping from the screen; and calling
+  `TreeListCtrl.SetSortColumn()` - the obvious way to get the native sort-arrow
+  header glyph - silently collapses every expanded row as a side effect, in
+  this wx version. The header still shows a sort arrow, but drawn by hand
+  (`_update_column_headers` appends "↑"/"↓" to the label via
+  `ClearColumns()`/`AppendColumn()`), the same trick the old
+  `FolderContentsCtrl` used for its plain `wx.ListCtrl`.
 
 - **Folders always sort before files**, regardless of the active column or
   direction - the usual file-explorer convention. This is implemented as **two
@@ -136,7 +178,15 @@ click again to reverse.
   `reverse=`). Combining both into a single `(group, value)` tuple with
   `reverse=True` would flip the group order too on a descending sort (files
   before folders) - relying on Python's sort being stable is what keeps the
-  group order fixed while the value order still reverses.
+  group order fixed while the value order still reverses. `FolderTreeCtrl`
+  applies this per level (`_sorted`), not just at the top.
+
+- **Expand/collapse state survives a re-sort** even though there's no
+  `EVT_TREELIST_ITEM_COLLAPSED` to track it incrementally: right before
+  `_rebuild_all` tears the wx tree down, `_snapshot_expanded` asks
+  `IsExpanded()` on every currently-built node and stores the answer on the
+  `_Node` itself, then the rebuild re-`Expand()`s whichever nodes came back
+  `True`.
 
 ### Migrations (`app/db/migrations/*.sql`)
 
@@ -174,6 +224,21 @@ actually ran - the same approach `my-disk-viewer`'s own CLAUDE.md documents. Thi
 caught a real bug before it shipped: combining the folders-first group key and
 the sort value into one `reverse=True` sort flipped the group order on a
 descending click - fixed by splitting it into two stable sorts (see above).
+
+`FolderTreeCtrl`'s lazy-expand rework was verified the same way, driving its
+real `_on_item_expanding`/`_on_children_loaded`/`_on_column_sorted` handlers
+with hand-constructed fake events (duck-typed objects exposing just
+`GetItem()`/`GetColumn()`, matching what a real `wx.dataview.TreeListEvent`
+exposes) against a real multi-level temp-folder tree - confirming a folder's
+`FileSystemService.list_folder` call happens exactly once, only on its first
+expand, that a nested grandchild folder stays unqueried until *it's* expanded,
+and that re-expanding or re-sorting never triggers a second query. This is
+also what caught both of `SetSortColumn()`'s and native-comparator-sort's
+issues documented above - real `EVT_TREELIST_COLUMN_SORTED` header clicks
+(checked separately with `wx.UIActionSimulator`, since that particular
+question was about a real click's side effects, not about our own handler)
+confirmed the collapse-on-sort bug traced back to our own `SetSortColumn()`
+call rather than the click itself.
 
 ## What's next (not built yet)
 

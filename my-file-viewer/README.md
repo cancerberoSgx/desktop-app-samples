@@ -2,9 +2,10 @@
 
 A desktop app, built with [wxPython](https://wxpython.org), for browsing folders on
 your local filesystem: pin folders as favorites in a collapsible sidebar, open a
-folder and see its contents in a sortable table (name, size, modified date), and
-pick up right where you left off - the last folder you had open is remembered
-across restarts.
+folder and see its contents in a sortable tree (name, size, modified date) -
+expand a subfolder row to see its contents in place, queried only at the
+moment it's expanded - and pick up right where you left off - the last folder
+you had open is remembered across restarts.
 
 ## Project layout
 
@@ -13,8 +14,8 @@ main.py                       Entry point
 app/
   frame.py                    Main window: sidebar + folder explorer
   sidebar.py                  Collapsible left sidebar: favorite-folder shortcuts
-  folder_explorer_page.py     Toolbar + breadcrumb + folder contents table
-  folder_contents_ctrl.py     Virtual, sortable wx.ListCtrl for a folder's contents
+  folder_explorer_page.py     Toolbar + breadcrumb + folder contents tree
+  folder_tree_ctrl.py         Sortable wx.dataview.TreeListCtrl, lazy per-row expand
   file_system_service.py      Every filesystem action - see "Async by design" below
   async_task.py                Facade for running a service call off the UI thread
   formatting.py                Byte-count / timestamp -> human string helpers
@@ -51,13 +52,16 @@ to an icon-only strip, and whether it's collapsed is remembered in preferences.
 
 "Open Folder..." (or clicking a favorite, or double-clicking a subfolder row)
 opens a folder and lists its immediate contents - files and subfolders - in a
-table with **Name**, **Size**, and **Modified** columns. Click a column header to
+tree with **Name**, **Size**, and **Modified** columns. Click a column header to
 sort by it; click again to reverse direction. Folders always sort before files,
-regardless of which column is active. The table is a virtual `wx.ListCtrl`
-(`FolderContentsCtrl`), so browsing a folder with tens of thousands of entries
-stays responsive - no per-row widget is ever created. Double-clicking a file
-opens it with the OS's default application; double-clicking a folder navigates
-into it. The last folder you had open is remembered and reopened on startup.
+regardless of which column is active. The tree is a `wx.dataview.TreeListCtrl`
+(`FolderTreeCtrl`); expanding a subfolder row queries *that* folder's contents
+lazily, right then, rather than up front - so opening a folder stays fast no
+matter how deep or wide the tree underneath it gets, and a folder's contents
+are only ever fetched once (re-expanding or re-sorting reuses what was already
+fetched). Double-clicking a file opens it with the OS's default application;
+double-clicking a folder navigates into it, making it the new top-level view.
+The last folder you had open is remembered and reopened on startup.
 
 Directories don't show a size yet (`-`) - recursive folder size is a planned
 future column, not computed today.
@@ -69,7 +73,11 @@ and is invoked through `AsyncTaskRunner` (`app/async_task.py`), never called
 directly from a `wx.EVT_*` handler - see `FolderExplorerPage._load_current_folder`
 for the reference usage. This is the same pattern `my-redis-viewer` uses to keep
 Redis commands from freezing the UI, carried over here for filesystem calls
-(which can stall just as badly on a network-mounted folder). Every future folder
+(which can stall just as badly on a network-mounted folder). Expanding a
+subfolder row in the tree goes through the same `FileSystemService.list_folder`
+call, but via its own throwaway `AsyncTaskRunner` (see
+`FolderExplorerPage._on_expand_folder`) rather than the page's shared one, so
+several rows can be expanded - and queried - concurrently. Every future folder
 action - rename, delete, copy/move, recursive size, glob-based search, more
 columns/file details - should be added as a new `FileSystemService` method and
 called the same way.
