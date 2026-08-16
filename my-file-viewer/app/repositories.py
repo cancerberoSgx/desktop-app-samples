@@ -6,6 +6,7 @@ from .models import Favorite
 
 LAST_FOLDER_SETTING_KEY = "last_folder_path"
 SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
+SHOW_HIDDEN_FILES_SETTING_KEY = "show_hidden_files"
 
 
 class FavoriteRepository:
@@ -97,3 +98,12 @@ class SettingsRepository:
 
     def set_sidebar_collapsed(self, collapsed: bool) -> None:
         self.set(SIDEBAR_COLLAPSED_SETTING_KEY, "1" if collapsed else "0")
+
+    def get_show_hidden_files(self) -> bool:
+        """Defaults to `False` (hidden files/folders not shown) when never
+        set - same "no row yet -> falsy" convention as
+        get_sidebar_collapsed."""
+        return self.get(SHOW_HIDDEN_FILES_SETTING_KEY) == "1"
+
+    def set_show_hidden_files(self, show_hidden: bool) -> None:
+        self.set(SHOW_HIDDEN_FILES_SETTING_KEY, "1" if show_hidden else "0")

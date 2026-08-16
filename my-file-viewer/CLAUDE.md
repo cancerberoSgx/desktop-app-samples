@@ -9,7 +9,9 @@ A wxPython desktop app: a performant local file explorer. Pin folders as
 in a sortable tree (Name, Size, Modified) - expand a subfolder row to reveal
 *its* contents in place, queried lazily only at the moment it's expanded - and
 pick up where you left off - the last folder open is remembered in
-preferences, same as whether the sidebar was collapsed.
+preferences, same as whether the sidebar was collapsed. File > Settings...
+opens a modal for app preferences - today just whether hidden files/folders
+are shown (off by default).
 
 This project was templated from the sibling `my-redis-viewer` app for its overall
 architecture (SQLite + migrations under `app/db/`, `AsyncTaskRunner` facade for
@@ -205,6 +207,48 @@ Clicking a header sorts by it, click again to reverse.
   `_Node` itself, then the rebuild re-`Expand()`s whichever nodes came back
   `True`.
 
+### Settings (`app/settings_dialog.py`, File > Settings...)
+
+`SettingsDialog` is a plain `wx.Dialog` with a `CreateButtonSizer(OK|CANCEL)`,
+the same shape as `my-redis-viewer`'s `ProfileDialog` - today it holds one
+control (a checkbox for "Show hidden files and folders"), but a future setting
+is just another control in `_build_ui` plus a field on the OK-captured result,
+not a new pattern. `MainFrame._on_settings` only writes through to
+`SettingsRepository`/`FolderExplorerPage` when `ShowModal()` returns
+`wx.ID_OK` - Cancel discards whatever the user ticked, same as any other
+modal form in this app family.
+
+- **The setting itself lives in `SettingsRepository`**
+  (`get_show_hidden_files`/`set_show_hidden_files`, key `show_hidden_files`) -
+  no new migration needed, since `settings` is already a generic key/value
+  table. Defaults to `False` (hidden files/folders not shown) the same way
+  `get_sidebar_collapsed` defaults to `False`: no row yet reads back as the
+  falsy string comparison failing.
+
+- **`FileSystemService.list_folder` takes `show_hidden: bool = False`** and
+  filters out any entry `_is_hidden()` flags (a leading `.` - the Unix
+  convention - or, on Windows, `stat_result.st_file_attributes &
+  FILE_ATTRIBUTE_HIDDEN`) before it's even wrapped into a `FileEntry`. A
+  filtered-out entry is *not* counted in `FolderListing.skipped`: that field
+  means "couldn't be read", and hiding a dotfile on purpose isn't a failure.
+  `stat.FILE_ATTRIBUTE_HIDDEN` is checked unconditionally rather than gated on
+  `sys.platform`, since the constant exists cross-platform in Python's `stat`
+  module even though `st_file_attributes` only actually appears on Windows
+  stat results (`getattr(..., 0)` covers everywhere else).
+
+- **`FolderExplorerPage` is the one place that knows the current preference**
+  (`self._show_hidden`, seeded from `MainFrame`'s constructor call via
+  `show_hidden=settings_repository.get_show_hidden_files()`) and passes it on
+  *every* `list_folder` call - both `_load_current_folder`'s top-level load
+  and `_on_expand_folder`'s per-row lazy fetch. `set_show_hidden` (called by
+  `MainFrame._on_settings` after a successful OK) reloads the currently open
+  folder so the new preference takes effect immediately; it's a no-op if the
+  value didn't actually change. Reloading resets the tree to its unloaded/
+  collapsed state the same as any other top-level reload (`open_folder`,
+  `_on_up`, ...) - an acceptable trade-off since changing this setting is a
+  deliberate, infrequent action, not a hot path worth preserving expand state
+  across.
+
 ### Migrations (`app/db/migrations/*.sql`)
 
 Same mechanism as `my-redis-viewer`: add a new numbered `.sql` file (next
@@ -267,6 +311,21 @@ collapsing (either way) leaves the `_Node` cache intact rather than forcing a
 re-query on the next expand. Enter/double-click activation needed no
 verification beyond confirming it was already native - see
 `FolderTreeCtrl`'s docstring.
+
+The hidden-files setting was verified end to end against a real temp folder
+tree containing both dotfiles and a dotfile-named subfolder: confirmed
+`FileSystemService.list_folder` excludes them by default and includes them
+with `show_hidden=True`, that `SettingsRepository.get_show_hidden_files`
+defaults to `False` and round-trips through `set_show_hidden_files`, that
+`FolderExplorerPage.set_show_hidden` reloads the open folder and that
+expanding a now-visible hidden folder fetches *its* contents correctly too,
+and that the setting is a genuine no-op (`_load_current_folder` doesn't fire
+again) when set to its current value. `SettingsDialog` was driven the same
+"never shown" way as everything else in this file for its checkbox state,
+but its OK/Cancel result plumbing specifically needed a real `ShowModal()`
+loop (`wx.CallAfter` to click the button mid-modal) - `EndModal()` asserts if
+called without an active `ShowModal()`, so calling `_on_ok` directly the way
+other handlers in this file are tested doesn't work for dialogs.
 
 ## What's next (not built yet)
 

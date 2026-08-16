@@ -37,6 +37,7 @@ class FolderExplorerPage(wx.Panel):
         favorite_repository: FavoriteRepository,
         on_folder_opened: Optional[Callable[[str], None]] = None,
         on_favorites_changed: Optional[Callable[[], None]] = None,
+        show_hidden: bool = False,
     ) -> None:
         super().__init__(parent)
         self._file_service = file_service
@@ -47,6 +48,7 @@ class FolderExplorerPage(wx.Panel):
 
         self._current_path: Optional[str] = None
         self._loading = False
+        self._show_hidden = show_hidden
 
         self._build_ui()
         self._update_header()
@@ -164,7 +166,7 @@ class FolderExplorerPage(wx.Panel):
         self._update_button_states()
 
         self._async.run(
-            work=lambda: self._file_service.list_folder(path),
+            work=lambda: self._file_service.list_folder(path, show_hidden=self._show_hidden),
             on_success=lambda listing: self._on_folder_loaded(path, listing),
             on_error=lambda exc: self._on_folder_load_error(str(exc)),
             on_done=self._on_load_done,
@@ -206,10 +208,23 @@ class FolderExplorerPage(wx.Panel):
         stuck on "Loading…" forever."""
         runner = AsyncTaskRunner(self)
         runner.run(
-            work=lambda: self._file_service.list_folder(path),
+            work=lambda: self._file_service.list_folder(path, show_hidden=self._show_hidden),
             on_success=on_loaded,
             on_error=lambda exc: on_loaded(FolderListing(error=str(exc))),
         )
+
+    def set_show_hidden(self, show_hidden: bool) -> None:
+        """Applies a new "show hidden files" preference - reloads the
+        currently open folder (if any) so it takes effect immediately.
+        Already-expanded subfolder rows reset back to collapsed/unqueried,
+        same as any other top-level reload (see FolderTreeCtrl.set_root_entries) -
+        an acceptable reset for a settings change, which is a deliberate,
+        infrequent action, not a hot path."""
+        if self._show_hidden == show_hidden:
+            return
+        self._show_hidden = show_hidden
+        if self._current_path is not None:
+            self._load_current_folder()
 
     # ------------------------------------------------------------------
     # Favorites

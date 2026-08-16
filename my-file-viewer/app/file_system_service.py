@@ -1,4 +1,5 @@
 import os
+import stat as stat_module
 from typing import List
 
 from .models import FileEntry, FolderListing
@@ -22,7 +23,7 @@ wx.EVT_* handler. This is the pattern to keep reusing as the app grows.
 
 
 class FileSystemService:
-    def list_folder(self, path: str) -> FolderListing:
+    def list_folder(self, path: str, show_hidden: bool = False) -> FolderListing:
         """List the immediate children of `path` - one os.stat per entry,
         cheap for realistic folder sizes but still routed through
         AsyncTaskRunner by every caller, both because a folder can be
@@ -36,6 +37,15 @@ class FileSystemService:
         directory). An entry that can't be individually stat-ed (e.g. a
         dangling symlink, or removed mid-scan) is left out of `entries` and
         counted in `skipped` rather than aborting the whole listing.
+
+        `show_hidden` (default `False`, matching the app's default) - when
+        `False`, an entry that's hidden (Unix dotfile convention, or the
+        Windows FILE_ATTRIBUTE_HIDDEN attribute) is silently left out of
+        `entries` too, but *not* counted in `skipped`: that count means
+        "couldn't be read", not "deliberately filtered out". The caller
+        (FolderExplorerPage) is the one that knows the user's current
+        preference and passes it through on every call, including lazy
+        per-row expands - see FolderExplorerPage._show_hidden.
         """
         if not os.path.isdir(path):
             return FolderListing(error=f"'{path}' is not a folder.")
@@ -51,6 +61,8 @@ class FileSystemService:
         for dir_entry in dir_entries:
             try:
                 stat = dir_entry.stat(follow_symlinks=False)
+                if not show_hidden and _is_hidden(dir_entry.name, stat):
+                    continue
                 is_dir = dir_entry.is_dir(follow_symlinks=False)
                 entries.append(
                     FileEntry(
@@ -65,3 +77,15 @@ class FileSystemService:
                 skipped += 1
 
         return FolderListing(entries=entries, skipped=skipped)
+
+
+def _is_hidden(name: str, stat_result: os.stat_result) -> bool:
+    """Unix convention (dotfile) or Windows' FILE_ATTRIBUTE_HIDDEN - checked
+    unconditionally rather than gated on sys.platform, since `st_file_attributes`
+    simply doesn't exist on stat results outside Windows (getattr's default
+    covers that) and a literal leading dot is a meaningless-but-harmless
+    check to make on Windows."""
+    if name.startswith("."):
+        return True
+    attributes = getattr(stat_result, "st_file_attributes", 0)
+    return bool(attributes & stat_module.FILE_ATTRIBUTE_HIDDEN)

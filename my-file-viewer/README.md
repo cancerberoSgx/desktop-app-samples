@@ -16,6 +16,7 @@ app/
   sidebar.py                  Collapsible left sidebar: favorite-folder shortcuts
   folder_explorer_page.py     Toolbar + breadcrumb + folder contents tree
   folder_tree_ctrl.py         Sortable wx.dataview.TreeListCtrl, lazy per-row expand
+  settings_dialog.py           File > Settings... modal (show hidden files, ...)
   file_system_service.py      Every filesystem action - see "Async by design" below
   async_task.py                Facade for running a service call off the UI thread
   formatting.py                Byte-count / timestamp -> human string helpers
@@ -69,6 +70,15 @@ instant). The last folder you had open is remembered and reopened on startup.
 
 Directories don't show a size yet (`-`) - recursive folder size is a planned
 future column, not computed today.
+
+## Settings
+
+**File > Settings...** opens a modal with the app's preferences - today just
+**Show hidden files and folders** (off by default, matching most file
+explorers). Ticking it and clicking OK reloads whatever folder is currently
+open so it takes effect right away; Cancel discards the change. The
+preference is remembered across restarts the same way the last-opened folder
+and sidebar collapse state are.
 
 ## Async by design
 

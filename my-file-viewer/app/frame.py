@@ -8,6 +8,7 @@ from app.db.paths import migrations_dir
 from app.file_system_service import FileSystemService
 from app.folder_explorer_page import FolderExplorerPage
 from app.repositories import FavoriteRepository, SettingsRepository
+from app.settings_dialog import SettingsDialog
 from app.sidebar import FavoritesSidebar
 
 
@@ -49,6 +50,7 @@ class MainFrame(wx.Frame):
             self.favorite_repository,
             on_folder_opened=self._on_folder_opened,
             on_favorites_changed=self._on_favorites_changed,
+            show_hidden=self.settings_repository.get_show_hidden_files(),
         )
         root_sizer.Add(self.explorer_page, 1, wx.EXPAND)
 
@@ -81,6 +83,8 @@ class MainFrame(wx.Frame):
         menu_bar = wx.MenuBar()
 
         file_menu = wx.Menu()
+        file_menu.Append(wx.ID_PREFERENCES, "Settings...")
+        file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
 
         help_menu = wx.Menu()
@@ -91,6 +95,7 @@ class MainFrame(wx.Frame):
 
         self.SetMenuBar(menu_bar)
 
+        self.Bind(wx.EVT_MENU, self._on_settings, id=wx.ID_PREFERENCES)
         self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
 
@@ -116,6 +121,16 @@ class MainFrame(wx.Frame):
 
     def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
         self.settings_repository.set_sidebar_collapsed(collapsed)
+
+    def _on_settings(self, event: wx.CommandEvent) -> None:
+        dialog = SettingsDialog(self, show_hidden_files=self.settings_repository.get_show_hidden_files())
+        try:
+            if dialog.ShowModal() == wx.ID_OK:
+                show_hidden = dialog.get_show_hidden_files()
+                self.settings_repository.set_show_hidden_files(show_hidden)
+                self.explorer_page.set_show_hidden(show_hidden)
+        finally:
+            dialog.Destroy()
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()
