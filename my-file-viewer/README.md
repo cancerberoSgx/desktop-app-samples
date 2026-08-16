@@ -59,9 +59,13 @@ regardless of which column is active. The tree is a `wx.dataview.TreeListCtrl`
 lazily, right then, rather than up front - so opening a folder stays fast no
 matter how deep or wide the tree underneath it gets, and a folder's contents
 are only ever fetched once (re-expanding or re-sorting reuses what was already
-fetched). Double-clicking a file opens it with the OS's default application;
-double-clicking a folder navigates into it, making it the new top-level view.
-The last folder you had open is remembered and reopened on startup.
+fetched). Double-clicking a file (or pressing **Enter**) opens it with the OS's
+default application; double-clicking a folder (or pressing **Enter**) navigates
+into it, making it the new top-level view. Press **Space** on a selected
+folder row to expand or collapse it in place without navigating - the "−"
+button next to the breadcrumb collapses every currently-expanded row at once
+(without forgetting what's already been fetched, so re-expanding stays
+instant). The last folder you had open is remembered and reopened on startup.
 
 Directories don't show a size yet (`-`) - recursive folder size is a planned
 future column, not computed today.

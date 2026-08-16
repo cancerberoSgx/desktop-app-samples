@@ -67,6 +67,14 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     only ever queried once; expanding it again, or re-sorting, reuses the
     `_Node.children` already cached from the first fetch.
 
+    Keyboard: Space toggles the selected row's expand/collapse state
+    (`_toggle_selected_expand`) - Enter/double-click activates it (opens a
+    file, navigates into a folder) via `EVT_TREELIST_ITEM_ACTIVATED`, which
+    wx.dataview.TreeListCtrl already fires natively on the Enter key, no
+    extra binding needed. `collapse_all()` collapses every expanded row at
+    once - wired to FolderExplorerPage's toolbar button next to the
+    breadcrumb.
+
     Sorting deliberately doesn't use wx.dataview's native comparator-driven
     column sort: this wx version calls the comparator and fires
     EVT_TREELIST_COLUMN_SORTED, but doesn't actually reorder what
@@ -104,6 +112,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self.Bind(dv.EVT_TREELIST_COLUMN_SORTED, self._on_column_sorted)
         self.Bind(dv.EVT_TREELIST_ITEM_EXPANDING, self._on_item_expanding)
         self.Bind(dv.EVT_TREELIST_ITEM_ACTIVATED, self._on_item_activated)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
 
     def set_root_entries(self, entries: List[FileEntry]) -> None:
         """Replace the tree with a fresh top-level listing - called whenever
@@ -118,6 +127,20 @@ class FolderTreeCtrl(dv.TreeListCtrl):
             return None
         node = self.GetItemData(item)
         return node.entry if isinstance(node, _Node) else None
+
+    def collapse_all(self) -> None:
+        """Collapses every currently-expanded folder row - just a UI
+        collapse, same as clicking each one's arrow individually, so the
+        `_Node.children` cache is untouched and re-expanding any of them
+        afterwards still won't re-query FileSystemService."""
+        self._collapse_all(self._roots)
+
+    def _collapse_all(self, nodes: List[_Node]) -> None:
+        for node in nodes:
+            if node.entry.is_dir and node.wx_item is not None:
+                self.Collapse(node.wx_item)
+            if node.loaded:
+                self._collapse_all(node.children)
 
     # ------------------------------------------------------------------
     # Sorting - see class docstring for why this is fully hand-rolled
@@ -257,12 +280,37 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         return children
 
     # ------------------------------------------------------------------
-    # Activation (double-click / Enter)
+    # Activation (double-click / Enter) and keyboard expand (Space)
     # ------------------------------------------------------------------
     def _on_item_activated(self, event: dv.TreeListEvent) -> None:
+        # Enter/double-click - wx.dataview.TreeListCtrl already fires this
+        # natively on the Enter key, no extra key binding needed here.
         node = self.GetItemData(event.GetItem())
         if isinstance(node, _Node):
             self._on_activate_entry(node.entry)
+
+    def _on_key_down(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() != wx.WXK_SPACE:
+            event.Skip()
+            return
+        self._toggle_selected_expand()
+
+    def _toggle_selected_expand(self) -> None:
+        """Space toggles the selected folder row open/closed - Expand()
+        fires EVT_TREELIST_ITEM_EXPANDING just like an arrow click does, so
+        this reuses _on_item_expanding's lazy-load path rather than
+        duplicating it; Collapse() is always just a UI collapse (see
+        collapse_all)."""
+        item = self.GetSelection()
+        if item is None or not item.IsOk():
+            return
+        node = self.GetItemData(item)
+        if not isinstance(node, _Node) or not node.entry.is_dir:
+            return
+        if self.IsExpanded(item):
+            self.Collapse(item)
+        else:
+            self.Expand(item)
 
 
 class _TextComparator(dv.TreeListItemComparator):

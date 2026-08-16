@@ -75,10 +75,18 @@ class FolderExplorerPage(wx.Panel):
         toolbar.Add(self._status_text, 0, wx.ALIGN_CENTER_VERTICAL)
         outer.Add(toolbar, 0, wx.EXPAND | wx.ALL, 12)
 
+        breadcrumb_row = wx.BoxSizer(wx.HORIZONTAL)
         self._breadcrumb_panel = wx.Panel(self)
         self._breadcrumb_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._breadcrumb_panel.SetSizer(self._breadcrumb_sizer)
-        outer.Add(self._breadcrumb_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        breadcrumb_row.Add(self._breadcrumb_panel, 1, wx.EXPAND)
+        # A sibling of _breadcrumb_panel (not inside its sizer), so
+        # _rebuild_breadcrumb's Clear(delete_windows=True) - which runs on
+        # every navigation - never touches it.
+        self._collapse_all_btn = wx.Button(self, label="−", style=wx.BU_EXACTFIT)
+        self._collapse_all_btn.SetToolTip("Collapse all expanded folders")
+        breadcrumb_row.Add(self._collapse_all_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
+        outer.Add(breadcrumb_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self._header_note = wx.StaticText(self, label="")
         outer.Add(self._header_note, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
@@ -99,6 +107,7 @@ class FolderExplorerPage(wx.Panel):
         self._open_btn.Bind(wx.EVT_BUTTON, self._on_open_folder)
         self._up_btn.Bind(wx.EVT_BUTTON, self._on_up)
         self._favorite_btn.Bind(wx.EVT_BUTTON, self._on_toggle_favorite)
+        self._collapse_all_btn.Bind(wx.EVT_BUTTON, self._on_collapse_all)
         self._list.Bind(dv.EVT_TREELIST_SELECTION_CHANGED, self._update_button_states)
 
     # ------------------------------------------------------------------
@@ -140,6 +149,9 @@ class FolderExplorerPage(wx.Panel):
             self.open_folder(entry.path)
         else:
             _open_with_default_app(entry.path)
+
+    def _on_collapse_all(self, event: wx.CommandEvent) -> None:
+        self._list.collapse_all()
 
     # ------------------------------------------------------------------
     # Async loading - every FileSystemService call goes through
@@ -270,6 +282,7 @@ class FolderExplorerPage(wx.Panel):
         self._open_btn.Enable(not self._loading)
         self._up_btn.Enable(not self._loading and has_folder and _has_parent(self._current_path))
         self._favorite_btn.Enable(has_folder)
+        self._collapse_all_btn.Enable(has_folder)
         if has_folder:
             is_favorite = self._favorite_repository.get_by_path(self._current_path) is not None
             self._favorite_btn.SetLabel("★ Remove from Favorites" if is_favorite else "☆ Add to Favorites")

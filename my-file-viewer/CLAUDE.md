@@ -181,6 +181,23 @@ Clicking a header sorts by it, click again to reverse.
   group order fixed while the value order still reverses. `FolderTreeCtrl`
   applies this per level (`_sorted`), not just at the top.
 
+- **Keyboard**: Space toggles the selected row's expand/collapse state
+  (`_toggle_selected_expand`), reusing `_on_item_expanding`'s lazy-load path
+  rather than duplicating it - `TreeListCtrl.Expand()` fires
+  `EVT_TREELIST_ITEM_EXPANDING` the same as an arrow click does, confirmed by
+  hand-testing, so Space never needs its own fetch logic. Enter/double-click
+  activation needed no new code at all: `wx.dataview.TreeListCtrl` already
+  fires `EVT_TREELIST_ITEM_ACTIVATED` on the Enter key natively.
+
+- **"Collapse all" button** (`FolderExplorerPage._collapse_all_btn`, next to
+  the breadcrumb) calls `FolderTreeCtrl.collapse_all()`, which walks every
+  loaded `_Node` and calls `Collapse()` on it - a UI-only operation, so the
+  `_Node.children` cache is untouched and re-expanding afterwards still won't
+  re-query `FileSystemService`. The button lives in its own row sizer
+  alongside (not inside) `_breadcrumb_panel`, since `_rebuild_breadcrumb`
+  calls `Clear(delete_windows=True)` on `_breadcrumb_sizer` on every
+  navigation and would otherwise destroy it.
+
 - **Expand/collapse state survives a re-sort** even though there's no
   `EVT_TREELIST_ITEM_COLLAPSED` to track it incrementally: right before
   `_rebuild_all` tears the wx tree down, `_snapshot_expanded` asks
@@ -239,6 +256,17 @@ issues documented above - real `EVT_TREELIST_COLUMN_SORTED` header clicks
 question was about a real click's side effects, not about our own handler)
 confirmed the collapse-on-sort bug traced back to our own `SetSortColumn()`
 call rather than the click itself.
+
+Space-to-expand/collapse and the "Collapse all" button were verified both the
+fake-event way (calling `_on_key_down`/`_toggle_selected_expand`/
+`collapse_all` directly) and with real input against a shown-but-untouched-by-
+mouse `wx.App` window via `wx.UIActionSimulator` - a real Space keypress with
+a folder row selected, and a real click on the toolbar button - confirming
+both actually reach the same lazy-load path a real arrow click does, and that
+collapsing (either way) leaves the `_Node` cache intact rather than forcing a
+re-query on the next expand. Enter/double-click activation needed no
+verification beyond confirming it was already native - see
+`FolderTreeCtrl`'s docstring.
 
 ## What's next (not built yet)
 

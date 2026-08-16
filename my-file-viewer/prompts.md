@@ -6,3 +6,24 @@ User selects a folder and see its content (add the last selected folder to user 
 At the right there's is the folder contents explorer which list all files and folders inside the selected folder. The list of folder content is a table displaying file name, size, modified date. User can sort by these columns
 in the future we'll add more columns, file details, file types, complex glob selection, folder recursive size, etc
 There must be a "service" with folder actions and all the actions need to happen async in order not to block/freeze the UI as my-redis-viewer does. This pattern must be clear when we add other features in the future
+
+# folder tree
+in the folder explorer page, folders are displayed as a tree. User can "expand" a folder recursively. For performance only query folders content when user "expand it"
+p2
+user can expand a folder by pressing "space". User can open folders or files by pressing enter. 
+there's an icon button at the right of the file path to collapse all expanded folders
+
+# settings
+File-> settings menu take the user to settings modal. Currently this modal allow users to set the following settings:
+ * display hidden (by default, hidden files and folders are now shown)
+
+# keys
+user can use up-down next-page, "end", "begginging" keys , etc keys to navigate file list (not selecting it)
+user can use "enter" to see folder details or open file
+can use ctrl to add / delete 
+
+# rename 
+
+# delete
+
+
