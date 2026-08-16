@@ -21,3 +21,4 @@ currently, the github action files located at .github/workflows build a linux bu
 
 # missing docs
 in docs/index.html we've created some html docs user facing for each docs/my-data-viewer docs/my-redis-viewer project's. Now complete the documentation to also add projects (my-disk-viewer) (my-docker-viewer) and for existing projects make sure all their features are mentioned. Notice that this documentation is for each application homepage, add placeholders for relevant screenshots and I will add them myself later
+

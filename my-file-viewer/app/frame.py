@@ -1,0 +1,143 @@
+import os
+
+import wx
+
+from app.db.connection import get_connection
+from app.db.migrator import run_migrations
+from app.db.paths import migrations_dir
+from app.file_system_service import FileSystemService
+from app.folder_explorer_page import FolderExplorerPage
+from app.repositories import FavoriteRepository, SettingsRepository
+from app.sidebar import FavoritesSidebar
+
+
+class MainFrame(wx.Frame):
+    """Composition root: opens the single sqlite3 connection, runs pending
+    migrations, builds the repositories/service, and wires up the sidebar +
+    explorer. No wx.Simplebook/page-switching, unlike my-redis-viewer's
+    Profiles/Data Sources/About sidebar - this app has one main screen
+    (FolderExplorerPage); the sidebar's job is favorite-folder shortcuts,
+    not page navigation. About is a plain message box off the Help menu."""
+
+    def __init__(self) -> None:
+        super().__init__(None, title="My File Viewer", size=(1100, 680))
+
+        conn = get_connection()
+        run_migrations(conn, migrations_dir())
+        self.favorite_repository = FavoriteRepository(conn)
+        self.settings_repository = SettingsRepository(conn)
+        self.file_service = FileSystemService()
+
+        self._build_menu_bar()
+        self.CreateStatusBar(1)
+        self.SetStatusText("Ready", 0)
+
+        root_panel = wx.Panel(self)
+        root_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.sidebar = FavoritesSidebar(
+            root_panel,
+            on_select=self._on_favorite_selected,
+            on_remove=self._on_favorite_removed,
+            on_toggle_collapsed=self._on_sidebar_toggle_collapsed,
+        )
+        root_sizer.Add(self.sidebar, 0, wx.EXPAND)
+
+        self.explorer_page = FolderExplorerPage(
+            root_panel,
+            self.file_service,
+            self.favorite_repository,
+            on_folder_opened=self._on_folder_opened,
+            on_favorites_changed=self._on_favorites_changed,
+        )
+        root_sizer.Add(self.explorer_page, 1, wx.EXPAND)
+
+        root_panel.SetSizer(root_sizer)
+
+        self.sidebar.refresh(self.favorite_repository.list())
+        if self.settings_repository.get_sidebar_collapsed():
+            self.sidebar.set_collapsed(True)
+
+        self.Centre()
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+        self._restore_last_folder()
+
+    # ------------------------------------------------------------------
+    # Startup
+    # ------------------------------------------------------------------
+    def _restore_last_folder(self) -> None:
+        """Reopen whichever folder was last open, if it still exists -
+        falls back to the user's home directory on first run or if that
+        folder was since removed/renamed."""
+        last_path = self.settings_repository.get_last_folder_path()
+        path = last_path if last_path and os.path.isdir(last_path) else os.path.expanduser("~")
+        self.explorer_page.open_folder(path)
+
+    # ------------------------------------------------------------------
+    # Menu bar
+    # ------------------------------------------------------------------
+    def _build_menu_bar(self) -> None:
+        menu_bar = wx.MenuBar()
+
+        file_menu = wx.Menu()
+        file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
+
+        help_menu = wx.Menu()
+        help_menu.Append(wx.ID_ABOUT, "About...")
+
+        menu_bar.Append(file_menu, "&File")
+        menu_bar.Append(help_menu, "&Help")
+
+        self.SetMenuBar(menu_bar)
+
+        self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
+        self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+    def _on_folder_opened(self, path: str) -> None:
+        self.settings_repository.set_last_folder_path(path)
+        self.SetStatusText(f"Viewing: {path}", 0)
+        self.sidebar.set_selected_path(path)
+
+    def _on_favorite_selected(self, path: str) -> None:
+        self.explorer_page.open_folder(path)
+
+    def _on_favorite_removed(self, favorite_id: int) -> None:
+        self.favorite_repository.remove(favorite_id)
+        self._on_favorites_changed()
+
+    def _on_favorites_changed(self) -> None:
+        self.sidebar.refresh(self.favorite_repository.list())
+        self.sidebar.set_selected_path(self.explorer_page.current_path)
+        self.explorer_page.sync_favorite_state()
+
+    def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
+        self.settings_repository.set_sidebar_collapsed(collapsed)
+
+    def _on_exit(self, event: wx.CommandEvent) -> None:
+        self.Close()
+
+    def _on_close(self, event: wx.CloseEvent) -> None:
+        self.Destroy()
+
+    def _on_about(self, event: wx.CommandEvent) -> None:
+        wx.MessageBox(
+            "My File Viewer\n\n"
+            "A performant file explorer: pin folders as favorites in the\n"
+            "sidebar, browse a folder's contents in a sortable table\n"
+            "(Name, Size, Modified), and pick up right where you left off\n"
+            "next time you open the app.\n\n"
+            "  - Favorites and the last-opened folder are stored locally in\n"
+            "    ~/.my-file-viewer (SQLite, schema managed via .sql\n"
+            "    migration files).\n"
+            "  - Every folder action runs on a background thread\n"
+            "    (see app/file_system_service.py + app/async_task.py) so a\n"
+            "    slow or network-mounted folder never freezes the window.\n\n"
+            "Built with wxPython (https://wxpython.org).",
+            "About My File Viewer",
+            wx.OK | wx.ICON_INFORMATION,
+            self,
+        )
