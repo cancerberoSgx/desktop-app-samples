@@ -129,6 +129,8 @@ class MainFrame(wx.Frame):
         menu_bar = wx.MenuBar()
 
         file_menu = wx.Menu()
+        self._quick_search_menu_item = file_menu.Append(wx.ID_ANY, "Quick Search\tCtrl+P")
+        file_menu.AppendSeparator()
         self._open_menu_item = file_menu.Append(wx.ID_OPEN, "Open\tEnter")
         self._rename_menu_item = file_menu.Append(wx.ID_ANY, "Rename\tF2")
         self._delete_menu_item = file_menu.Append(wx.ID_DELETE, "Delete\tDel")
@@ -161,6 +163,7 @@ class MainFrame(wx.Frame):
 
         self.SetMenuBar(menu_bar)
 
+        self.Bind(wx.EVT_MENU, self._on_quick_search, self._quick_search_menu_item)
         self.Bind(wx.EVT_MENU, self._on_menu_open, self._open_menu_item)
         self.Bind(wx.EVT_MENU, self._on_menu_rename, self._rename_menu_item)
         self.Bind(wx.EVT_MENU, self._on_menu_delete, self._delete_menu_item)
@@ -210,6 +213,9 @@ class MainFrame(wx.Frame):
         self._rename_menu_item.Enable(count == 1)
         self._delete_menu_item.Enable(count >= 1)
         self._properties_menu_item.Enable(count == 1)
+
+    def _on_quick_search(self, event: wx.CommandEvent) -> None:
+        self.explorer_page.enter_quick_search_mode()
 
     def _on_menu_open(self, event: wx.CommandEvent) -> None:
         self.explorer_page.open_selected()

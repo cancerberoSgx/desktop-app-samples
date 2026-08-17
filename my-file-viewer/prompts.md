@@ -75,6 +75,21 @@ when on "keys mode", focus the "typing" input box with a cursor so user knows be
 
 # right sidebar
 Add a new main sidebar at the right "right sidebar" on which we'll add many features. For now just add it and make it collapsible rememebrd in settings as the current left sidebar
+p2
+remove button "remove from favorites" - leave only as a context menu option as now 
+
+
 
 # globs
 we want user to be able to view their files by using a "glob" matching pattern, for example, *.py or node_modules/**/* 
+
+
+
+
+# ctrl-p - easy file filtering
+When seeing the file list , user can enter "quick search" mode by pressing ctrl-p or menu File -> Quick search. The experience is similar to "keys mode" in which user can type an expression in the same "keys" input box, but the behavior will be a search / filter by file name:
+ * It applies over all visible files and folders, even the content of expanded folders
+ * if user enters one word "foo" it will filter and only display those files and folders containnig "foo" case insensitive.
+ * if user enters multiple words "foo bar" it will filter out and display those files that contains at least one word case insensitive.
+In any case, the filtered files in file list must high light the matched word in their file names. 
+The behavior for existing the "quick search" mode is the same as "key mode" by entering ESC

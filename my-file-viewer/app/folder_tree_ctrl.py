@@ -93,7 +93,13 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     there's a single source of truth for "is this action available right
     now" instead of two. `collapse_all()` collapses every expanded row at
     once - wired to FolderExplorerPage's toolbar button next to the
-    breadcrumb.
+    breadcrumb. Ctrl+P (`on_quick_search_requested`, FolderExplorerPage's
+    `enter_quick_search_mode`) is handled the same direct way, for the same
+    reason: confirmed by hand-testing that relying solely on the File
+    menu's "\tCtrl+P" accelerator was unreliable whenever this control (not
+    the search box) held keyboard focus with a selection - handling it
+    here, unskipped, the same as Delete/F2, means it's never at the mercy
+    of whatever else Ctrl+P might otherwise resolve to first.
 
     Right-click (or the keyboard "menu" key) fires `on_context_menu` with
     whatever ends up selected - see `_on_item_context_menu`: a right-click on
@@ -118,6 +124,34 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     a search ends. See `FolderExplorerPage._on_tree_search_started` for how
     the handoff and the focused-box/cursor/click-outside-cancels behavior
     actually work.
+
+    Quick search (Ctrl+P / File > Quick Search) reuses the exact same box
+    as type-ahead find - `FolderExplorerPage._search_mode` picks which
+    behavior a keystroke drives - but this control's own piece of it is
+    entirely different: `set_quick_search(query)` filters, rather than
+    jumps to, matching rows. A row is kept if its name contains any
+    whitespace-separated word of `query` (case-insensitive), OR - so a
+    match stays reachable - if it's a folder that's currently loaded and
+    expanded and at least one of its kept children is itself kept
+    (`_quick_search_keep`, recursive). Like type-ahead find, this only
+    ever looks at already-loaded, already-*visible* content (an unexpanded
+    folder's not-yet-fetched children are never searched into) - the same
+    "never touch FileSystemService just to search" rule the rest of this
+    control follows. Filtering happens through the same `_rebuild_all()`
+    every other structural change (a folder reload, a re-sort) already
+    uses, since hiding a row on a `TreeListCtrl` has no cheaper primitive
+    than not building it in the first place - there's no partial-hide call
+    to make instead, unlike `apply_rename`/`remove_paths`'s surgical single-
+    row edits.
+
+    A matched row's Name column brackets every matched substring in
+    ‹guillemets› (`_highlighted_name`) - this wx build's Name column uses a
+    fixed icon+text renderer with no per-substring color/bold/markup API
+    (confirmed directly: `DataViewIconTextRenderer` has no `EnableMarkup`,
+    unlike the plain `DataViewTextRenderer` the other columns use, and
+    `TreeListCtrl` itself exposes no per-item font/colour/attr call at
+    all) - plain-text bracketing is what's actually achievable here
+    without replacing this control's rendering entirely.
 
     Multi-selection (`TL_MULTIPLE`): Up/Down/PageUp/PageDown/Home/End move a
     single selection same as before; holding Shift with any of them extends
@@ -154,6 +188,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         on_rename_requested: Optional[Callable[[], None]] = None,
         show_extensions: bool = True,
         on_search_started: Optional[Callable[[str], None]] = None,
+        on_quick_search_requested: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent, style=dv.TL_DEFAULT_STYLE | dv.TL_MULTIPLE)
         # Required for a sortable column to accept header clicks at all - see
@@ -172,6 +207,10 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         # tracked here at all once a search has started - FolderExplorerPage's
         # _search_box owns it (see the class docstring).
         self._search_match_node: Optional[_Node] = None
+        # Quick search filter words (lower-cased, whitespace-split) - empty
+        # means "no filter active". See set_quick_search/_quick_search_keep
+        # and the class docstring's Quick search section.
+        self._quick_search_words: List[str] = []
         self._on_activate_entry = on_activate_entry
         self._on_expand_folder = on_expand_folder
         self._on_selection_changed = on_selection_changed or (lambda count: None)
@@ -179,6 +218,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self._on_delete_requested = on_delete_requested or (lambda: None)
         self._on_rename_requested = on_rename_requested or (lambda: None)
         self._on_search_started = on_search_started or (lambda first_char: None)
+        self._on_quick_search_requested = on_quick_search_requested or (lambda: None)
         self._update_column_headers()
 
         self.Bind(dv.EVT_TREELIST_COLUMN_SORTED, self._on_column_sorted)
@@ -194,6 +234,12 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         the *currently open folder itself* changes (navigating up, opening a
         different folder, ...), as opposed to expanding a row in place."""
         self.clear_search()
+        # Defensive, same spirit as clear_search() above: normally
+        # FolderExplorerPage._hide_search_box already clears an active
+        # quick search before any navigation reaches here (open_folder
+        # calls it unconditionally) - this just guarantees a stale filter
+        # from a previous folder can never silently apply to a new one.
+        self._quick_search_words = []
         self._roots = [_Node(e) for e in entries]
         self._rebuild_all()
 
@@ -236,11 +282,19 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         "Show file extensions" setting - see set_show_extensions). This is
         purely cosmetic: `entry.name`/`entry.path` and the dedicated,
         always-populated Extension column are completely unaffected - only
-        what's *displayed* in the Name column changes."""
+        what's *displayed* in the Name column changes. When a quick search
+        is active, every matched substring still visible in `name` (see
+        _highlighted_name) is bracketed - matching itself is always done
+        against the real `entry.name`, so a word that only matches inside
+        a currently-hidden extension still keeps the row (see
+        _quick_search_keep) even though there's nothing left to bracket in
+        what's actually displayed."""
         icon = "📁" if entry.is_dir else "📄"
         name = entry.name
         if not self._show_extensions and entry.extension:
             name = name[: -len(entry.extension)]
+        if self._quick_search_words:
+            name = self._highlighted_name(name)
         return f"{icon} {name}"
 
     def set_show_extensions(self, show_extensions: bool) -> None:
@@ -261,6 +315,97 @@ class FolderTreeCtrl(dv.TreeListCtrl):
                 self.SetItemText(node.wx_item, COL_NAME, self._name_label(node.entry))
             if node.loaded:
                 self._relabel_names(node.children)
+
+    # ------------------------------------------------------------------
+    # Quick search (Ctrl+P / File > Quick Search) - see the class
+    # docstring's Quick search section for the overall design. Unlike
+    # type-ahead find (which only ever selects/scrolls), this filters what
+    # _rebuild_all actually builds - _filtered_sorted is the one place
+    # every row-building call site (_rebuild_all, _build_node,
+    # _on_children_loaded) and _visible_nodes_in_order now go through
+    # instead of the bare _sorted they used before this feature existed.
+    # ------------------------------------------------------------------
+    def set_quick_search(self, query: Optional[str]) -> None:
+        """Applies (non-empty `query`) or clears (`None`/blank) the quick
+        search filter - always via a full _rebuild_all(), same as a
+        show-hidden-files reload: a live filter adds/removes many rows at
+        once, and there's no cheaper partial-hide call on a TreeListCtrl
+        than simply not building a row in the first place. No-op if the
+        effective word list didn't actually change (typing a second space
+        in a row, for instance)."""
+        words = query.lower().split() if query else []
+        if words == self._quick_search_words:
+            return
+        self._quick_search_words = words
+        self._rebuild_all()
+
+    def _name_matches_quick_search(self, entry: FileEntry) -> bool:
+        lname = entry.name.lower()
+        return any(word in lname for word in self._quick_search_words)
+
+    def _quick_search_keep(self, node: "_Node") -> bool:
+        """Only ever called while a quick search is active (see
+        _filtered_sorted) - True if `node` itself matches, or (for an
+        already-loaded, already-expanded folder only - never descending
+        into unloaded/collapsed content any more than type-ahead find's
+        own _visible_nodes_in_order does) at least one of its children is
+        itself kept. A folder kept only because of a descendant match is
+        never forced open: it's only reachable this way if it was already
+        expanded, since an unexpanded folder's children are never
+        considered in the first place."""
+        if self._name_matches_quick_search(node.entry):
+            return True
+        if node.entry.is_dir and node.loaded and not node.load_error and node.expanded:
+            return any(self._quick_search_keep(child) for child in node.children)
+        return False
+
+    def _filtered_sorted(self, nodes: List[_Node]) -> List[_Node]:
+        """_sorted(), further dropping whatever the active quick search
+        filter excludes - a plain pass-through to _sorted when no quick
+        search is active, so switching a row-building call site from
+        _sorted to this one never changes behavior outside quick search."""
+        rows = self._sorted(nodes)
+        if not self._quick_search_words:
+            return rows
+        return [node for node in rows if self._quick_search_keep(node)]
+
+    def _highlighted_name(self, name: str) -> str:
+        """Brackets every substring of `name` matching one of
+        `_quick_search_words` in ‹guillemets› - see the class docstring
+        for why plain-text bracketing, not color/bold, is what's actually
+        achievable on this column. Matches from different words (or
+        overlapping occurrences of the same word) are merged into a
+        single bracketed span first, so e.g. querying "foo bar" against
+        "foobar.txt" brackets the whole overlapping run once
+        ("‹foobar›.txt"), not as two adjacent, oddly-nested spans."""
+        lname = name.lower()
+        spans = []
+        for word in self._quick_search_words:
+            start = 0
+            while True:
+                index = lname.find(word, start)
+                if index == -1:
+                    break
+                spans.append((index, index + len(word)))
+                start = index + 1  # allow overlapping matches of the same word
+        if not spans:
+            return name
+        spans.sort()
+        merged = [spans[0]]
+        for start, end in spans[1:]:
+            last_start, last_end = merged[-1]
+            if start <= last_end:
+                merged[-1] = (last_start, max(last_end, end))
+            else:
+                merged.append((start, end))
+        pieces = []
+        cursor = 0
+        for start, end in merged:
+            pieces.append(name[cursor:start])
+            pieces.append(f"‹{name[start:end]}›")
+            cursor = end
+        pieces.append(name[cursor:])
+        return "".join(pieces)
 
     def _find_node(self, path: str, nodes: Optional[List[_Node]] = None) -> Optional["_Node"]:
         """Searches the whole cached tree (every loaded level, not just
@@ -397,12 +542,25 @@ class FolderTreeCtrl(dv.TreeListCtrl):
 
         self._snapshot_expanded(self._roots)
         self.DeleteAllItems()
-        for node in self._sorted(self._roots):
+        # DeleteAllItems() just invalidated every wx item this control ever
+        # held - clear the whole cached tree's wx_item references (not just
+        # the ones about to be rebuilt below) so a node a quick search
+        # filter excludes this pass can't leave a dangling reference to a
+        # now-destroyed native item lying around on the _Node itself; every
+        # kept node gets a fresh one reassigned by _build_node right after.
+        self._clear_wx_items(self._roots)
+        for node in self._filtered_sorted(self._roots):
             self._build_node(self.GetRootItem(), node)
 
         if selected_paths:
             self._reselect(self._roots, selected_paths)
         self._notify_selection_changed()
+
+    def _clear_wx_items(self, nodes: List[_Node]) -> None:
+        for node in nodes:
+            node.wx_item = None
+            if node.loaded:
+                self._clear_wx_items(node.children)
 
     def _snapshot_expanded(self, nodes: List[_Node]) -> None:
         """Records each currently-visible node's actual expanded/collapsed
@@ -440,7 +598,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         elif node.load_error:
             self._append_marker(item, f"⚠ {node.load_error}")
         else:
-            for child in self._sorted(node.children):
+            for child in self._filtered_sorted(node.children):
                 self._build_node(item, child)
             if node.expanded:
                 self.Expand(item)
@@ -481,7 +639,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         if node.load_error:
             self._append_marker(node.wx_item, f"⚠ {node.load_error}")
         else:
-            for child in self._sorted(node.children):
+            for child in self._filtered_sorted(node.children):
                 self._build_node(node.wx_item, child)
         self.Expand(node.wx_item)
 
@@ -513,6 +671,17 @@ class FolderTreeCtrl(dv.TreeListCtrl):
             self._on_delete_requested()
         elif code == wx.WXK_F2:
             self._on_rename_requested()
+        elif code == ord("P") and event.ControlDown():
+            # Handled directly, the same reason Delete/F2 are above rather
+            # than relying on the File menu's "\tCtrl+P" accelerator alone -
+            # confirmed by hand-testing that with a row selected (this
+            # control - not the search box - holding keyboard focus),
+            # Ctrl+P could otherwise get swallowed before it ever reached
+            # the frame's accelerator table, instead of reliably opening
+            # quick search every time the way clicking the menu item
+            # always did. See "A hard 'last Bind() wins' gotcha" and the
+            # Delete/F2 bullets in CLAUDE.md for the same class of issue.
+            self._on_quick_search_requested()
         else:
             event.Skip()
 
@@ -583,11 +752,14 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         both loaded and currently expanded, since a collapsed or
         not-yet-expanded folder's contents aren't "displayed" - type-ahead
         search (`search`) should never jump to a row the user can't
-        actually see on screen."""
+        actually see on screen. Also respects an active quick search
+        filter (_filtered_sorted, not the bare _sorted) - a row a quick
+        search has hidden isn't "displayed" either, and has no wx_item to
+        jump to even if it were matched here."""
         result: List["_Node"] = []
 
         def walk(nodes: List["_Node"]) -> None:
-            for node in self._sorted(nodes):
+            for node in self._filtered_sorted(nodes):
                 result.append(node)
                 if (
                     node.entry.is_dir

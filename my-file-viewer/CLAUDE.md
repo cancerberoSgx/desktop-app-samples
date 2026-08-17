@@ -528,6 +528,101 @@ tree.
   re-querying `FileSystemService`, since the folder was already loaded -
   the walk just wasn't descending into it while collapsed).
 
+### Quick search (Ctrl+P / File > Quick Search, `FolderTreeCtrl.set_quick_search`)
+
+Ctrl+P or File > Quick Search puts the tree into a live filter-by-name mode -
+unlike type-ahead find (typing on the tree, no shortcut needed), this is an
+explicit mode the user opts into and back out of, and it filters the tree
+rather than jumping to a match. Typing a single word ("foo") hides every row
+whose name doesn't contain it (case-insensitive); typing several
+space-separated words ("foo bar") keeps a row if its name contains *any* of
+them (OR, not AND). Every surviving row's Name column brackets each matched
+substring in `‹guillemets›`. Escape - or clicking anywhere else, same as
+type-ahead find - exits quick search and restores the full, unfiltered
+listing.
+
+- **One box, two modes, not two boxes**: quick search reuses
+  `FolderExplorerPage._search_box` - the exact same `wx.TextCtrl` type-ahead
+  find already uses - rather than adding a second one, since the two only
+  ever need to own the box's keystrokes one at a time anyway.
+  `FolderExplorerPage._search_mode` ("find" or "quick") is the one flag that
+  picks which behavior `_on_search_box_text_changed`/`_on_search_box_key_down`
+  drive on each keystroke; `enter_quick_search_mode` (File menu's handler)
+  is the only way `_search_mode` becomes `"quick"` - typing on the tree
+  always starts (or continues) `"find"`, never `"quick"`, since
+  `_start_or_continue_search` sets the mode back to `"find"` defensively
+  every time it shows the box from scratch. `_hide_search_box` - already the
+  one place both modes' Escape/click-away/navigate-away paths funnel through
+  (see type-ahead find above) - is also the one place `_search_mode` resets
+  back to `"find"` on the way out, and the one place that clears whichever
+  mode was actually active (`FolderTreeCtrl.set_quick_search(None)` vs.
+  `clear_search()`).
+
+- **Emptying the box behaves differently per mode, on purpose**: in find
+  mode, emptying the query (Backspace to nothing) ends the search entirely,
+  same as Escape - there's no such thing as an "empty type-ahead query".
+  In quick mode, an empty query is a legitimate, meaningful state (no
+  filter - show everything) that the user can keep editing from, so
+  `_on_search_box_text_changed` only takes that early-exit path in find
+  mode; quick mode always just calls `set_quick_search(text)` regardless of
+  whether `text` is empty, and only Escape/clicking elsewhere - never
+  emptying the box - actually closes it.
+
+- **Filtering only ever looks at already-loaded, already-*visible* content**
+  - the same rule type-ahead find's `_visible_nodes_in_order` already
+  follows, and for the same reason: a collapsed or not-yet-expanded folder's
+  children haven't been fetched from `FileSystemService`, so there's nothing
+  there to search yet, and searching them would mean querying the
+  filesystem just to filter, which this app's lazy-load architecture
+  deliberately never does outside an explicit user expand. A folder that
+  itself doesn't match is still kept (so a matching descendant stays
+  reachable in the tree) *only* if it's already loaded, has no load error,
+  and is currently expanded (`FolderTreeCtrl._quick_search_keep`, recursive)
+  - never force-expanded to reveal a match, and never descending into
+  collapsed content to look for one.
+
+- **A quick search never mutates `FileSystemService`'s data or the `_Node`
+  cache** - it only changes which already-cached nodes `_rebuild_all` builds
+  wx rows for. Like the show-hidden-files setting, there's no cheaper
+  incremental update: hiding a row on a `TreeListCtrl` means not creating it
+  in the first place (no partial-hide primitive exists), so
+  `set_quick_search` always goes through a full `_rebuild_all()` - every
+  building call site (`_rebuild_all`'s top level, `_build_node`'s recursive
+  children, `_on_children_loaded`'s freshly-fetched children) filters
+  through the new `_filtered_sorted` instead of the bare `_sorted` they used
+  before this feature existed, a pass-through to `_sorted` whenever no
+  quick search is active so nothing changes when the feature isn't in use.
+
+  - **A real bug this caught**: filtering means some nodes' `_build_node`
+    call is skipped on a given rebuild pass, but `DeleteAllItems()` had
+    already invalidated *every* node's previous `wx_item` - without
+    explicitly nulling out the skipped ones too, a filtered-out node would
+    keep a dangling reference to a destroyed native item. Confirmed by
+    directly asserting a hidden node's `wx_item is None` after filtering
+    (see "Verification performed") - `_rebuild_all` now calls
+    `_clear_wx_items` (walks the *whole* cached tree, not just the kept
+    part) right after `DeleteAllItems()` and before rebuilding, so every
+    node starts each rebuild pass with no wx item until `_build_node`
+    actually gives it a fresh one.
+
+- **Highlighting is plain-text bracketing, not color/bold, because this wx
+  build's Name column genuinely can't do the latter** - confirmed directly:
+  the Name column's renderer is `wx.dataview.DataViewIconTextRenderer`
+  (forced by `TreeListCtrl`'s main column, regardless of whether an icon is
+  actually set), which has no `EnableMarkup` (unlike the plain
+  `DataViewTextRenderer` the other columns use), and `TreeListCtrl` itself
+  exposes no per-item font/colour/attr call of any kind - only whole-control
+  colors inherited from `wx.Window`. `FolderTreeCtrl._highlighted_name`
+  wraps every matched substring of the *displayed* name in `‹›` instead
+  (merging overlapping/adjacent matches from different words into one span
+  first, so "foo bar" against "foobar.txt" brackets the whole overlap once,
+  not as two oddly-nested spans) - `_name_label` applies it after extension-
+  stripping, so what's bracketed always matches what's actually on screen.
+  Matching itself (`_quick_search_keep`/`_name_matches_quick_search`) is
+  always against the real `entry.name`, though, so a word that only matches
+  inside a currently-hidden extension still correctly keeps the row even
+  though there's nothing left to bracket in what's displayed.
+
 ### File actions: Open / Rename / Delete / Properties (`FolderExplorerPage`, `FolderTreeCtrl`)
 
 Four actions apply to whatever's selected in the tree - Open, Rename, and
@@ -1074,6 +1169,41 @@ sidebar leaves the left sidebar's own collapsed state completely
 unaffected; and a second `MainFrame` built against that same underlying
 connection restores the collapsed state on startup, same as the left
 sidebar already does.
+
+Quick search was verified against a real `wx.App` and real temp folders,
+combining direct calls to `FolderTreeCtrl.set_quick_search`/
+`_visible_nodes_in_order` (a multi-level tree with one subfolder pre-expanded,
+so its contents count as "visible") with direct calls to
+`FolderExplorerPage.enter_quick_search_mode`/`_on_search_box_text_changed`/
+`_on_search_box_key_down`/`_on_search_box_kill_focus` - the latter standing in
+for real focus transfer for the same documented reason type-ahead find's own
+tests do (no window manager in this sandbox, see below). Confirmed: a
+single-word filter hides every non-matching row while keeping a non-matching
+but expanded folder that has a matching child (and hides an expanded folder
+whose children *don't* match); a matched name's Name column reads with the
+matched substring wrapped in `‹›`; a multi-word filter keeps a row matching
+*any* word, not all; clearing the filter (empty query, and `None`) restores
+every row; and, directly asserting on the `_Node` objects themselves (not
+just what's on screen), that a filtered-out node's `wx_item` is `None` after
+the rebuild rather than a dangling reference to a deleted native item -
+confirming the `_clear_wx_items` fix. Through `FolderExplorerPage`: confirmed
+`enter_quick_search_mode` (the File > Quick Search / Ctrl+P handler) shows
+the box in `"quick"` mode; typing into it live-filters the tree; Escape
+(driving `_on_search_box_key_down` then the kill-focus handler directly)
+clears the filter, hides the box, and resets `_search_mode` back to `"find"`;
+and that type-ahead find still works correctly afterward, starting a fresh
+`"find"`-mode session unaffected by the quick search that ran before it -
+proving the two modes sharing one box don't leak state into each other.
+
+Ctrl+P being handled directly in `FolderTreeCtrl._on_key_down` (rather than
+relying solely on the File menu's `"\tCtrl+P"` accelerator) was verified by
+reproducing the reported bug's exact scenario directly: selecting a row (so
+the tree itself, not the search box, holds keyboard focus and a selection)
+and dispatching a hand-constructed Ctrl+P `wx.KeyEvent` straight to
+`_on_key_down` - confirming it opens quick search every time this way, where
+the File-menu-accelerator-only path was unreliable in that same scenario.
+The menu path (`MainFrame._on_quick_search`) was re-confirmed unaffected
+alongside it.
 
 ## What's next (not built yet)
 

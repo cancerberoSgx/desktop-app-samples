@@ -28,6 +28,14 @@ my-redis-viewer's DatasourcesPage._on_connect calls
 DatasourceRepository.test_connection.
 """
 
+# _search_box's tooltip, swapped depending on which mode (see
+# FolderExplorerPage._search_mode) currently owns it.
+_FIND_TOOLTIP = "Type to jump to a file or folder by name - Esc or click elsewhere to cancel"
+_QUICK_SEARCH_TOOLTIP = (
+    "Type to filter files and folders by name (space-separated words match any) - "
+    "Esc or click elsewhere to cancel"
+)
+
 
 class FolderExplorerPage(wx.Panel):
     def __init__(
@@ -61,6 +69,13 @@ class FolderExplorerPage(wx.Panel):
         # file path's parent folder was just opened) to select once that
         # folder's listing lands; see _on_folder_loaded.
         self._pending_select_path: Optional[str] = None
+        # Which behavior _search_box currently drives - "find" (type-ahead,
+        # started implicitly by typing on the tree) or "quick" (Ctrl+P /
+        # File > Quick Search, filters + highlights instead of jumping) -
+        # see the Type-ahead find / Quick search sections below. Always
+        # "find" while the box is hidden; _hide_search_box resets it back
+        # to "find" on the way out of either mode.
+        self._search_mode = "find"
 
         self._build_ui()
         self._update_header()
@@ -103,7 +118,7 @@ class FolderExplorerPage(wx.Panel):
         # further keystroke itself; see _on_tree_search_started and the
         # three handlers bound below.
         self._search_box = wx.TextCtrl(self, size=(150, -1))
-        self._search_box.SetToolTip("Type to jump to a file or folder by name - Esc or click elsewhere to cancel")
+        self._search_box.SetToolTip(_FIND_TOOLTIP)
         breadcrumb_row.Add(self._search_box, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         breadcrumb_row.Hide(self._search_box)  # shown on demand - see _on_tree_search_started
         self._search_box.Bind(wx.EVT_TEXT, self._on_search_box_text_changed)
@@ -133,6 +148,7 @@ class FolderExplorerPage(wx.Panel):
             on_rename_requested=self.rename_selected,
             show_extensions=self._show_extensions,
             on_search_started=self._on_tree_search_started,
+            on_quick_search_requested=self.enter_quick_search_mode,
         )
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
@@ -246,15 +262,39 @@ class FolderExplorerPage(wx.Panel):
         self._on_selection_changed(count)
 
     # ------------------------------------------------------------------
-    # Type-ahead find - FolderTreeCtrl only ever notices the keystroke that
-    # *starts* a search (see its _on_char); from _on_tree_search_started
-    # onward, _search_box - a real, focused wx.TextCtrl - owns every
-    # further keystroke itself, driving FolderTreeCtrl.search() in
-    # response. Ending a search (Escape, emptying the box, or clicking
-    # anywhere else) always funnels through _on_search_box_kill_focus -
-    # see its docstring for why that's the one place the actual
-    # hide/reset happens rather than three separate copies of it.
+    # Type-ahead find and quick search share one box (_search_box) and one
+    # set of handlers - which of the two behaviors a keystroke drives is
+    # just self._search_mode ("find" vs "quick"), checked at the few spots
+    # below where they actually differ. FolderTreeCtrl only ever notices
+    # the keystroke that *starts* a type-ahead find (see its _on_char);
+    # from _on_tree_search_started onward, _search_box - a real, focused
+    # wx.TextCtrl - owns every further keystroke itself, driving
+    # FolderTreeCtrl.search() (find mode) or FolderTreeCtrl.set_quick_search()
+    # (quick mode, entered explicitly via enter_quick_search_mode - Ctrl+P /
+    # File > Quick Search - never by typing on the tree) in response.
+    # Ending either mode (Escape, or clicking anywhere else - and, for find
+    # mode only, emptying the box - see _on_search_box_text_changed) always
+    # funnels through _on_search_box_kill_focus - see its docstring for why
+    # that's the one place the actual hide/reset happens rather than
+    # several separate copies of it.
     # ------------------------------------------------------------------
+    def enter_quick_search_mode(self) -> None:
+        """Ctrl+P / File > Quick Search (MainFrame._on_quick_search) - filters
+        the currently open folder's visible rows by name instead of jumping
+        to one, see FolderTreeCtrl.set_quick_search's docstring for the
+        matching/highlighting rules. Ends any type-ahead find already in
+        progress first (same box, the two modes never run at once), then
+        starts a fresh, empty quick search - unlike a type-ahead find,
+        which always starts pre-seeded with the character that triggered
+        it, there's no "first character" here since Ctrl+P is a dedicated
+        shortcut, not an implicit keystroke on the tree."""
+        self._hide_search_box()
+        self._search_mode = "quick"
+        self._search_box.SetToolTip(_QUICK_SEARCH_TOOLTIP)
+        self._breadcrumb_row.Show(self._search_box)
+        self.Layout()
+        self._search_box.SetFocus()
+
     def _on_tree_search_started(self, first_char: str) -> None:
         """FolderTreeCtrl's callback for "the user just started typing a
         search while the tree had focus". Deferred via wx.CallAfter rather
@@ -285,6 +325,8 @@ class FolderExplorerPage(wx.Panel):
         if self._search_box.IsShown():
             self._search_box.SetValue(self._search_box.GetValue() + char)
         else:
+            self._search_mode = "find"  # defensive - see enter_quick_search_mode
+            self._search_box.SetToolTip(_FIND_TOOLTIP)
             self._breadcrumb_row.Show(self._search_box)
             self.Layout()
             self._search_box.SetValue(char)  # fires EVT_TEXT -> runs the search, see below
@@ -294,8 +336,18 @@ class FolderExplorerPage(wx.Panel):
     def _on_search_box_text_changed(self, event: wx.CommandEvent) -> None:
         """Fires for every keystroke that changes the box's text - typing
         further characters, Backspace, even a paste - all native TextCtrl
-        editing, no special-casing needed for any of them individually."""
+        editing, no special-casing needed for any of them individually.
+        Quick search mode filters on every keystroke, including down to an
+        empty query (which just clears the filter, showing everything
+        again) - unlike find mode, emptying the box never ends a quick
+        search on its own; only Escape/clicking elsewhere does (see
+        _on_search_box_kill_focus), since quick search is a mode the user
+        entered deliberately via Ctrl+P, not something a single keystroke
+        started implicitly."""
         text = self._search_box.GetValue()
+        if self._search_mode == "quick":
+            self._list.set_quick_search(text)
+            return
         if not text:
             # Emptied via Backspace - end the search the same way Escape
             # does: hand focus back to the tree, which triggers
@@ -308,7 +360,10 @@ class FolderExplorerPage(wx.Panel):
         code = event.GetKeyCode()
         if code == wx.WXK_ESCAPE:
             self._list.SetFocus()  # same cancel path as emptying the box
-        elif code in (wx.WXK_DOWN, wx.WXK_UP):
+        elif self._search_mode == "find" and code in (wx.WXK_DOWN, wx.WXK_UP):
+            # Cycling matches is a find-mode-only concept - quick search
+            # has no "current match" to move relative to, so Down/Up just
+            # fall through to the text box's own native cursor handling.
             text = self._search_box.GetValue()
             if text:
                 self._list.search(text, advance=1 if code == wx.WXK_DOWN else -1)
@@ -327,16 +382,22 @@ class FolderExplorerPage(wx.Panel):
         self._hide_search_box()
 
     def _hide_search_box(self) -> None:
-        """Hides and clears the type-ahead search box - a no-op if it's
-        not currently shown. The one place that actually does this, called
-        from both _on_search_box_kill_focus (losing focus to another
-        focusable widget) and open_folder (belt-and-suspenders for a
-        navigation triggered by a non-focusable widget, see there)."""
+        """Hides and clears _search_box, whichever mode it was in - a no-op
+        if it's not currently shown. The one place that actually does
+        this, called from both _on_search_box_kill_focus (losing focus to
+        another focusable widget), open_folder (belt-and-suspenders for a
+        navigation triggered by a non-focusable widget, see there), and
+        enter_quick_search_mode (ending a find in progress before starting
+        a quick search - the two modes never run at once, same box)."""
         if not self._search_box.IsShown():
             return
         self._breadcrumb_row.Hide(self._search_box)
         self._search_box.ChangeValue("")  # ChangeValue: doesn't re-fire EVT_TEXT
-        self._list.clear_search()
+        if self._search_mode == "quick":
+            self._list.set_quick_search(None)
+        else:
+            self._list.clear_search()
+        self._search_mode = "find"  # reset for whichever mode starts next
         self.Layout()
 
     # ------------------------------------------------------------------
