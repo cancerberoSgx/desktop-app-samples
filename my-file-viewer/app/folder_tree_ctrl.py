@@ -103,6 +103,22 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     replaces it with just that row first, the same convention most file
     managers use.
 
+    Type-ahead find: typing a printable character while the tree has focus
+    starts a search - `_on_char` fires `on_search_started(first_char)` and
+    hands off entirely from there. This control only ever owns *starting*
+    a search; the query text, the box that displays it, and every
+    keystroke for the rest of the search (further characters, Backspace,
+    Up/Down to cycle matches, Escape/click-away to cancel) belong to
+    `FolderExplorerPage._search_box` - a real, focused `wx.TextCtrl` - once
+    it takes over. `search(text, advance=...)` and `clear_search()` are
+    this control's only two other public pieces of the feature: `search`
+    jumps to (advance=0, a fresh/edited query) or cycles to (advance=+1/-1)
+    the first currently-*visible* row whose name starts with `text`
+    (case-insensitively), and `clear_search` drops the cycling state once
+    a search ends. See `FolderExplorerPage._on_tree_search_started` for how
+    the handoff and the focused-box/cursor/click-outside-cancels behavior
+    actually work.
+
     Multi-selection (`TL_MULTIPLE`): Up/Down/PageUp/PageDown/Home/End move a
     single selection same as before; holding Shift with any of them extends
     a *range* selection instead, and a plain click/keypress without Shift
@@ -137,6 +153,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         on_delete_requested: Optional[Callable[[], None]] = None,
         on_rename_requested: Optional[Callable[[], None]] = None,
         show_extensions: bool = True,
+        on_search_started: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(parent, style=dv.TL_DEFAULT_STYLE | dv.TL_MULTIPLE)
         # Required for a sortable column to accept header clicks at all - see
@@ -150,12 +167,18 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self._sort_column = COL_NAME
         self._sort_ascending = True
         self._show_extensions = show_extensions
+        # Type-ahead find cycling state (see search()'s docstring) - which
+        # row Up/Down should move relative to. The query text itself isn't
+        # tracked here at all once a search has started - FolderExplorerPage's
+        # _search_box owns it (see the class docstring).
+        self._search_match_node: Optional[_Node] = None
         self._on_activate_entry = on_activate_entry
         self._on_expand_folder = on_expand_folder
         self._on_selection_changed = on_selection_changed or (lambda count: None)
         self._on_context_menu = on_context_menu or (lambda entries: None)
         self._on_delete_requested = on_delete_requested or (lambda: None)
         self._on_rename_requested = on_rename_requested or (lambda: None)
+        self._on_search_started = on_search_started or (lambda first_char: None)
         self._update_column_headers()
 
         self.Bind(dv.EVT_TREELIST_COLUMN_SORTED, self._on_column_sorted)
@@ -164,11 +187,13 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self.Bind(dv.EVT_TREELIST_SELECTION_CHANGED, self._on_selection_changed_event)
         self.Bind(dv.EVT_TREELIST_ITEM_CONTEXT_MENU, self._on_item_context_menu)
         self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
+        self.Bind(wx.EVT_CHAR, self._on_char)
 
     def set_root_entries(self, entries: List[FileEntry]) -> None:
         """Replace the tree with a fresh top-level listing - called whenever
         the *currently open folder itself* changes (navigating up, opening a
         different folder, ...), as opposed to expanding a row in place."""
+        self.clear_search()
         self._roots = [_Node(e) for e in entries]
         self._rebuild_all()
 
@@ -506,6 +531,105 @@ class FolderTreeCtrl(dv.TreeListCtrl):
                 self.Collapse(item)
             else:
                 self.Expand(item)
+
+    # ------------------------------------------------------------------
+    # Type-ahead find - see the class docstring for the overall design.
+    # This control's only jobs: notice the keystroke that starts a search
+    # (_on_char) and, once FolderExplorerPage's search box hands a query
+    # back (search()), find/select/scroll to a match among currently-
+    # visible rows (_visible_nodes_in_order).
+    # ------------------------------------------------------------------
+    def _on_char(self, event: wx.KeyEvent) -> None:
+        """EVT_CHAR (not EVT_KEY_DOWN) is what's bound here: unlike
+        EVT_KEY_DOWN's GetUnicodeKey(), which wx explicitly documents as
+        normalized (always the *uppercase* form of a letter key, ignoring
+        actual shift/caps-lock state), EVT_CHAR's is the real,
+        case-correct typed character - needed since the search box must
+        display exactly what the user typed, not a case-mangled version of
+        it. Space, Delete, and F2 never reach here at all: `_on_key_down`
+        already handles all three without calling `event.Skip()`, which is
+        what stops wx from ever generating a follow-up EVT_CHAR for that
+        same keystroke. Once a search has started, this handler stops
+        firing anyway for as long as it lasts - focus moves to the search
+        box (see `FolderExplorerPage._on_tree_search_started`), and
+        EVT_CHAR only ever fires on whichever widget currently has
+        keyboard focus - so this is only ever reached for the single
+        keystroke that *starts* a new search."""
+        code = event.GetUnicodeKey()
+        if (
+            code == wx.WXK_NONE
+            or code < 32
+            or code == 127
+            or event.ControlDown()
+            or event.AltDown()
+            or event.MetaDown()
+        ):
+            event.Skip()
+            return
+        self._on_search_started(chr(code))
+
+    def clear_search(self) -> None:
+        """Drops the type-ahead cycling state - called once a search ends
+        (FolderExplorerPage's search box losing focus, Escape, or emptying
+        the query - see `_on_search_box_kill_focus`) and defensively from
+        `set_root_entries`, so a stale match from a previous folder's
+        listing can never be cycled to relative to a totally different
+        folder's contents."""
+        self._search_match_node = None
+
+    def _visible_nodes_in_order(self) -> List["_Node"]:
+        """Every currently-rendered row, top to bottom, in on-screen order -
+        respects the active sort and only descends into a folder that's
+        both loaded and currently expanded, since a collapsed or
+        not-yet-expanded folder's contents aren't "displayed" - type-ahead
+        search (`search`) should never jump to a row the user can't
+        actually see on screen."""
+        result: List["_Node"] = []
+
+        def walk(nodes: List["_Node"]) -> None:
+            for node in self._sorted(nodes):
+                result.append(node)
+                if (
+                    node.entry.is_dir
+                    and node.loaded
+                    and not node.load_error
+                    and node.wx_item is not None
+                    and self.IsExpanded(node.wx_item)
+                ):
+                    walk(node.children)
+
+        walk(self._roots)
+        return result
+
+    def search(self, text: str, advance: int = 0) -> None:
+        """`advance=0` (a fresh or just-edited query) jumps to the FIRST
+        currently-visible row whose name starts with `text`
+        (case-insensitive) - `advance=+1`/`-1` (Down/Up on
+        FolderExplorerPage's search box while it's focused) instead cycles
+        to the next/previous match relative to the last one, wrapping
+        around. Matched by the actual `_Node` object, not a list index:
+        the set of visible rows can change between keystrokes (an
+        expand/collapse, a delete, ...), so an index computed last time
+        could easily point at the wrong row now - a stale/no-longer-
+        matching node object is instead detected via `not in matches` and
+        falls back to the first (or last, for a "previous" cycle) match,
+        same as a brand new search. Does nothing (leaves the current
+        selection alone) if nothing currently visible matches."""
+        query = text.lower()
+        matches = [node for node in self._visible_nodes_in_order() if node.entry.name.lower().startswith(query)]
+        if not matches:
+            return
+        if advance == 0 or self._search_match_node not in matches:
+            target = matches[0] if advance >= 0 else matches[-1]
+        else:
+            current_pos = matches.index(self._search_match_node)
+            target = matches[(current_pos + advance) % len(matches)]
+        self._search_match_node = target
+        if target.wx_item is not None:
+            self.UnselectAll()
+            self.Select(target.wx_item)
+            self.EnsureVisible(target.wx_item)
+            self._notify_selection_changed()
 
     # ------------------------------------------------------------------
     # Context menu (right-click / the keyboard "menu" key)

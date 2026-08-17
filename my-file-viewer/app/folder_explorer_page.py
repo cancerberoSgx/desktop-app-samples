@@ -94,9 +94,21 @@ class FolderExplorerPage(wx.Panel):
         self._breadcrumb_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._breadcrumb_panel.SetSizer(self._breadcrumb_sizer)
         breadcrumb_row.Add(self._breadcrumb_panel, 1, wx.EXPAND)
-        # Both of these are siblings of _breadcrumb_panel (not inside its
-        # sizer), so _rebuild_breadcrumb's Clear(delete_windows=True) -
+        # All three of these are siblings of _breadcrumb_panel (not inside
+        # its sizer), so _rebuild_breadcrumb's Clear(delete_windows=True) -
         # which runs on every navigation - never touches them.
+        # A real (not read-only), focusable text box - once a search
+        # starts, it takes real keyboard focus (with a visible blinking
+        # cursor, so "type-ahead mode" is visually obvious) and owns every
+        # further keystroke itself; see _on_tree_search_started and the
+        # three handlers bound below.
+        self._search_box = wx.TextCtrl(self, size=(150, -1))
+        self._search_box.SetToolTip("Type to jump to a file or folder by name - Esc or click elsewhere to cancel")
+        breadcrumb_row.Add(self._search_box, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
+        breadcrumb_row.Hide(self._search_box)  # shown on demand - see _on_tree_search_started
+        self._search_box.Bind(wx.EVT_TEXT, self._on_search_box_text_changed)
+        self._search_box.Bind(wx.EVT_KEY_DOWN, self._on_search_box_key_down)
+        self._search_box.Bind(wx.EVT_KILL_FOCUS, self._on_search_box_kill_focus)
         self._copy_path_btn = wx.Button(self, label="⧉", style=wx.BU_EXACTFIT)
         self._copy_path_btn.SetToolTip("Copy folder path to clipboard")
         breadcrumb_row.Add(self._copy_path_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
@@ -104,6 +116,7 @@ class FolderExplorerPage(wx.Panel):
         self._collapse_all_btn.SetToolTip("Collapse all expanded folders")
         breadcrumb_row.Add(self._collapse_all_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         outer.Add(breadcrumb_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        self._breadcrumb_row = breadcrumb_row  # kept to Show()/Hide() _search_box later
 
         self._error_text = wx.StaticText(self, label="")
         self._error_text.SetForegroundColour(wx.Colour(180, 30, 30))
@@ -119,6 +132,7 @@ class FolderExplorerPage(wx.Panel):
             on_delete_requested=self.delete_selected,
             on_rename_requested=self.rename_selected,
             show_extensions=self._show_extensions,
+            on_search_started=self._on_tree_search_started,
         )
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
@@ -161,6 +175,18 @@ class FolderExplorerPage(wx.Panel):
         if not os.path.isdir(path):
             wx.MessageBox(f"'{path}' is not a folder.", "My File Viewer", wx.OK | wx.ICON_ERROR, self)
             return
+
+        # A search box left open from the folder being navigated away from
+        # would otherwise show stale text over a completely different
+        # folder's contents. Losing keyboard focus already triggers
+        # _on_search_box_kill_focus for most ways a navigation gets
+        # triggered (clicking a button, double-clicking a tree row, ...),
+        # but a breadcrumb segment is a plain wx.StaticText - not a
+        # focusable widget - so clicking one doesn't necessarily take
+        # focus away from the box first. _hide_search_box's own
+        # IsShown() guard makes this a no-op the far more common time the
+        # box has already been hidden by then.
+        self._hide_search_box()
 
         self._current_path = path
         self._pending_select_path = select_path
@@ -218,6 +244,100 @@ class FolderExplorerPage(wx.Panel):
     def _on_tree_selection_changed(self, count: int) -> None:
         self._update_button_states()
         self._on_selection_changed(count)
+
+    # ------------------------------------------------------------------
+    # Type-ahead find - FolderTreeCtrl only ever notices the keystroke that
+    # *starts* a search (see its _on_char); from _on_tree_search_started
+    # onward, _search_box - a real, focused wx.TextCtrl - owns every
+    # further keystroke itself, driving FolderTreeCtrl.search() in
+    # response. Ending a search (Escape, emptying the box, or clicking
+    # anywhere else) always funnels through _on_search_box_kill_focus -
+    # see its docstring for why that's the one place the actual
+    # hide/reset happens rather than three separate copies of it.
+    # ------------------------------------------------------------------
+    def _on_tree_search_started(self, first_char: str) -> None:
+        """FolderTreeCtrl's callback for "the user just started typing a
+        search while the tree had focus". Deferred via wx.CallAfter rather
+        than shifting focus to _search_box right here: this fires from
+        inside the tree's own EVT_CHAR handler, i.e. while wx/GTK is still
+        in the middle of dispatching that very keystroke to the tree -
+        moving keyboard focus away to a different widget in that same
+        instant proved unreliable by hand-testing with real
+        wx.UIActionSimulator input (occasionally a fast-enough next
+        keystroke still landed on the tree - and so came back through this
+        same callback - before the deferred focus shift had actually run).
+        `_start_or_continue_search` is written to handle exactly that: it's
+        safe to call more than once in a row for what's really one
+        contiguous burst of typing."""
+        wx.CallAfter(self._start_or_continue_search, first_char)
+
+    def _start_or_continue_search(self, char: str) -> None:
+        """Shows the search box and gives it real keyboard focus (with a
+        blinking cursor, so it's visually obvious the app is now in
+        type-ahead mode) the first time this runs; appends `char` instead
+        of resetting the query if the box is already shown - see
+        _on_tree_search_started for why a second (or third, ...) call can
+        happen for what's really a single burst of typing, each carrying
+        just the one character that raced onto the tree before focus had
+        moved. Once the box genuinely has focus, every further keystroke
+        goes straight to it natively - this method is never reached again
+        until the next time a search starts from scratch."""
+        if self._search_box.IsShown():
+            self._search_box.SetValue(self._search_box.GetValue() + char)
+        else:
+            self._breadcrumb_row.Show(self._search_box)
+            self.Layout()
+            self._search_box.SetValue(char)  # fires EVT_TEXT -> runs the search, see below
+            self._search_box.SetFocus()
+        self._search_box.SetInsertionPointEnd()
+
+    def _on_search_box_text_changed(self, event: wx.CommandEvent) -> None:
+        """Fires for every keystroke that changes the box's text - typing
+        further characters, Backspace, even a paste - all native TextCtrl
+        editing, no special-casing needed for any of them individually."""
+        text = self._search_box.GetValue()
+        if not text:
+            # Emptied via Backspace - end the search the same way Escape
+            # does: hand focus back to the tree, which triggers
+            # _on_search_box_kill_focus to do the actual hide/reset.
+            self._list.SetFocus()
+            return
+        self._list.search(text)
+
+    def _on_search_box_key_down(self, event: wx.KeyEvent) -> None:
+        code = event.GetKeyCode()
+        if code == wx.WXK_ESCAPE:
+            self._list.SetFocus()  # same cancel path as emptying the box
+        elif code in (wx.WXK_DOWN, wx.WXK_UP):
+            text = self._search_box.GetValue()
+            if text:
+                self._list.search(text, advance=1 if code == wx.WXK_DOWN else -1)
+        else:
+            event.Skip()
+
+    def _on_search_box_kill_focus(self, event: wx.FocusEvent) -> None:
+        """Losing focus covers Escape and emptying the box (both just move
+        focus to the tree, see above) *and* clicking any other *focusable*
+        widget in the app, all in one implementation, since all three are,
+        at the wx level, just "this control lost keyboard focus." (A click
+        on a non-focusable widget, like a breadcrumb segment, doesn't fire
+        this - see open_folder's own defensive call to _hide_search_box
+        for that case.)"""
+        event.Skip()
+        self._hide_search_box()
+
+    def _hide_search_box(self) -> None:
+        """Hides and clears the type-ahead search box - a no-op if it's
+        not currently shown. The one place that actually does this, called
+        from both _on_search_box_kill_focus (losing focus to another
+        focusable widget) and open_folder (belt-and-suspenders for a
+        navigation triggered by a non-focusable widget, see there)."""
+        if not self._search_box.IsShown():
+            return
+        self._breadcrumb_row.Hide(self._search_box)
+        self._search_box.ChangeValue("")  # ChangeValue: doesn't re-fire EVT_TEXT
+        self._list.clear_search()
+        self.Layout()
 
     # ------------------------------------------------------------------
     # Selected-entry actions: Open / Rename / Delete / Properties -

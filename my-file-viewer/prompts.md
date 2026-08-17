@@ -60,5 +60,21 @@ Right clicking a file or folder (when single selection) has an option "Propertie
  * permissions, 
  * dates: created, modified, accessed
 
+# extension
+in file list add an "extension" column which user can use to sort files by extension
+In settings there's a new setting "view file extensions" (default true) . if set to false it won't display file extensions in Name column
+
+p2
+move "165 item(s)" label to the bottom bar, left to "Selected: " label
 
 
+# key
+if user starts writing "foo" while seeing files, we want the system to locate the first file or folder displayed which name starts with "foo", scroll to it and select it. when in this mode, when the user press "down" it will scroll down and select the next file ocurrence (and the same with down). When this happens, there's an input box displaying what the user is typing, right next to path breadcrumb. If the user presses ESC the box disappears and the app works in "normal mode"
+when on "keys mode", focus the "typing" input box with a cursor so user knows better it's in that mode. Also if user clicks outside the input box, cancel the "keys mode" to normal mode
+
+
+# right sidebar
+Add a new main sidebar at the right "right sidebar" on which we'll add many features. For now just add it and make it collapsible rememebrd in settings as the current left sidebar
+
+# globs
+we want user to be able to view their files by using a "glob" matching pattern, for example, *.py or node_modules/**/* 

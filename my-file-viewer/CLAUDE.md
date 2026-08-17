@@ -377,6 +377,125 @@ from anywhere in the window (not just with a menu open), the same way
   calls `_rebuild_breadcrumb()` itself, since no `open_folder` call happens
   in that path to do it automatically.
 
+### Type-ahead find (`FolderTreeCtrl`, `FolderExplorerPage._search_box`)
+
+Typing while the tree has focus - no shortcut key needed, just start
+writing - jumps to and selects the first currently-*visible* row whose name
+starts with what's been typed (case-insensitively), scrolling it into view.
+A `wx.TextCtrl` (`FolderExplorerPage._search_box`), hidden until a search
+starts, appears next to the breadcrumb (a sibling of `_breadcrumb_panel` in
+`breadcrumb_row`, same slot family as the copy-path and collapse-all
+buttons) and takes real keyboard focus - a visible blinking cursor, so it's
+obvious the app is in type-ahead mode - the moment a search starts. From
+then on the box, not the tree, owns every further keystroke: Down/Up cycle
+to the next/previous match instead of moving the plain row selection,
+Backspace edits the query natively, and Escape - or clicking *anywhere else
+in the app* - cancels it, hiding the box and returning keyboard focus to the
+tree.
+
+- **A clean handoff, not a shared ownership**: `FolderTreeCtrl` only ever
+  notices the *single keystroke that starts* a search (`_on_char`, bound to
+  `EVT_CHAR`) and fires `on_search_started(first_char)` - from there,
+  `FolderExplorerPage._search_box` takes real focus and owns literally
+  every subsequent keystroke as normal, native `wx.TextCtrl` text editing
+  (typing, Backspace, paste, ...). `FolderTreeCtrl`'s only other type-ahead
+  surface is `search(text, advance=...)` (find/cycle a match among
+  currently-visible rows) and `clear_search()` (drop the cycling state) -
+  it never renders the box itself, tracks the query text, or handles
+  Up/Down/Escape; those all live on `_search_box`'s own event handlers
+  (`_on_search_box_text_changed`/`_on_search_box_key_down`). This is a
+  bigger split than the usual "report intent, let the caller render"
+  pattern elsewhere in this file (`on_selection_changed`/`on_context_menu`)
+  specifically because the box needing *real OS keyboard focus* - not just
+  a value to display - is what makes the cursor visible and what makes
+  "click anywhere else cancels" work for free via `EVT_KILL_FOCUS`, instead
+  of the tree having to reimplement text-editing (Backspace, cursor
+  position, ...) itself.
+
+- **`EVT_CHAR`, not `EVT_KEY_DOWN`, is what starts a search** (`_on_char`) -
+  wx explicitly documents `EVT_KEY_DOWN`'s `GetUnicodeKey()` as normalized
+  to the *uppercase* form of a letter key regardless of actual
+  shift/caps-lock state, which would seed the box with `"R"` instead of
+  `"r"` no matter how it was typed. `EVT_CHAR`'s `GetUnicodeKey()` is the
+  real, case-correct character instead - and since the box is a genuine
+  focused `wx.TextCtrl` for everything after that first character, every
+  later keystroke is native text input anyway, with no case-normalization
+  concern at all. Confirmed by hand-testing with `wx.UIActionSimulator`
+  actually holding Shift for one letter and confirming the box displayed
+  the mixed-case text exactly as typed.
+
+- **No overlap between `_on_char` and `_on_key_down`'s existing
+  Space/Delete/F2 handling**: `_on_key_down` already handles all three
+  without calling `event.Skip()`, and an unskipped `EVT_KEY_DOWN` is what
+  stops wx from ever generating a follow-up `EVT_CHAR` for that same
+  keystroke (same mechanism already documented above for why Delete/F2
+  don't double-fire against their File-menu accelerators) - so Space stays
+  reserved for toggling a folder's expand state, never starting a search.
+  `_on_char` additionally ignores Ctrl/Alt/Meta combinations and raw
+  control-character codes defensively. Once a search has started, `_on_char`
+  simply stops firing at all for as long as it lasts - EVT_CHAR only ever
+  reaches whichever widget currently has focus, and that's the box now, not
+  the tree.
+
+- **Starting a search is deferred via `wx.CallAfter`, and the deferred
+  handler is written to tolerate running more than once in a row** - shifting
+  keyboard focus to `_search_box` *while* wx/GTK is still in the middle of
+  dispatching the keystroke that triggered it proved unreliable by
+  hand-testing with real `wx.UIActionSimulator` input: occasionally a
+  fast-enough next keystroke still landed on the tree (and so came back
+  through `_on_char`/`on_search_started` again) before the first
+  keystroke's deferred focus shift had actually taken effect.
+  `_start_or_continue_search` handles this directly rather than assuming it
+  away: it checks whether the box is already shown and *appends* to its
+  existing value in that case, instead of unconditionally overwriting it -
+  so a burst of racing characters accumulates correctly regardless of
+  exactly when the focus shift lands, rather than losing all but the last
+  one. Confirmed by hand-testing: typing a full word rapidly via
+  `wx.UIActionSimulator` reliably produced the complete word in the box
+  across many repeated runs, where an earlier version (each deferred call
+  unconditionally resetting the box's value) reproducibly lost characters.
+
+- **Ending a search always funnels through one place** -
+  `_on_search_box_kill_focus` - regardless of *why* it ends: Escape and
+  emptying the box via Backspace both just call `self._list.SetFocus()`
+  (moving focus to the tree), and clicking any other *focusable* widget
+  moves focus there directly - all three are, at the wx level, simply "the
+  box lost keyboard focus," so `EVT_KILL_FOCUS` is the one and only place
+  `_hide_search_box` (hide the box, clear its text, `FolderTreeCtrl.clear_search()`)
+  actually runs, rather than three separate copies of that logic.
+
+  - **A click on a *non-focusable* widget is the one gap `EVT_KILL_FOCUS`
+    doesn't cover** - a breadcrumb segment is a plain `wx.StaticText`, not
+    a focusable control, so clicking one to navigate doesn't necessarily
+    take keyboard focus away from the box first. `open_folder` (the one
+    entry point every navigation funnels through) closes this gap directly
+    with its own defensive `_hide_search_box()` call at the top - a no-op
+    (via `_hide_search_box`'s own `IsShown()` guard) the far more common
+    time the box has already been hidden via kill-focus by then. Confirmed
+    by hand-testing: starting a real search, then calling `open_folder`
+    the same way a breadcrumb-segment click does (no focus change first),
+    correctly hides and clears the box.
+
+- **Matches are tracked by `_Node` object identity, not by list index**
+  (`search`'s `self._search_match_node`) - the set of currently-visible
+  rows can change between keystrokes (an expand/collapse, a delete, a
+  resort), so a stored index could easily end up pointing at the wrong row
+  on the next Down/Up; a node reference that's no longer among the current
+  matches (deleted, or its ancestor collapsed) is detected via `not in
+  matches` and treated the same as starting a brand new search (jumps to
+  the first, or last for a "previous" cycle, match) rather than crashing or
+  landing somewhere nonsensical.
+
+- **"Displayed" means currently-visible, not just currently-loaded**
+  (`_visible_nodes_in_order`) - a folder that's loaded but *collapsed*
+  contributes only itself to the walk, not its cached children, since
+  those rows aren't actually on screen; expanding it makes its contents
+  eligible for the next keystroke's search. Confirmed by hand-testing: a
+  file inside a collapsed subfolder is not found by typing its name, but
+  is found immediately after expanding that subfolder (still without
+  re-querying `FileSystemService`, since the folder was already loaded -
+  the walk just wasn't descending into it while collapsed).
+
 ### File actions: Open / Rename / Delete / Properties (`FolderExplorerPage`, `FolderTreeCtrl`)
 
 Four actions apply to whatever's selected in the tree - Open, Rename, and
@@ -868,6 +987,49 @@ list instead of `MainFrame`, that it fires "Open a folder to see its
 contents." once at construction (before any folder is open), the real
 count once a folder loads, and the reduced count after a delete - the exact
 three call sites that used to set `_header_note.SetLabel(...)` directly.
+
+Type-ahead find was verified against a real `wx.App` and real temp folders,
+combining hand-constructed events fed directly to the real handlers
+(`_on_char`, `_on_search_box_text_changed`, `_on_search_box_key_down`,
+`_on_search_box_kill_focus` - mirroring `FolderTreeCtrl`'s other fake-event
+tests, and deterministic regardless of the environment's window manager)
+with real keyboard/mouse input via `wx.UIActionSimulator` where that
+mattered specifically. Confirmed via direct calls: typing "f" starts a
+search and jumps to the first match; setting the box's text further (the
+same effect as native typing) narrows the match correctly and
+case-insensitively; Down/Up cycle forward/backward through matches
+(wrapping around); Escape moves focus to the tree, which - via
+`EVT_KILL_FOCUS` - hides the box, clears its text, and clears
+`FolderTreeCtrl`'s cycling state; a plain kill-focus event alone (standing
+in for "the user clicked a different focusable widget") does the same;
+`open_folder`'s defensive `_hide_search_box()` call correctly closes an
+active search that was never given a chance to lose focus first (the
+breadcrumb-segment-click gap); a match inside a *collapsed* subfolder is
+not found until it's expanded, with no extra `FileSystemService` call once
+expanded (it was already loaded).
+
+Real `wx.UIActionSimulator` input confirmed the box genuinely takes OS-level
+keyboard focus with a visible cursor after the first character, that a real
+Down keypress cycles matches and a real Escape hides the box and returns
+focus to the tree, that a real Space keypress still toggles a folder's
+expand state normally when no search is active, and - holding Shift for one
+letter - that the box displays real, actually-typed mixed case (`"Report"`)
+rather than `EVT_KEY_DOWN`'s uppercase-normalized form, confirming
+`_on_char`'s deliberate use of `EVT_CHAR`. This same real-input testing is
+also what caught the `wx.CallAfter` race documented above (a fast-enough
+next keystroke occasionally still landing on the tree before the deferred
+focus shift completed, losing characters until `_start_or_continue_search`
+was made to accumulate instead of unconditionally overwrite) - repeated
+runs (8+ in a row) confirmed a full word types into the box correctly and
+reliably after that fix. Note for future work in this sandboxed environment
+specifically: it has no real window manager (`wx.Frame.FindFocus()` returns
+`None` even after `Show()`/`Raise()`/`SetFocus()`), which makes
+`wx.UIActionSimulator` tests that depend on real OS-level focus transfer
+between two different widgets inherently flaky here regardless of
+correctness - prefer direct calls to the real event handlers for
+deterministic verification of this kind of feature, and treat
+`UIActionSimulator` runs as corroborating evidence over several repeated
+runs, not as a single pass/fail check.
 
 ## What's next (not built yet)
 
