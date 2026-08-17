@@ -311,16 +311,154 @@ from anywhere in the window (not just with a menu open), the same way
   calls `_rebuild_breadcrumb()` itself, since no `open_folder` call happens
   in that path to do it automatically.
 
+### File actions: Open / Rename / Delete (`FolderExplorerPage`, `FolderTreeCtrl`)
+
+Three actions apply to whatever's selected in the tree - Open and Rename only
+make sense for exactly one selected row, Delete works on any non-empty
+selection (one or many). All three are reachable four ways: the tree's own
+keyboard shortcuts (Enter/double-click, F2, Delete), its right-click context
+menu, and the File menu - and all four routes funnel through the same three
+`FolderExplorerPage` methods (`open_selected`/`rename_selected`/
+`delete_selected`), so each action's actual behavior - and its "is this legal
+right now" rule - lives in exactly one place.
+
+- **The tree control only ever reports intent, never decides legality**:
+  `FolderTreeCtrl`'s Delete/F2 key handling and its `on_context_menu`
+  callback all report "the user asked to do X" (or hand back whatever's
+  currently selected); whether X is actually allowed for the current
+  selection size is decided by the caller - `FolderExplorerPage`'s own
+  methods for the keyboard/context-menu paths, `MainFrame._on_selection_changed`
+  for the File menu's enabled state. This mirrors the "Selected: N" callback
+  pattern already in this file: a single source of truth instead of the
+  tree and the frame each independently tracking "is Rename legal right
+  now" and risking disagreement.
+
+- **File menu enabled state**: `MainFrame._build_menu_bar` creates
+  `_open_menu_item`/`_rename_menu_item`/`_delete_menu_item`
+  ("Open\tEnter"/"Rename\tF2"/"Delete\tDel"), all disabled until a selection
+  exists. `_on_selection_changed` (already the callback wired from
+  `FolderTreeCtrl` -> `FolderExplorerPage._on_tree_selection_changed` for
+  "Selected: N") is the one place that also flips these three based on
+  `count` - `count == 1` for Open/Rename, `count >= 1` for Delete. The
+  context menu (`FolderExplorerPage._on_tree_context_menu`) applies the
+  identical rule to its own "Open"/"Rename" items.
+
+- **Why Enter and the "Open\tEnter" menu accelerator don't double-fire**:
+  Enter/double-click activation is unchanged, native
+  `EVT_TREELIST_ITEM_ACTIVATED` behavior (see the tree's own docstring) -
+  `open_selected` (called from the File menu) just reuses the same
+  `_on_activate_entry` that activation already calls, so "Open" behaves
+  identically everywhere it can be triggered from. Confirmed by hand-testing
+  with `wx.UIActionSimulator` that a real Enter keypress with a row selected
+  only ever triggers the native activation path, not the menu's - see
+  "Verification performed".
+
+- **Why Delete/F2 don't double-fire against the same-named menu
+  accelerators**: `FolderTreeCtrl._on_key_down` handles `WXK_DELETE`/`WXK_F2`
+  itself and deliberately does *not* call `event.Skip()` for them (same as
+  it already didn't for Space) - an unskipped `EVT_KEY_DOWN` is consumed
+  locally and never reaches the frame's menu accelerator table, so despite
+  the File menu items carrying the same "\tDel"/"\tF2" accelerator text
+  (there purely for on-screen discoverability), only the tree's own handler
+  ever actually fires for either key while it has focus. Confirmed by
+  hand-testing with `wx.UIActionSimulator` - see "Verification performed".
+
+- **Right-click preserves an existing multi-selection**
+  (`FolderTreeCtrl._on_item_context_menu`, bound to
+  `EVT_TREELIST_ITEM_CONTEXT_MENU`): right-clicking a row that's already
+  part of the current selection leaves the whole selection alone before
+  calling `on_context_menu`, so "select three rows, right-click one of
+  them" doesn't collapse it down to one, the way a naive
+  `UnselectAll()`-then-`Select()` would. Right-clicking a row *outside* the
+  current selection replaces it with just that row first - the same
+  convention most file managers use. `IsSelected(item)` (not membership-
+  testing `GetSelections()`, whose `TreeListItem` results don't support
+  `==`/`in` reliably) is what makes this check possible.
+
+- **Rename and Delete never do a full `_rebuild_all()`** - both mutate the
+  wx tree surgically instead (`FolderTreeCtrl.apply_rename`/`remove_paths`):
+  `apply_rename` calls `SetItemText` on just the renamed row's existing wx
+  item, and `remove_paths` calls `DeleteItem` on just the removed row(s)'
+  wx items. This is deliberate, not an oversight: `_rebuild_all()` tears
+  down every row via `DeleteAllItems()` and re-adds them all, which resets
+  the control's vertical scroll position back to the top - jarring if the
+  user just deleted or renamed one row out of a long, scrolled-down
+  listing. Confirmed by hand-testing (see "Verification performed") that
+  neither method ever calls `DeleteAllItems()`, and that unrelated rows'
+  underlying wx items survive both operations with the same identity
+  (proof no rebuild happened, not just "looks the same").
+
+  - The trade-off: a renamed row doesn't jump to its new alphabetically-sorted
+    position right away (it'll land there on the next re-sort or reload)
+    the way a full rebuild's `_sorted()` pass would have put it - a much
+    smaller cost than losing the user's scroll position on every rename.
+  - If the renamed entry is a folder that had already been expanded/loaded,
+    `apply_rename` still can't patch its cached children in place (renaming
+    a folder changes every descendant's real path too), so it deletes their
+    wx rows, drops the cache, and appends a single "Loading…" placeholder -
+    the same never-expanded-yet state a folder starts in, so a future
+    expand re-queries `FileSystemService` correctly. This is the same
+    reset-rather-than-patch trade-off `set_show_hidden` already makes.
+  - `remove_paths` also drops each removed node from wherever it lives in
+    the cached `_Node` tree (top-level `_roots` or an already-loaded
+    parent's `children`) so it can't resurface on some later resort -
+    `DeleteItem` on a folder's wx item natively removes its descendant rows
+    too, so a removed folder's own cached children don't need separate
+    cleanup.
+
+- **`FolderExplorerPage.delete_selected` drops redundant descendants before
+  calling `FileSystemService.delete`**: if both a folder and something
+  inside it are selected together, deleting the folder already removes the
+  descendant, so a separate delete call for it would just fail (it's gone
+  by the time its own turn comes) for no reason. `_filter_top_level_selected`
+  (sorts shortest-path-first, then keeps a path only if it isn't already
+  nested under a path already kept) is what prunes those before the batch
+  ever reaches `FileSystemService.delete`.
+
+- **`FileSystemService.delete`/`rename` are batch-tolerant, not
+  fail-fast**: `delete(paths)` returns a `DeleteResult` (`deleted`,
+  `errors` - path to message) with each path succeeding or failing
+  independently, the same "don't abort the whole call over one bad entry"
+  spirit as `list_folder`'s `skipped` count - a read-only file in an
+  otherwise-deletable multi-selection shouldn't block the rest. `rename`
+  raises (`ValueError` for an empty name or one containing a path
+  separator, otherwise whatever `os.rename` itself raises) since it's
+  always exactly one entry - both exception types are surfaced identically
+  by `AsyncTaskRunner`'s `on_error`, no special-casing needed at the call
+  site.
+
+- **Delete confirmation is a Settings checkbox** ("Ask for confirmation
+  before deleting", `SettingsRepository.get_confirm_delete`/
+  `set_confirm_delete`, key `confirm_delete`) - see the Settings section
+  below for why it defaults to `True`, the opposite of this app's other
+  settings. `delete_selected` only shows the confirmation `wx.MessageBox`
+  (wording depends on whether it's one item, named, or several, via
+  `_confirm_delete_message`) when `self._confirm_delete` is true; Cancel
+  (`wx.NO`) aborts before `FileSystemService.delete` is ever called, the
+  same "only act on an explicit OK/Yes" convention `SettingsDialog`/
+  `open_folder`'s error `wx.MessageBox` already follow.
+
 ### Settings (`app/settings_dialog.py`, File > Settings...)
 
 `SettingsDialog` is a plain `wx.Dialog` with a `CreateButtonSizer(OK|CANCEL)`,
-the same shape as `my-redis-viewer`'s `ProfileDialog` - today it holds one
-control (a checkbox for "Show hidden files and folders"), but a future setting
-is just another control in `_build_ui` plus a field on the OK-captured result,
-not a new pattern. `MainFrame._on_settings` only writes through to
-`SettingsRepository`/`FolderExplorerPage` when `ShowModal()` returns
-`wx.ID_OK` - Cancel discards whatever the user ticked, same as any other
-modal form in this app family.
+the same shape as `my-redis-viewer`'s `ProfileDialog` - today it holds two
+checkboxes ("Show hidden files and folders", "Ask for confirmation before
+deleting"), but a future setting is just another control in `_build_ui` plus
+a field on the OK-captured result, not a new pattern. `MainFrame._on_settings`
+only writes through to `SettingsRepository`/`FolderExplorerPage` when
+`ShowModal()` returns `wx.ID_OK` - Cancel discards whatever the user ticked,
+same as any other modal form in this app family.
+
+- **`get_confirm_delete` defaults to `True`** (ask before deleting) when
+  never set - the opposite convention from `get_show_hidden_files`/
+  `get_sidebar_collapsed`, both of which default `False` on no row. It's
+  implemented as `self.get(CONFIRM_DELETE_SETTING_KEY) != "0"` rather than
+  the usual `== "1"`, which is what makes "no row yet" read as `True`
+  instead of `False` - asking before an irreversible action is the safer
+  out-of-the-box behavior. `FolderExplorerPage.set_confirm_delete` just
+  updates the flag read on the next delete; unlike `set_show_hidden`, it
+  doesn't reload anything, since this setting doesn't change what's
+  displayed.
 
 - **The setting itself lives in `SettingsRepository`**
   (`get_show_hidden_files`/`set_show_hidden_files`, key `show_hidden_files`) -
@@ -482,6 +620,41 @@ clipboard ends up with exactly those rows' absolute paths, one per line,
 matching the selection with no extra/missing entries; and that calling it
 with nothing selected leaves a pre-existing clipboard value untouched rather
 than clobbering it with an empty string.
+
+Open/Rename/Delete were verified against a real `wx.App` and real temp
+folders/files, driving both the underlying `FolderExplorerPage` methods
+directly and, separately, real keyboard input via `wx.UIActionSimulator`:
+renaming a selected file through `rename_selected` (with `wx.TextEntryDialog`
+substituted for a fake returning a fixed new name, since a real modal loop
+needs the `wx.CallAfter`-driven `ShowModal()` pattern documented above, not a
+direct call) actually renamed it on disk and updated the tree row; deleting a
+multi-selection of a file and a folder together actually removed both from
+disk and from the tree, with `_filter_top_level_selected` confirmed (as a
+plain unit test, no wx needed) to drop a path already nested under another
+selected path; the confirmation `wx.MessageBox` was confirmed to block the
+delete on "No" (file still on disk, still in the tree) and proceed on "Yes",
+with `confirm_delete=False` skipping it entirely. Real `wx.UIActionSimulator`
+input (not just direct method calls) confirmed a Delete keypress and an F2
+keypress each call their respective `FolderExplorerPage` method **exactly
+once** despite the File menu carrying the same "\tDel"/"\tF2" accelerator
+text - proving `FolderTreeCtrl._on_key_down`'s unskipped `EVT_KEY_DOWN` truly
+consumes the keystroke before it reaches the frame's menu accelerator table,
+not just "happens to work in this one test." The right-click context menu
+was verified with hand-constructed `TreeListEvent`-like objects (same
+approach as the tree's other fake-event tests): right-clicking a row already
+part of a multi-selection left the whole selection intact, while
+right-clicking outside it collapsed the selection to just that row, both
+confirmed by inspecting what `on_context_menu` actually received.
+
+The scroll-preservation fix (`apply_rename`/`remove_paths` avoiding
+`_rebuild_all()`) was verified by spying on `FolderTreeCtrl.DeleteAllItems`
+to confirm it's never called by either method, and - a stronger check than
+"the visible scroll looks unchanged" - confirming two unrelated, untouched
+rows' `_Node.wx_item` objects retain the exact same identity (`is`, not just
+equal) before and after both a delete and a rename elsewhere in a 50-row
+listing, proving neither operation tears down and rebuilds the tree at all,
+which is what was actually resetting the scroll position back to the top
+before this fix.
 
 ## What's next (not built yet)
 

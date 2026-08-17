@@ -207,41 +207,63 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         return None
 
     def apply_rename(self, old_path: str, new_path: str) -> None:
-        """Updates the cached _Node for `old_path` in place to reflect a
-        successful FileSystemService.rename, then rebuilds so the row (and
-        its new sort position) shows up without re-querying
-        FileSystemService for anything - called by
+        """Updates the row for `old_path` in place to reflect a successful
+        FileSystemService.rename - called by
         FolderExplorerPage.rename_selected() once the async rename
-        succeeds. If the renamed entry is a folder that had already been
-        expanded, its cached children are dropped and it's reset to
-        unloaded/collapsed rather than patched up: renaming a folder changes
-        every descendant's real path too (they're now under the new name),
-        and patching each one recursively isn't worth it for a deliberate,
-        infrequent action - the same trade-off FolderExplorerPage.set_show_hidden
-        already makes for a full reload."""
+        succeeds. Deliberately a surgical `SetItemText` on the existing wx
+        item, not a `_rebuild_all()`: a full rebuild tears down and
+        re-adds every row, which resets the control's vertical scroll
+        position back to the top - jarring for a rename that, in the
+        common case, only changes one row's text. The trade-off is that the
+        row doesn't jump to its new alphabetically-sorted position right
+        away; it'll land there next time the user re-sorts or reloads the
+        folder, which is a much smaller cost than losing their scroll
+        position on every rename.
+
+        If the renamed entry is a folder that had already been expanded/
+        loaded, its cached children are dropped (native rows deleted, then
+        replaced with a single "Loading…" placeholder, same as a
+        never-expanded folder) rather than patched up in place: renaming a
+        folder changes every descendant's real path too (they're now under
+        the new name), and patching each one recursively isn't worth it for
+        a deliberate, infrequent action - the same trade-off
+        FolderExplorerPage.set_show_hidden already makes for a full
+        reload."""
         node = self._find_node(old_path)
-        if node is None:
+        if node is None or node.wx_item is None:
             return
         node.entry = dataclasses.replace(node.entry, name=os.path.basename(new_path), path=new_path)
+        icon = "📁" if node.entry.is_dir else "📄"
+        self.SetItemText(node.wx_item, COL_NAME, f"{icon} {node.entry.name}")
         if node.entry.is_dir and node.loaded:
+            for child_item in self._existing_children(node.wx_item):
+                self.DeleteItem(child_item)
+            self._append_marker(node.wx_item, _LOADING_LABEL)
             node.loaded = False
             node.loading = False
             node.load_error = None
             node.children = []
             node.expanded = False
-        self._rebuild_all()
+            self.Collapse(node.wx_item)
 
     def remove_paths(self, paths: Iterable[str]) -> None:
-        """Removes the cached _Node(s) for `paths` from wherever they live
-        in the tree (top-level or an already-loaded folder's children), then
-        rebuilds - called by FolderExplorerPage.delete_selected() once the
-        async delete succeeds, so a deleted row disappears without
-        re-querying FileSystemService for its (now-changed) parent
-        folder."""
+        """Removes the row(s) for `paths` - called by
+        FolderExplorerPage.delete_selected() once the async delete
+        succeeds. Deliberately per-node `DeleteItem` calls, not a
+        `_rebuild_all()`, for the same reason as apply_rename: a full
+        rebuild would reset the vertical scroll position back to the top,
+        which is jarring when the user just deleted one row out of a long,
+        scrolled-down listing. Also drops each removed node from wherever
+        it lives in the cached _Node tree (top-level or an already-loaded
+        folder's children) so it can't resurface on some later resort."""
         path_set = set(paths)
+        for path in path_set:
+            node = self._find_node(path)
+            if node is not None and node.wx_item is not None:
+                self.DeleteItem(node.wx_item)  # also removes any descendant rows natively
         self._roots = [node for node in self._roots if node.entry.path not in path_set]
         self._remove_from_children(self._roots, path_set)
-        self._rebuild_all()
+        self._notify_selection_changed()
 
     def _remove_from_children(self, nodes: List[_Node], path_set: set) -> None:
         for node in nodes:

@@ -36,13 +36,15 @@ p2
 there's a menu Edit->"Copy paths" which will copy the absolute path to all selectged files and folders to clipboard, or by pressing ctrl-c
 
 
-# keys
-user can use up-down next-page, "end", "begginging" keys , etc keys to navigate file list (not selecting it)
-user can use "enter" to see folder details or open file
-can use ctrl to add / delete 
-
-# rename 
-
-# delete
+# actions
+For any selected file or files, there are actions available
+For single file selection these actions are available: delete (supr), rename (f2), open (enter)
+For multiple selection these actions are available: delete
+When user right click on a selected file or files, the selection don't go away and a context menu is shown with actions.
+Delete needs confirmation can be configured in settings
+Also all these actions are available in File menu
+if an action is not applicable (because of selection) they appear as disabled
+p2
+when I delete or rename a file, the vertical scroll changes and it shouldn't , the current vertical user scroll must remain the same
 
 
