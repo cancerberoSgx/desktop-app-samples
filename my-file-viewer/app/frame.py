@@ -30,8 +30,14 @@ class MainFrame(wx.Frame):
         self.file_service = FileSystemService()
 
         self._build_menu_bar()
-        self.CreateStatusBar(1)
+        self.CreateStatusBar(2)
+        # Field 0 stretches (path/status text); field 1 is a fixed-width
+        # right-hand "Selected: N" - negative width means "proportion of
+        # the remaining space" in wx, so -1 vs. a fixed pixel width is what
+        # keeps field 1 a constant size while field 0 does the stretching.
+        self.GetStatusBar().SetStatusWidths([-1, 120])
         self.SetStatusText("Ready", 0)
+        self.SetStatusText("Selected: 0", 1)
 
         root_panel = wx.Panel(self)
         root_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -51,6 +57,7 @@ class MainFrame(wx.Frame):
             on_folder_opened=self._on_folder_opened,
             on_favorites_changed=self._on_favorites_changed,
             show_hidden=self.settings_repository.get_show_hidden_files(),
+            on_selection_changed=self._on_selection_changed,
         )
         root_sizer.Add(self.explorer_page, 1, wx.EXPAND)
 
@@ -121,6 +128,9 @@ class MainFrame(wx.Frame):
 
     def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
         self.settings_repository.set_sidebar_collapsed(collapsed)
+
+    def _on_selection_changed(self, count: int) -> None:
+        self.SetStatusText(f"Selected: {count}", 1)
 
     def _on_settings(self, event: wx.CommandEvent) -> None:
         dialog = SettingsDialog(self, show_hidden_files=self.settings_repository.get_show_hidden_files())

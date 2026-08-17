@@ -68,6 +68,12 @@ button next to the breadcrumb collapses every currently-expanded row at once
 (without forgetting what's already been fetched, so re-expanding stays
 instant). The last folder you had open is remembered and reopened on startup.
 
+One or more rows can be selected at a time. Up/Down/PageUp/PageDown/Home/End
+move a single selection; hold **Shift** with any of them to extend a *range*
+selection instead; clicking a row, or pressing any of those keys without
+Shift, collapses back to a single selection. The status bar's right-hand
+field always shows **Selected: N**.
+
 Directories don't show a size yet (`-`) - recursive folder size is a planned
 future column, not computed today.
 

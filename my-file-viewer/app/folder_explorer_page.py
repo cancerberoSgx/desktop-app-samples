@@ -4,7 +4,6 @@ import sys
 from typing import Callable, List, Optional, Tuple
 
 import wx
-import wx.dataview as dv
 
 from .async_task import AsyncTaskRunner
 from .file_system_service import FileSystemService
@@ -38,12 +37,14 @@ class FolderExplorerPage(wx.Panel):
         on_folder_opened: Optional[Callable[[str], None]] = None,
         on_favorites_changed: Optional[Callable[[], None]] = None,
         show_hidden: bool = False,
+        on_selection_changed: Optional[Callable[[int], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._file_service = file_service
         self._favorite_repository = favorite_repository
         self._on_folder_opened = on_folder_opened or (lambda path: None)
         self._on_favorites_changed = on_favorites_changed or (lambda: None)
+        self._on_selection_changed = on_selection_changed or (lambda count: None)
         self._async = AsyncTaskRunner(self)
 
         self._current_path: Optional[str] = None
@@ -99,7 +100,10 @@ class FolderExplorerPage(wx.Panel):
         self._error_text.Hide()
 
         self._list = FolderTreeCtrl(
-            self, on_activate_entry=self._on_activate_entry, on_expand_folder=self._on_expand_folder
+            self,
+            on_activate_entry=self._on_activate_entry,
+            on_expand_folder=self._on_expand_folder,
+            on_selection_changed=self._on_tree_selection_changed,
         )
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
@@ -110,7 +114,14 @@ class FolderExplorerPage(wx.Panel):
         self._up_btn.Bind(wx.EVT_BUTTON, self._on_up)
         self._favorite_btn.Bind(wx.EVT_BUTTON, self._on_toggle_favorite)
         self._collapse_all_btn.Bind(wx.EVT_BUTTON, self._on_collapse_all)
-        self._list.Bind(dv.EVT_TREELIST_SELECTION_CHANGED, self._update_button_states)
+        # Deliberately NOT a second self._list.Bind(EVT_TREELIST_SELECTION_CHANGED, ...)
+        # here: in this wx build, binding a second handler for the same
+        # (event type, window) pair silently replaces the first rather than
+        # adding to it - confirmed by hand-testing (see CLAUDE.md) - which
+        # would silently kill FolderTreeCtrl's own internal binding for this
+        # same event. _on_tree_selection_changed below is the one place
+        # that reacts to it, calling everything else (button states, the
+        # "Selected: N" callback) as a plain function call instead.
 
     # ------------------------------------------------------------------
     # Navigation
@@ -154,6 +165,10 @@ class FolderExplorerPage(wx.Panel):
 
     def _on_collapse_all(self, event: wx.CommandEvent) -> None:
         self._list.collapse_all()
+
+    def _on_tree_selection_changed(self, count: int) -> None:
+        self._update_button_states()
+        self._on_selection_changed(count)
 
     # ------------------------------------------------------------------
     # Async loading - every FileSystemService call goes through

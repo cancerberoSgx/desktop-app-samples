@@ -12,10 +12,27 @@ in the folder explorer page, folders are displayed as a tree. User can "expand" 
 p2
 user can expand a folder by pressing "space". User can open folders or files by pressing enter. 
 there's an icon button at the right of the file path to collapse all expanded folders
+p2
+issue, tjhi shappen only in folder /home/sg but not in /home. In /home/sg, folders are not expandable as trees but files are.
 
 # settings
 File-> settings menu take the user to settings modal. Currently this modal allow users to set the following settings:
- * display hidden (by default, hidden files and folders are now shown)
+ * display hidden files (by default, hidden files and folders are not shown)
+
+# multiple select
+there's always one or more files selected. User now can select next file using up and down keys or pag and end/beggining keys, which is OK
+Now users are able to select multiple files. Implement the following ways of multiple file selection
+ * entering shift+up or down or prev-pag, or end/begining will allow to select other files in range. 
+ * clicking a file or pressing up, down, prev-pag, end, etc keys without shift will do single select
+At the bottom bar, right , there's a "selected: N" 
+
+# remember last location
+current folder is remembered next time user open's the app
+
+# copy current path
+at the right of current folder path (breadcrumb) add a copy to clipboard button that copies the current file path
+if user pastes (menu edit paste or ctrl-v) a string which is a valid path, the current path (breadcrumb) transforms temporarily into a text input with that path, focused, and if user press ENTER it will navigate to given folder path and if the final path is to a file the file will be selected. After pressing enter the breadcrumb returns to its normal behavior
+
 
 # keys
 user can use up-down next-page, "end", "begginging" keys , etc keys to navigate file list (not selecting it)

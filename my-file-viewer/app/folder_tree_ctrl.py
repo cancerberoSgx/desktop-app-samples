@@ -67,13 +67,24 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     only ever queried once; expanding it again, or re-sorting, reuses the
     `_Node.children` already cached from the first fetch.
 
-    Keyboard: Space toggles the selected row's expand/collapse state
+    Keyboard: Space toggles the selected row(s)' expand/collapse state
     (`_toggle_selected_expand`) - Enter/double-click activates it (opens a
     file, navigates into a folder) via `EVT_TREELIST_ITEM_ACTIVATED`, which
     wx.dataview.TreeListCtrl already fires natively on the Enter key, no
     extra binding needed. `collapse_all()` collapses every expanded row at
     once - wired to FolderExplorerPage's toolbar button next to the
     breadcrumb.
+
+    Multi-selection (`TL_MULTIPLE`): Up/Down/PageUp/PageDown/Home/End move a
+    single selection same as before; holding Shift with any of them extends
+    a *range* selection instead, and a plain click/keypress without Shift
+    collapses back to a single selection - all of this is native GTK
+    TreeView behavior that comes for free once `TL_MULTIPLE` is set, no
+    custom key handling needed (confirmed by hand-testing, see "Verification
+    performed"). The one thing `TL_MULTIPLE` requires everywhere in this
+    class: never call `GetSelection()` (singular) - it hard-asserts once
+    `TL_MULTIPLE` is set - always `GetSelections()` (plural), even for "is
+    exactly one thing selected" checks.
 
     Sorting deliberately doesn't use wx.dataview's native comparator-driven
     column sort: this wx version calls the comparator and fires
@@ -93,8 +104,9 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         parent: wx.Window,
         on_activate_entry: Callable[[FileEntry], None],
         on_expand_folder: Callable[[str, Callable[[FolderListing], None]], None],
+        on_selection_changed: Optional[Callable[[int], None]] = None,
     ) -> None:
-        super().__init__(parent, style=dv.TL_DEFAULT_STYLE)
+        super().__init__(parent, style=dv.TL_DEFAULT_STYLE | dv.TL_MULTIPLE)
         # Required for a sortable column to accept header clicks at all - see
         # the class docstring for why we don't rely on its actual ordering.
         # Kept as an attribute (not a bare local) since wx only holds a raw
@@ -107,11 +119,13 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self._sort_ascending = True
         self._on_activate_entry = on_activate_entry
         self._on_expand_folder = on_expand_folder
+        self._on_selection_changed = on_selection_changed or (lambda count: None)
         self._update_column_headers()
 
         self.Bind(dv.EVT_TREELIST_COLUMN_SORTED, self._on_column_sorted)
         self.Bind(dv.EVT_TREELIST_ITEM_EXPANDING, self._on_item_expanding)
         self.Bind(dv.EVT_TREELIST_ITEM_ACTIVATED, self._on_item_activated)
+        self.Bind(dv.EVT_TREELIST_SELECTION_CHANGED, self._on_selection_changed_event)
         self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
 
     def set_root_entries(self, entries: List[FileEntry]) -> None:
@@ -121,12 +135,16 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self._roots = [_Node(e) for e in entries]
         self._rebuild_all()
 
-    def get_selected_entry(self) -> Optional[FileEntry]:
-        item = self.GetSelection()
-        if item is None or not item.IsOk():
-            return None
-        node = self.GetItemData(item)
-        return node.entry if isinstance(node, _Node) else None
+    def get_selected_entries(self) -> List[FileEntry]:
+        """All currently-selected entries (plural, even with a single
+        selection) - never GetSelection() (singular), which hard-asserts
+        once TL_MULTIPLE is set, see the class docstring."""
+        entries = []
+        for item in self.GetSelections():
+            node = self.GetItemData(item)
+            if isinstance(node, _Node):
+                entries.append(node.entry)
+        return entries
 
     def collapse_all(self) -> None:
         """Collapses every currently-expanded folder row - just a UI
@@ -181,16 +199,16 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     # Building / rebuilding the wx tree from the cached _Node tree
     # ------------------------------------------------------------------
     def _rebuild_all(self) -> None:
-        selected = self.get_selected_entry()
-        selected_path = selected.path if selected else None
+        selected_paths = {entry.path for entry in self.get_selected_entries()}
 
         self._snapshot_expanded(self._roots)
         self.DeleteAllItems()
         for node in self._sorted(self._roots):
             self._build_node(self.GetRootItem(), node)
 
-        if selected_path:
-            self._reselect(self._roots, selected_path)
+        if selected_paths:
+            self._reselect(self._roots, selected_paths)
+        self._notify_selection_changed()
 
     def _snapshot_expanded(self, nodes: List[_Node]) -> None:
         """Records each currently-visible node's actual expanded/collapsed
@@ -203,13 +221,15 @@ class FolderTreeCtrl(dv.TreeListCtrl):
             if node.loaded:
                 self._snapshot_expanded(node.children)
 
-    def _reselect(self, nodes: List[_Node], path: str) -> None:
+    def _reselect(self, nodes: List[_Node], paths: set) -> None:
+        """Reselects every node whose path is in `paths` - not just the
+        first match found, since a resort/rebuild must preserve a whole
+        multi-selection, not collapse it down to one row."""
         for node in nodes:
-            if node.entry.path == path and node.wx_item is not None:
+            if node.entry.path in paths and node.wx_item is not None:
                 self.Select(node.wx_item)
-                return
             if node.loaded:
-                self._reselect(node.children, path)
+                self._reselect(node.children, paths)
 
     def _build_node(self, parent_wx_item: dv.TreeListItem, node: _Node) -> dv.TreeListItem:
         icon = "📁" if node.entry.is_dir else "📄"
@@ -296,21 +316,30 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self._toggle_selected_expand()
 
     def _toggle_selected_expand(self) -> None:
-        """Space toggles the selected folder row open/closed - Expand()
-        fires EVT_TREELIST_ITEM_EXPANDING just like an arrow click does, so
-        this reuses _on_item_expanding's lazy-load path rather than
-        duplicating it; Collapse() is always just a UI collapse (see
-        collapse_all)."""
-        item = self.GetSelection()
-        if item is None or not item.IsOk():
-            return
-        node = self.GetItemData(item)
-        if not isinstance(node, _Node) or not node.entry.is_dir:
-            return
-        if self.IsExpanded(item):
-            self.Collapse(item)
-        else:
-            self.Expand(item)
+        """Space toggles every selected folder row open/closed,
+        independently - each keeps its own expand/collapse state rather than
+        all following whichever way the first one goes. Expand() fires
+        EVT_TREELIST_ITEM_EXPANDING just like an arrow click does, so this
+        reuses _on_item_expanding's lazy-load path rather than duplicating
+        it; Collapse() is always just a UI collapse (see collapse_all)."""
+        for item in self.GetSelections():
+            node = self.GetItemData(item)
+            if not isinstance(node, _Node) or not node.entry.is_dir:
+                continue
+            if self.IsExpanded(item):
+                self.Collapse(item)
+            else:
+                self.Expand(item)
+
+    # ------------------------------------------------------------------
+    # Selection count (for FolderExplorerPage/MainFrame's "Selected: N")
+    # ------------------------------------------------------------------
+    def _on_selection_changed_event(self, event: dv.TreeListEvent) -> None:
+        event.Skip()
+        self._notify_selection_changed()
+
+    def _notify_selection_changed(self) -> None:
+        self._on_selection_changed(len(self.GetSelections()))
 
 
 class _TextComparator(dv.TreeListItemComparator):

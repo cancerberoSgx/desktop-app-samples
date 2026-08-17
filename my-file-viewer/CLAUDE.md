@@ -11,7 +11,10 @@ in a sortable tree (Name, Size, Modified) - expand a subfolder row to reveal
 pick up where you left off - the last folder open is remembered in
 preferences, same as whether the sidebar was collapsed. File > Settings...
 opens a modal for app preferences - today just whether hidden files/folders
-are shown (off by default).
+are shown (off by default). One or more rows can be selected at a time
+(Shift+Up/Down/PageUp/PageDown/Home/End for a range, any of those without
+Shift for a single row) - the status bar's right-hand field always reads
+"Selected: N".
 
 This project was templated from the sibling `my-redis-viewer` app for its overall
 architecture (SQLite + migrations under `app/db/`, `AsyncTaskRunner` facade for
@@ -207,6 +210,48 @@ Clicking a header sorts by it, click again to reverse.
   `_Node` itself, then the rebuild re-`Expand()`s whichever nodes came back
   `True`.
 
+- **Multi-selection (`TL_MULTIPLE`)** - Up/Down/PageUp/PageDown/Home/End move
+  a single selection; holding Shift with any of them extends a *range*
+  selection instead; a plain click or keypress without Shift collapses back
+  to a single selection. All of this is native GTK `TreeView` behavior that
+  comes for free once `TL_MULTIPLE` is set in the constructor's `style=` -
+  no custom key handling needed, confirmed by hand-testing with
+  `wx.UIActionSimulator` (see "Verification performed"). The one thing
+  `TL_MULTIPLE` requires everywhere: **never call `GetSelection()`
+  (singular)** - it hard-asserts once `TL_MULTIPLE` is set - always
+  `GetSelections()` (plural, `FolderTreeCtrl.get_selected_entries()`), even
+  for "is exactly one thing selected" checks. `_toggle_selected_expand`
+  (Space) and `_rebuild_all`'s selection-preserving `_reselect` were both
+  updated to iterate every selected node, not just one, so a Space-expand or
+  a re-sort acts on (or preserves) a whole multi-selection rather than
+  silently collapsing it to a single row.
+
+- **A hard "last Bind() wins" gotcha, specific to this wx build**: binding a
+  *second* handler for the same `(event type, window)` pair - even on an
+  unrelated widget like a plain `wx.Button`'s `EVT_BUTTON` - silently
+  replaces the first handler instead of adding to it, confirmed by
+  hand-testing (multiple independent repros, including two `Bind()` calls
+  for `EVT_TREELIST_SELECTION_CHANGED` on the same `FolderTreeCtrl`, only the
+  most-recently-bound one ever fires). This bit "Selected: N" for real: the
+  fix was `FolderTreeCtrl` binding `EVT_TREELIST_SELECTION_CHANGED` to its
+  own internal handler exactly once, in its own `__init__`, and
+  `FolderExplorerPage` reacting to selection changes only through the
+  `on_selection_changed` *callback* parameter (an ordinary function call,
+  not a second `Bind()`) - see `FolderExplorerPage._on_tree_selection_changed`,
+  which is what actually updates button states *and* forwards the count to
+  `MainFrame`. **Never add a second `.Bind()` call for an event type another
+  piece of code already binds on the same object** - route through a
+  callback parameter instead, the way `on_activate_entry`/`on_expand_folder`/
+  `on_selection_changed` already do.
+
+- **"Selected: N" status bar field** - `MainFrame.CreateStatusBar(2)`, with
+  `SetStatusWidths([-1, 120])` so field 0 (the existing "Viewing: .../Ready"
+  text) stretches and field 1 stays a fixed-width right-hand column.
+  `FolderTreeCtrl`'s `on_selection_changed(count)` callback flows
+  `FolderTreeCtrl` -> `FolderExplorerPage._on_tree_selection_changed` ->
+  `MainFrame._on_selection_changed`, which is the only place that actually
+  calls `SetStatusText(f"Selected: {count}", 1)`.
+
 ### Settings (`app/settings_dialog.py`, File > Settings...)
 
 `SettingsDialog` is a plain `wx.Dialog` with a `CreateButtonSizer(OK|CANCEL)`,
@@ -326,6 +371,31 @@ but its OK/Cancel result plumbing specifically needed a real `ShowModal()`
 loop (`wx.CallAfter` to click the button mid-modal) - `EndModal()` asserts if
 called without an active `ShowModal()`, so calling `_on_ok` directly the way
 other handlers in this file are tested doesn't work for dialogs.
+
+Multi-selection was verified with real input (`wx.UIActionSimulator`) against
+a real, shown `wx.App` window - a real Shift+Down twice extended a 1-row
+selection to 3, a plain Down afterwards collapsed it back to 1, and
+Shift+End/plain Home behaved the same way - confirming Up/Down/PageUp/
+PageDown/Home/End with/without Shift all work natively once `TL_MULTIPLE` is
+set, no extra code needed. This is also how the "last `Bind()` wins" gotcha
+above was found and confirmed: three independent repros (plain lambdas bound
+directly to a bare `TreeListCtrl`'s `EVT_TREELIST_SELECTION_CHANGED`, and
+even two `wx.Button` `EVT_BUTTON` handlers on the same button) all showed
+only the most-recently-bound handler ever firing on a real, subsequent
+event - which is what had silently broken `FolderExplorerPage`'s original
+`self._list.Bind(EVT_TREELIST_SELECTION_CHANGED, self._update_button_states)`
+line: it was clobbering `FolderTreeCtrl`'s own internal binding for the same
+event, so the "Selected: N" callback fired exactly once (from
+`_rebuild_all`'s direct, non-event call) and never again on a real selection
+change. Fixed by removing that second `Bind()` and routing through the
+`on_selection_changed` callback parameter instead (see above) - re-verified
+with the same real-input test afterwards, confirming both the status bar
+text and the button-enabled states it used to drive still update correctly.
+Multi-selection surviving a re-sort (`_reselect` preserving every selected
+path, not just one) and Space toggling every selected folder independently
+were verified the fake-event way, selecting two non-empty folders plus a
+file, resorting, and confirming all three stayed selected and both folders
+expanded (and fetched their own contents) on a single Space press.
 
 ## What's next (not built yet)
 
