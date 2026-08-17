@@ -5,7 +5,8 @@ from typing import List, Optional
 from .models import Favorite
 
 LAST_FOLDER_SETTING_KEY = "last_folder_path"
-SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
+SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"  # the left (favorites) sidebar
+RIGHT_SIDEBAR_COLLAPSED_SETTING_KEY = "right_sidebar_collapsed"
 SHOW_HIDDEN_FILES_SETTING_KEY = "show_hidden_files"
 CONFIRM_DELETE_SETTING_KEY = "confirm_delete"
 SHOW_FILE_EXTENSIONS_SETTING_KEY = "show_file_extensions"
@@ -100,6 +101,15 @@ class SettingsRepository:
 
     def set_sidebar_collapsed(self, collapsed: bool) -> None:
         self.set(SIDEBAR_COLLAPSED_SETTING_KEY, "1" if collapsed else "0")
+
+    def get_right_sidebar_collapsed(self) -> bool:
+        """Same key/default convention as get_sidebar_collapsed (the left,
+        favorites sidebar) - a separate setting since the two sidebars
+        collapse independently of each other."""
+        return self.get(RIGHT_SIDEBAR_COLLAPSED_SETTING_KEY) == "1"
+
+    def set_right_sidebar_collapsed(self, collapsed: bool) -> None:
+        self.set(RIGHT_SIDEBAR_COLLAPSED_SETTING_KEY, "1" if collapsed else "0")
 
     def get_show_hidden_files(self) -> bool:
         """Defaults to `False` (hidden files/folders not shown) when never

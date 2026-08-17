@@ -9,17 +9,27 @@ from app.db.paths import migrations_dir
 from app.file_system_service import FileSystemService
 from app.folder_explorer_page import FolderExplorerPage
 from app.repositories import FavoriteRepository, SettingsRepository
+from app.right_sidebar import RightSidebar
 from app.settings_dialog import SettingsDialog
 from app.sidebar import FavoritesSidebar
 
 
 class MainFrame(wx.Frame):
     """Composition root: opens the single sqlite3 connection, runs pending
-    migrations, builds the repositories/service, and wires up the sidebar +
+    migrations, builds the repositories/service, and wires up the sidebars +
     explorer. No wx.Simplebook/page-switching, unlike my-redis-viewer's
     Profiles/Data Sources/About sidebar - this app has one main screen
-    (FolderExplorerPage); the sidebar's job is favorite-folder shortcuts,
-    not page navigation. About is a plain message box off the Help menu."""
+    (FolderExplorerPage); the left sidebar's job is favorite-folder
+    shortcuts, not page navigation. About is a plain message box off the
+    Help menu.
+
+    There are two independent, independently-collapsible sidebars either
+    side of `explorer_page` in `root_sizer` - `sidebar` (left,
+    `FavoritesSidebar`) and `right_sidebar` (right, `RightSidebar` - no
+    content yet, just the collapsible shell future features will be added
+    to). Each collapse state is its own setting
+    (`get_sidebar_collapsed`/`get_right_sidebar_collapsed`), so collapsing
+    one has no effect on the other."""
 
     def __init__(self, initial_path: Optional[str] = None) -> None:
         """`initial_path` is the optional command-line target (main.py's
@@ -71,11 +81,19 @@ class MainFrame(wx.Frame):
         )
         root_sizer.Add(self.explorer_page, 1, wx.EXPAND)
 
+        self.right_sidebar = RightSidebar(
+            root_panel,
+            on_toggle_collapsed=self._on_right_sidebar_toggle_collapsed,
+        )
+        root_sizer.Add(self.right_sidebar, 0, wx.EXPAND)
+
         root_panel.SetSizer(root_sizer)
 
         self.sidebar.refresh(self.favorite_repository.list())
         if self.settings_repository.get_sidebar_collapsed():
             self.sidebar.set_collapsed(True)
+        if self.settings_repository.get_right_sidebar_collapsed():
+            self.right_sidebar.set_collapsed(True)
 
         self.Centre()
         self.Bind(wx.EVT_CLOSE, self._on_close)
@@ -175,6 +193,9 @@ class MainFrame(wx.Frame):
 
     def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
         self.settings_repository.set_sidebar_collapsed(collapsed)
+
+    def _on_right_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
+        self.settings_repository.set_right_sidebar_collapsed(collapsed)
 
     def _on_item_count_changed(self, text: str) -> None:
         self.SetStatusText(text, 1)

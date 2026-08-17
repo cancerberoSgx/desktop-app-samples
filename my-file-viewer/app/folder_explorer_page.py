@@ -141,7 +141,7 @@ class FolderExplorerPage(wx.Panel):
 
         self._open_btn.Bind(wx.EVT_BUTTON, self._on_open_folder)
         self._up_btn.Bind(wx.EVT_BUTTON, self._on_up)
-        self._favorite_btn.Bind(wx.EVT_BUTTON, self._on_toggle_favorite)
+        self._favorite_btn.Bind(wx.EVT_BUTTON, self._on_add_favorite)
         self._collapse_all_btn.Bind(wx.EVT_BUTTON, self._on_collapse_all)
         self._copy_path_btn.Bind(wx.EVT_BUTTON, self._on_copy_path)
         # Deliberately NOT a second self._list.Bind(EVT_TREELIST_SELECTION_CHANGED, ...)
@@ -629,19 +629,21 @@ class FolderExplorerPage(wx.Panel):
     # ------------------------------------------------------------------
     # Favorites
     # ------------------------------------------------------------------
-    def _on_toggle_favorite(self, event: wx.CommandEvent) -> None:
+    def _on_add_favorite(self, event: wx.CommandEvent) -> None:
+        """Add-only: removing a favorite is a sidebar context-menu action
+        (FavoritesSidebar._show_context_menu), not something this button
+        does - see _update_button_states, which disables this button
+        entirely once the open folder is already a favorite."""
         if self._current_path is None:
             return
-        existing = self._favorite_repository.get_by_path(self._current_path)
-        if existing is not None:
-            self._favorite_repository.remove(existing.id)
-        else:
-            self._favorite_repository.add_folder(self._current_path)
+        if self._favorite_repository.get_by_path(self._current_path) is not None:
+            return
+        self._favorite_repository.add_folder(self._current_path)
         self._on_favorites_changed()
         self._update_button_states()
 
     def sync_favorite_state(self) -> None:
-        """Refreshes the Add/Remove Favorite button's label - called by
+        """Refreshes the Add Favorite button's enabled state - called by
         MainFrame after a favorite is removed from the sidebar, since that
         can change whether the currently-open folder is still a favorite
         without this page's own button ever being clicked."""
@@ -696,12 +698,10 @@ class FolderExplorerPage(wx.Panel):
         has_folder = self._current_path is not None
         self._open_btn.Enable(not self._loading)
         self._up_btn.Enable(not self._loading and has_folder and _has_parent(self._current_path))
-        self._favorite_btn.Enable(has_folder)
         self._collapse_all_btn.Enable(has_folder)
         self._copy_path_btn.Enable(has_folder)
-        if has_folder:
-            is_favorite = self._favorite_repository.get_by_path(self._current_path) is not None
-            self._favorite_btn.SetLabel("★ Remove from Favorites" if is_favorite else "☆ Add to Favorites")
+        is_favorite = has_folder and self._favorite_repository.get_by_path(self._current_path) is not None
+        self._favorite_btn.Enable(has_folder and not is_favorite)
 
 
 # ----------------------------------------------------------------------

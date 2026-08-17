@@ -44,7 +44,7 @@ in the `schema_migrations` table, in filename order.
 ## Favorites
 
 Pin any folder as a favorite from the "☆ Add to Favorites" button in the toolbar
-(it toggles to "★ Remove from Favorites" once pinned). Favorites show up as a
+(disabled once the open folder is already a favorite). Favorites show up as a
 list in the left sidebar - click one to jump straight to that folder. Right-click
 a favorite to remove it. The sidebar is collapsible (the arrow button at its top)
 to an icon-only strip, and whether it's collapsed is remembered in preferences.

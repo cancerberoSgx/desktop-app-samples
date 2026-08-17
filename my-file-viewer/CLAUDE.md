@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A wxPython desktop app: a performant local file explorer. Pin folders as
 **favorites** in a collapsible left sidebar, open a folder to see its contents
-in a sortable tree (Name, Size, Modified) - expand a subfolder row to reveal
+in a sortable tree (Name, Size, Modified) - a second collapsible sidebar on
+the right (`RightSidebar`) is the reserved home for future features, empty
+today - expand a subfolder row to reveal
 *its* contents in place, queried lazily only at the moment it's expanded - and
 pick up where you left off - the last folder open is remembered in
 preferences, same as whether the sidebar was collapsed. File > Settings...
@@ -87,6 +89,36 @@ job is a dynamic list of favorite-folder shortcuts: clicking one calls
 `FolderExplorerPage.open_folder(path)` on the same, single page instance. "About"
 is a plain `wx.MessageBox` off the Help menu instead of a dedicated page, since
 there was nothing else worth a whole screen for it.
+
+### Right sidebar (`app/right_sidebar.py`, `RightSidebar`)
+
+A second, independent sidebar on the right of `explorer_page` in
+`MainFrame.root_sizer` - collapsible the same way, and persisted the same
+way, as the left `FavoritesSidebar`, but with no content of its own yet:
+it's the shell future features get added to as their own sections, one at
+a time, the same way `FavoritesSidebar`'s section label/favorites
+list/empty-state are today. A separate class rather than a second mode of
+`FavoritesSidebar`, since whatever eventually lives here has nothing to do
+with favorites - two independent sidebars, not one sidebar wearing two
+hats.
+
+- **Its own setting, independent of the left sidebar's**
+  (`SettingsRepository.get_right_sidebar_collapsed`/
+  `set_right_sidebar_collapsed`, key `right_sidebar_collapsed`, same
+  "no row yet -> `False`/expanded" default as `get_sidebar_collapsed`) -
+  collapsing one sidebar has no effect on the other's persisted state or
+  current on-screen state. `MainFrame.__init__` applies both independently
+  right after building both sidebars, the same `if get_..._collapsed():
+  sidebar.set_collapsed(True)` shape for each.
+
+- **The toggle arrow points the mirrored direction** from
+  `FavoritesSidebar`'s: expanded shows "»" (pointing right, towards this
+  sidebar's own outer edge - the direction it collapses towards),
+  collapsed shows "«" (pointing left, back towards the main content - the
+  direction expanding it reveals) - the reverse of the left sidebar's
+  "«"/"»", since collapsing/expanding happens towards the opposite screen
+  edge. The toggle button itself is aligned left in its row (bordering the
+  main content on this side), not right like `FavoritesSidebar`'s.
 
 ### Repository pattern
 
@@ -1031,8 +1063,23 @@ deterministic verification of this kind of feature, and treat
 `UIActionSimulator` runs as corroborating evidence over several repeated
 runs, not as a single pass/fail check.
 
+The right sidebar was verified against a real `MainFrame`
+(`app.frame.get_connection` monkeypatched to a single shared in-memory
+sqlite connection - reused across two separate `MainFrame` instances
+specifically to prove persistence, not just in-session state): confirmed
+`get_right_sidebar_collapsed` defaults to `False`; clicking the toggle
+collapses it (`GetMinSize()` shrinking from `EXPANDED_WIDTH` to
+`COLLAPSED_WIDTH`) and persists that immediately; toggling the right
+sidebar leaves the left sidebar's own collapsed state completely
+unaffected; and a second `MainFrame` built against that same underlying
+connection restores the collapsed state on startup, same as the left
+sidebar already does.
+
 ## What's next (not built yet)
 
+- The right sidebar (`RightSidebar`) has no actual content yet - just the
+  collapsible shell, per the initial ask ("for now just add it"). Future
+  features go here as their own sections.
 - A file-type column and complex glob-based selection (mentioned in the initial
   spec as planned future columns/features).
 - Recursive folder size is now available on demand (Properties dialog), but
