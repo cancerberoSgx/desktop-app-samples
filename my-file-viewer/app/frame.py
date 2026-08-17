@@ -94,16 +94,21 @@ class MainFrame(wx.Frame):
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
 
+        edit_menu = wx.Menu()
+        edit_menu.Append(wx.ID_PASTE, "Paste\tCtrl+V")
+
         help_menu = wx.Menu()
         help_menu.Append(wx.ID_ABOUT, "About...")
 
         menu_bar.Append(file_menu, "&File")
+        menu_bar.Append(edit_menu, "&Edit")
         menu_bar.Append(help_menu, "&Help")
 
         self.SetMenuBar(menu_bar)
 
         self.Bind(wx.EVT_MENU, self._on_settings, id=wx.ID_PREFERENCES)
         self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
+        self.Bind(wx.EVT_MENU, self._on_paste, id=wx.ID_PASTE)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
 
     # ------------------------------------------------------------------
@@ -141,6 +146,9 @@ class MainFrame(wx.Frame):
                 self.explorer_page.set_show_hidden(show_hidden)
         finally:
             dialog.Destroy()
+
+    def _on_paste(self, event: wx.CommandEvent) -> None:
+        self.explorer_page.try_paste_navigate()
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()

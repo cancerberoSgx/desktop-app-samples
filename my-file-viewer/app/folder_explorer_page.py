@@ -50,6 +50,10 @@ class FolderExplorerPage(wx.Panel):
         self._current_path: Optional[str] = None
         self._loading = False
         self._show_hidden = show_hidden
+        # Set by open_folder(..., select_path=...) - the entry (a pasted/typed
+        # file path's parent folder was just opened) to select once that
+        # folder's listing lands; see _on_folder_loaded.
+        self._pending_select_path: Optional[str] = None
 
         self._build_ui()
         self._update_header()
@@ -83,9 +87,12 @@ class FolderExplorerPage(wx.Panel):
         self._breadcrumb_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._breadcrumb_panel.SetSizer(self._breadcrumb_sizer)
         breadcrumb_row.Add(self._breadcrumb_panel, 1, wx.EXPAND)
-        # A sibling of _breadcrumb_panel (not inside its sizer), so
-        # _rebuild_breadcrumb's Clear(delete_windows=True) - which runs on
-        # every navigation - never touches it.
+        # Both of these are siblings of _breadcrumb_panel (not inside its
+        # sizer), so _rebuild_breadcrumb's Clear(delete_windows=True) -
+        # which runs on every navigation - never touches them.
+        self._copy_path_btn = wx.Button(self, label="⧉", style=wx.BU_EXACTFIT)
+        self._copy_path_btn.SetToolTip("Copy folder path to clipboard")
+        breadcrumb_row.Add(self._copy_path_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         self._collapse_all_btn = wx.Button(self, label="−", style=wx.BU_EXACTFIT)
         self._collapse_all_btn.SetToolTip("Collapse all expanded folders")
         breadcrumb_row.Add(self._collapse_all_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
@@ -114,6 +121,7 @@ class FolderExplorerPage(wx.Panel):
         self._up_btn.Bind(wx.EVT_BUTTON, self._on_up)
         self._favorite_btn.Bind(wx.EVT_BUTTON, self._on_toggle_favorite)
         self._collapse_all_btn.Bind(wx.EVT_BUTTON, self._on_collapse_all)
+        self._copy_path_btn.Bind(wx.EVT_BUTTON, self._on_copy_path)
         # Deliberately NOT a second self._list.Bind(EVT_TREELIST_SELECTION_CHANGED, ...)
         # here: in this wx build, binding a second handler for the same
         # (event type, window) pair silently replaces the first rather than
@@ -126,12 +134,19 @@ class FolderExplorerPage(wx.Panel):
     # ------------------------------------------------------------------
     # Navigation
     # ------------------------------------------------------------------
-    def open_folder(self, path: str) -> None:
+    def open_folder(self, path: str, select_path: Optional[str] = None) -> None:
         """Open `path` in the explorer: validates it's a real directory,
         then loads its contents asynchronously (see _load_current_folder).
         This is the one entry point both "Open Folder...", double-clicking
         a subfolder row, a sidebar favorite click, and startup's
-        last-folder restore all funnel through."""
+        last-folder restore all funnel through.
+
+        `select_path`, if given, is an entry inside `path` to select once
+        the listing lands (see _on_folder_loaded) - used by
+        _navigate_to_pasted_path when a pasted/typed breadcrumb path points
+        at a file rather than a folder. Always cleared here (not just set)
+        so a stale selection from an earlier paste never leaks into an
+        unrelated later navigation."""
         if self._loading:
             return
         path = os.path.abspath(path)
@@ -140,6 +155,7 @@ class FolderExplorerPage(wx.Panel):
             return
 
         self._current_path = path
+        self._pending_select_path = select_path
         self._set_error(None)
         self._rebuild_breadcrumb()
         self._update_header()
@@ -169,6 +185,76 @@ class FolderExplorerPage(wx.Panel):
     def _on_tree_selection_changed(self, count: int) -> None:
         self._update_button_states()
         self._on_selection_changed(count)
+
+    def _on_copy_path(self, event: wx.CommandEvent) -> None:
+        if self._current_path is None:
+            return
+        if not wx.TheClipboard.Open():
+            return
+        try:
+            wx.TheClipboard.SetData(wx.TextDataObject(self._current_path))
+        finally:
+            wx.TheClipboard.Close()
+
+    # ------------------------------------------------------------------
+    # Paste-a-path: Edit > Paste / Ctrl+V (see MainFrame._on_paste)
+    # ------------------------------------------------------------------
+    def try_paste_navigate(self) -> None:
+        """If the clipboard holds text that resolves to an existing file or
+        folder, swap the breadcrumb for a focused text input pre-filled
+        with it (see _enter_breadcrumb_edit_mode) instead of navigating
+        right away - Enter confirms (_on_breadcrumb_edit_enter), at which
+        point _navigate_to_pasted_path does the actual navigating/selecting.
+        Anything else on the clipboard is silently ignored - this is a
+        convenience shortcut, not a general paste handler, and there's no
+        other editable text field in this app for a plain Paste to target."""
+        text = _get_clipboard_text()
+        if text is None:
+            return
+        resolved = _resolve_existing_path(text)
+        if resolved is None:
+            return
+        self._enter_breadcrumb_edit_mode(resolved)
+
+    def _enter_breadcrumb_edit_mode(self, path: str) -> None:
+        self._breadcrumb_sizer.Clear(delete_windows=True)
+        edit = wx.TextCtrl(self._breadcrumb_panel, value=path, style=wx.TE_PROCESS_ENTER)
+        self._breadcrumb_sizer.Add(edit, 1, wx.EXPAND)
+        self._breadcrumb_panel.Layout()
+        edit.Bind(wx.EVT_TEXT_ENTER, self._on_breadcrumb_edit_enter)
+        edit.Bind(wx.EVT_KEY_DOWN, self._on_breadcrumb_edit_key_down)
+        edit.SetFocus()
+        edit.SelectAll()
+
+    def _on_breadcrumb_edit_key_down(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self._rebuild_breadcrumb()  # discard the edit, no navigation
+        else:
+            event.Skip()
+
+    def _on_breadcrumb_edit_enter(self, event: wx.CommandEvent) -> None:
+        text = event.GetEventObject().GetValue()
+        resolved = _resolve_existing_path(text)
+        if resolved is None:
+            wx.MessageBox(
+                f"'{text}' is not a valid file or folder path.", "My File Viewer", wx.OK | wx.ICON_ERROR, self
+            )
+            self._rebuild_breadcrumb()
+            return
+        self._navigate_to_pasted_path(resolved)
+
+    def _navigate_to_pasted_path(self, resolved_path: str) -> None:
+        """`resolved_path` is already confirmed to exist (see
+        _resolve_existing_path) - a folder is opened directly; a file is
+        opened via its *parent* folder, with the file selected once that
+        folder's listing lands (open_folder's select_path). Either way,
+        open_folder's own _rebuild_breadcrumb() call is what swaps the text
+        input back for the normal clickable breadcrumb - nothing further
+        needed here to "return to normal"."""
+        if os.path.isdir(resolved_path):
+            self.open_folder(resolved_path)
+        else:
+            self.open_folder(os.path.dirname(resolved_path), select_path=resolved_path)
 
     # ------------------------------------------------------------------
     # Async loading - every FileSystemService call goes through
@@ -202,6 +288,9 @@ class FolderExplorerPage(wx.Panel):
             return
         self._set_error(None)
         self._list.set_root_entries(listing.entries)
+        if self._pending_select_path is not None:
+            self._list.select_path(self._pending_select_path)
+            self._pending_select_path = None
         note = f"  ·  {listing.skipped} item(s) could not be read" if listing.skipped else ""
         self._header_note.SetLabel(
             f"{len(listing.entries)} item(s){note}"
@@ -313,6 +402,7 @@ class FolderExplorerPage(wx.Panel):
         self._up_btn.Enable(not self._loading and has_folder and _has_parent(self._current_path))
         self._favorite_btn.Enable(has_folder)
         self._collapse_all_btn.Enable(has_folder)
+        self._copy_path_btn.Enable(has_folder)
         if has_folder:
             is_favorite = self._favorite_repository.get_by_path(self._current_path) is not None
             self._favorite_btn.SetLabel("★ Remove from Favorites" if is_favorite else "☆ Add to Favorites")
@@ -346,6 +436,39 @@ def _parent_of(path: str) -> str:
 def _has_parent(path: str) -> bool:
     normalized = path.rstrip(os.sep) or os.sep
     return _parent_of(path) != normalized
+
+
+def _get_clipboard_text() -> Optional[str]:
+    """Reads plain text off the system clipboard, or None if there isn't
+    any - used by try_paste_navigate (Edit > Paste / Ctrl+V)."""
+    if not wx.TheClipboard.Open():
+        return None
+    try:
+        if not wx.TheClipboard.IsSupported(wx.DataFormat(wx.DF_TEXT)):
+            return None
+        data = wx.TextDataObject()
+        if not wx.TheClipboard.GetData(data):
+            return None
+        return data.GetText()
+    finally:
+        wx.TheClipboard.Close()
+
+
+def _resolve_existing_path(text: str) -> Optional[str]:
+    """Best-effort turn a pasted/typed string into an absolute path to an
+    existing file or folder, or None if it isn't one - trims whitespace and
+    a single layer of surrounding quotes (as when a path is copied quoted
+    from a terminal or another file manager) and expands a leading ``~``
+    before checking existence."""
+    candidate = text.strip()
+    if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in "\"'":
+        candidate = candidate[1:-1].strip()
+    if not candidate:
+        return None
+    candidate = os.path.expanduser(candidate)
+    if not os.path.exists(candidate):
+        return None
+    return os.path.abspath(candidate)
 
 
 def _open_with_default_app(path: str) -> None:

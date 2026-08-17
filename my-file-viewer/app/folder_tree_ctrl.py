@@ -146,6 +146,23 @@ class FolderTreeCtrl(dv.TreeListCtrl):
                 entries.append(node.entry)
         return entries
 
+    def select_path(self, path: str) -> bool:
+        """Selects the top-level row whose entry matches `path` - used after
+        navigating to a pasted/typed file path
+        (FolderExplorerPage._navigate_to_pasted_path): the file's *parent*
+        folder is opened fresh for this, so the target is always a root
+        node here already, never a nested one that would need expanding
+        first. Select() doesn't fire EVT_TREELIST_SELECTION_CHANGED on its
+        own, so this notifies by hand, same as _rebuild_all's _reselect."""
+        for node in self._roots:
+            if node.entry.path == path and node.wx_item is not None:
+                self.UnselectAll()
+                self.Select(node.wx_item)
+                self.EnsureVisible(node.wx_item)
+                self._notify_selection_changed()
+                return True
+        return False
+
     def collapse_all(self) -> None:
         """Collapses every currently-expanded folder row - just a UI
         collapse, same as clicking each one's arrow individually, so the

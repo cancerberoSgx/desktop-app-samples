@@ -32,6 +32,8 @@ current folder is remembered next time user open's the app
 # copy current path
 at the right of current folder path (breadcrumb) add a copy to clipboard button that copies the current file path
 if user pastes (menu edit paste or ctrl-v) a string which is a valid path, the current path (breadcrumb) transforms temporarily into a text input with that path, focused, and if user press ENTER it will navigate to given folder path and if the final path is to a file the file will be selected. After pressing enter the breadcrumb returns to its normal behavior
+p2
+there's a menu Edit->Copy paths which will copy the absolute path to all selectged files and folders to clipboard
 
 
 # keys

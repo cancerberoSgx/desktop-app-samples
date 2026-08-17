@@ -252,6 +252,54 @@ Clicking a header sorts by it, click again to reverse.
   `MainFrame._on_selection_changed`, which is the only place that actually
   calls `SetStatusText(f"Selected: {count}", 1)`.
 
+### Breadcrumb: copy path button and paste-a-path navigation (`FolderExplorerPage`)
+
+The breadcrumb row has two extra controls beyond the clickable path segments
+themselves - a copy button (`_copy_path_btn`, "⧉") that puts the currently
+open folder's path on the clipboard, and a hidden paste-navigation feature
+with no dedicated button: pasting (Edit > Paste, `wx.ID_PASTE`, or the native
+Ctrl+V accelerator it carries - `MainFrame._build_menu_bar`) is the trigger.
+Both sit as siblings of `_breadcrumb_panel` in `breadcrumb_row`, same as
+`_collapse_all_btn`, so `_rebuild_breadcrumb`'s `Clear(delete_windows=True)`
+never touches them.
+
+- **Paste-a-path flow**: `MainFrame._on_paste` (bound to `wx.ID_PASTE`) calls
+  `FolderExplorerPage.try_paste_navigate()`, the one entry point for this
+  whole feature. It reads clipboard text (`_get_clipboard_text`) and checks
+  whether it resolves to an existing file or folder (`_resolve_existing_path`
+  - trims whitespace/surrounding quotes, expands `~`, then `os.path.exists`);
+  anything else on the clipboard is silently ignored, since there's no other
+  editable text field in this app for a plain Paste to make sense against.
+  A resolving path swaps the breadcrumb for a focused `wx.TextCtrl` prefilled
+  with it (`_enter_breadcrumb_edit_mode`) instead of navigating immediately -
+  Enter confirms (`_on_breadcrumb_edit_enter`), Escape discards it and
+  reverts to the normal breadcrumb without navigating
+  (`_on_breadcrumb_edit_key_down`). Typing further edits before Enter also
+  works, since it's a real, focused `wx.TextCtrl` - not read-only.
+
+- **A file path selects the file, not just its folder**: on Enter,
+  `_navigate_to_pasted_path` calls `open_folder` directly for a folder, or
+  for a file, calls `open_folder(os.path.dirname(file_path),
+  select_path=file_path)` - a new optional param on `open_folder` (still the
+  one entry point every navigation funnels through). `_on_folder_loaded`
+  applies `_pending_select_path` via `FolderTreeCtrl.select_path` once the
+  listing for that folder actually lands, then clears it - a resolved file is
+  always a *root* entry of the folder just opened, never a nested one, so
+  `select_path` only ever needs to search `_roots`, no expanding involved.
+  `open_folder` always assigns `_pending_select_path` (even `None` on every
+  other call site) so a stale selection from an earlier paste can never leak
+  into an unrelated later navigation.
+
+- **Returning to the normal breadcrumb needs no separate "revert" step on
+  Enter**: `open_folder` already calls `_rebuild_breadcrumb()` on every
+  successful navigation, which is exactly what swaps the `wx.TextCtrl` back
+  out for the normal clickable segments - `_navigate_to_pasted_path` doesn't
+  need to do anything extra for that part. An Enter that *doesn't* resolve to
+  a real path (the user edited it into nonsense) shows the same "not a
+  folder"-style `wx.MessageBox` the rest of this page uses, then explicitly
+  calls `_rebuild_breadcrumb()` itself, since no `open_folder` call happens
+  in that path to do it automatically.
+
 ### Settings (`app/settings_dialog.py`, File > Settings...)
 
 `SettingsDialog` is a plain `wx.Dialog` with a `CreateButtonSizer(OK|CANCEL)`,
@@ -396,6 +444,25 @@ path, not just one) and Space toggling every selected folder independently
 were verified the fake-event way, selecting two non-empty folders plus a
 file, resorting, and confirming all three stayed selected and both folders
 expanded (and fetched their own contents) on a single Space press.
+
+The breadcrumb copy button and paste-a-path navigation were verified against
+a real `wx.App` and real temp folders/files, driving `FolderExplorerPage`'s
+actual methods (`_on_copy_path`, `try_paste_navigate`,
+`_on_breadcrumb_edit_enter`, `_on_breadcrumb_edit_key_down`) with a
+hand-constructed `wx.CommandEvent`/`wx.KeyEvent` the same way
+`FolderTreeCtrl`'s fake-event tests work: confirmed the copy button round-trips
+the open folder's exact path through the real system clipboard; pasting a
+file's path swaps the breadcrumb for a focused, prefilled `wx.TextCtrl`
+rather than navigating immediately; pressing Enter in it opens the file's
+*parent* folder and selects the file itself once the (real, async) listing
+lands; pasting a folder's path instead navigates straight there on Enter;
+clipboard text that isn't an existing path is silently ignored (breadcrumb
+never leaves its normal state); and Escape discards the edit and reverts to
+the normal clickable breadcrumb without navigating anywhere. Also confirmed
+`open_folder`'s new `select_path` param defaults to clearing
+`_pending_select_path` on every other navigation path (Up, a favorite click,
+double-clicking a subfolder, ...), so a stale pending selection from an
+earlier paste can never resurface on an unrelated later navigation.
 
 ## What's next (not built yet)
 
