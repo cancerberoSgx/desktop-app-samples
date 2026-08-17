@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import wx
 
@@ -20,8 +21,12 @@ class MainFrame(wx.Frame):
     (FolderExplorerPage); the sidebar's job is favorite-folder shortcuts,
     not page navigation. About is a plain message box off the Help menu."""
 
-    def __init__(self) -> None:
+    def __init__(self, initial_path: Optional[str] = None) -> None:
+        """`initial_path` is the optional command-line target (main.py's
+        `sys.argv[1]`, relative or absolute - see _restore_last_folder) -
+        None for a normal launch with no argument."""
         super().__init__(None, title="My File Viewer", size=(1100, 680))
+        self._initial_path = initial_path
 
         conn = get_connection()
         run_migrations(conn, migrations_dir())
@@ -77,9 +82,20 @@ class MainFrame(wx.Frame):
     # Startup
     # ------------------------------------------------------------------
     def _restore_last_folder(self) -> None:
-        """Reopen whichever folder was last open, if it still exists -
-        falls back to the user's home directory on first run or if that
-        folder was since removed/renamed."""
+        """Opens the command-line target passed to main.py, if there was
+        one and it actually resolves to a file or folder (relative paths
+        resolve against the process's cwd at startup, same as any other
+        CLI tool - see FolderExplorerPage.open_path) - a file's *parent*
+        folder is opened with the file selected/scrolled into view, a
+        folder opens directly. Otherwise (no argument, or one that didn't
+        resolve to anything real) falls back to whichever folder was last
+        open, if it still exists, or the user's home directory on first
+        run or if that folder was since removed/renamed - the same silent,
+        no-error-popup fallback either way, since a stale CLI argument
+        shouldn't be more disruptive on startup than a stale remembered
+        folder already is."""
+        if self._initial_path is not None and self.explorer_page.open_path(self._initial_path):
+            return
         last_path = self.settings_repository.get_last_folder_path()
         path = last_path if last_path and os.path.isdir(last_path) else os.path.expanduser("~")
         self.explorer_page.open_folder(path)

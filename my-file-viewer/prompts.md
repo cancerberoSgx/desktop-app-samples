@@ -47,4 +47,18 @@ if an action is not applicable (because of selection) they appear as disabled
 p2
 when I delete or rename a file, the vertical scroll changes and it shouldn't , the current vertical user scroll must remain the same
 
+# cli args
+I can call this tool from command line passing a folder or file path (relative or absolute). If it's a folder it just display its contents, if a file, display folder contents and file selected and scrolled
+
+# file properties
+Right clicking a file or folder (when single selection) has an option "Properties". Also available in File->Properties menu. For both folders and files the following info is displayed: 
+ * name 
+ * extension
+ * full path (and a copy icon button)
+ * size, 
+   * in case of folders, it's the recursive size. Make sure this calculation doesn't freezes the UI and also while calculating it there's a "Calculating..." label.
+ * permissions, 
+ * dates: created, modified, accessed
+
+
 

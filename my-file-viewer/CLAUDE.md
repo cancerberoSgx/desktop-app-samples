@@ -35,6 +35,8 @@ pip install -r requirements.txt
 
 # Run
 python3 main.py
+python3 main.py <path>   # optional: open a folder, or a file (selected/scrolled
+                          # into view) in its parent folder - relative or absolute
 
 # Build a standalone executable (Linux/Windows/macOS - must build on the target OS)
 .venv/bin/pip install pyinstaller     # once, into THIS project's venv
@@ -56,7 +58,24 @@ no dependency injection framework - everything is wired by hand in this one
 place, same as `my-redis-viewer`. `_restore_last_folder()` runs at the end of
 `__init__`, reopening whichever folder `SettingsRepository.get_last_folder_path()`
 returns (falling back to the user's home directory if that path no longer exists
-or on first run).
+or on first run) - unless `main.py` was given a command-line path (see below),
+which takes priority over restoring the last folder.
+
+- **Command-line target**: `main.py` passes `sys.argv[1]` (if given) through
+  as `MainFrame(initial_path=...)` - `myfileviewer <path>`, relative or
+  absolute (relative resolves against the process's cwd at startup, same as
+  any other CLI tool). `_restore_last_folder` tries
+  `FolderExplorerPage.open_path(self._initial_path)` first when one was
+  given; `open_path` is the one place that knows "a folder opens directly,
+  a file opens via its *parent* folder with the file selected and scrolled
+  into view" (`open_folder(..., select_path=...)`, same mechanism
+  `try_paste_navigate`'s Enter handler already uses for a pasted file path -
+  both funnel through `open_path` rather than duplicating the
+  is-it-a-file-or-a-folder check). A CLI path that doesn't resolve to
+  anything real (typo, since-deleted target) falls through to the normal
+  last-folder-or-home fallback silently, no error popup - the same
+  "don't be more disruptive than a stale remembered folder already is"
+  convention `_restore_last_folder` already followed before this existed.
 
 ### No wx.Simplebook / page-switching sidebar
 
@@ -655,6 +674,16 @@ equal) before and after both a delete and a rename elsewhere in a 50-row
 listing, proving neither operation tears down and rebuilds the tree at all,
 which is what was actually resetting the scroll position back to the top
 before this fix.
+
+The command-line target was verified against a real `MainFrame` (with
+`app.frame.get_connection` monkeypatched to an in-memory sqlite connection,
+so the test never touched the real `~/.my-file-viewer` database) and real
+temp folders/files: an absolute folder path opened it directly; an absolute
+file path opened its parent folder with the file selected; a relative path
+(with the process's cwd temporarily changed to a known directory) resolved
+correctly against that cwd; a nonexistent path fell back silently to the
+last-folder-or-home logic with no error popup; and passing no path at all
+preserved the original startup behavior unchanged.
 
 ## What's next (not built yet)
 

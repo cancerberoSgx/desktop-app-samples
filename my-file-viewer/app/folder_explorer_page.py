@@ -147,11 +147,11 @@ class FolderExplorerPage(wx.Panel):
         last-folder restore all funnel through.
 
         `select_path`, if given, is an entry inside `path` to select once
-        the listing lands (see _on_folder_loaded) - used by
-        _navigate_to_pasted_path when a pasted/typed breadcrumb path points
-        at a file rather than a folder. Always cleared here (not just set)
-        so a stale selection from an earlier paste never leaks into an
-        unrelated later navigation."""
+        the listing lands (see _on_folder_loaded) - used by open_path when
+        a file path (a pasted/typed breadcrumb path, or the app's
+        command-line target) needs to open via its *parent* folder. Always
+        cleared here (not just set) so a stale selection from an earlier
+        paste/CLI open never leaks into an unrelated later navigation."""
         if self._loading:
             return
         path = os.path.abspath(path)
@@ -166,6 +166,31 @@ class FolderExplorerPage(wx.Panel):
         self._update_header()
         self._on_folder_opened(path)
         self._load_current_folder()
+
+    def open_path(self, path: str) -> bool:
+        """Opens `path` regardless of whether it's a folder or a file -
+        a folder opens directly; a file opens via its *parent* folder, with
+        the file selected (and scrolled into view - see
+        FolderTreeCtrl.select_path's EnsureVisible) once that folder's
+        listing lands, via `open_folder(..., select_path=...)`. Used for
+        the app's command-line target (main.py/MainFrame.__init__) and by
+        try_paste_navigate's Enter handler, which used to duplicate this
+        same is-it-a-file-or-a-folder check itself.
+
+        Returns whether `path` resolved to something openable at all - a
+        nonexistent path (a typo'd CLI argument, a since-deleted pasted
+        path) returns False rather than raising or popping an error box, so
+        the caller can silently fall back to its own default, the same way
+        MainFrame._restore_last_folder already does when the last-opened
+        folder is gone."""
+        path = os.path.abspath(os.path.expanduser(path))
+        if os.path.isdir(path):
+            self.open_folder(path)
+            return True
+        if os.path.isfile(path):
+            self.open_folder(os.path.dirname(path), select_path=path)
+            return True
+        return False
 
     def _on_up(self, event: wx.CommandEvent) -> None:
         if self._current_path is not None and _has_parent(self._current_path):
@@ -330,7 +355,8 @@ class FolderExplorerPage(wx.Panel):
         folder, swap the breadcrumb for a focused text input pre-filled
         with it (see _enter_breadcrumb_edit_mode) instead of navigating
         right away - Enter confirms (_on_breadcrumb_edit_enter), at which
-        point _navigate_to_pasted_path does the actual navigating/selecting.
+        point _on_breadcrumb_edit_enter's open_path call does the actual
+        navigating/selecting.
         Anything else on the clipboard is silently ignored - this is a
         convenience shortcut, not a general paste handler, and there's no
         other editable text field in this app for a plain Paste to target."""
@@ -367,20 +393,13 @@ class FolderExplorerPage(wx.Panel):
             )
             self._rebuild_breadcrumb()
             return
-        self._navigate_to_pasted_path(resolved)
-
-    def _navigate_to_pasted_path(self, resolved_path: str) -> None:
-        """`resolved_path` is already confirmed to exist (see
-        _resolve_existing_path) - a folder is opened directly; a file is
-        opened via its *parent* folder, with the file selected once that
-        folder's listing lands (open_folder's select_path). Either way,
-        open_folder's own _rebuild_breadcrumb() call is what swaps the text
-        input back for the normal clickable breadcrumb - nothing further
-        needed here to "return to normal"."""
-        if os.path.isdir(resolved_path):
-            self.open_folder(resolved_path)
-        else:
-            self.open_folder(os.path.dirname(resolved_path), select_path=resolved_path)
+        # open_path already exists to resolve "is this a file or a folder"
+        # (see its docstring) - `resolved` has already been confirmed to
+        # exist by _resolve_existing_path, so this always returns True.
+        # open_folder's own _rebuild_breadcrumb() call is what swaps the
+        # text input back for the normal clickable breadcrumb - nothing
+        # further needed here to "return to normal".
+        self.open_path(resolved)
 
     # ------------------------------------------------------------------
     # Async loading - every FileSystemService call goes through
