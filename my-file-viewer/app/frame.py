@@ -63,6 +63,7 @@ class MainFrame(wx.Frame):
             on_favorites_changed=self._on_favorites_changed,
             show_hidden=self.settings_repository.get_show_hidden_files(),
             confirm_delete=self.settings_repository.get_confirm_delete(),
+            show_extensions=self.settings_repository.get_show_file_extensions(),
             on_selection_changed=self._on_selection_changed,
         )
         root_sizer.Add(self.explorer_page, 1, wx.EXPAND)
@@ -200,6 +201,7 @@ class MainFrame(wx.Frame):
             self,
             show_hidden_files=self.settings_repository.get_show_hidden_files(),
             confirm_delete=self.settings_repository.get_confirm_delete(),
+            show_file_extensions=self.settings_repository.get_show_file_extensions(),
         )
         try:
             if dialog.ShowModal() == wx.ID_OK:
@@ -210,6 +212,10 @@ class MainFrame(wx.Frame):
                 confirm_delete = dialog.get_confirm_delete()
                 self.settings_repository.set_confirm_delete(confirm_delete)
                 self.explorer_page.set_confirm_delete(confirm_delete)
+
+                show_file_extensions = dialog.get_show_file_extensions()
+                self.settings_repository.set_show_file_extensions(show_file_extensions)
+                self.explorer_page.set_show_extensions(show_file_extensions)
         finally:
             dialog.Destroy()
 

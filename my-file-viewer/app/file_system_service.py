@@ -4,7 +4,7 @@ import stat as stat_module
 import sys
 from typing import List, Optional
 
-from .models import DeleteResult, FileEntry, FileProperties, FolderListing
+from .models import DeleteResult, FileEntry, FileProperties, FolderListing, file_extension
 
 """The "service" for every filesystem action this app performs, per
 CLAUDE.md's async rule: every method here is a plain, blocking function -
@@ -126,10 +126,9 @@ class FileSystemService:
         stat = os.stat(path)
         is_dir = os.path.isdir(path)
         name = os.path.basename(path.rstrip(os.sep)) or path
-        extension = "" if is_dir else os.path.splitext(name)[1]
         return FileProperties(
             name=name,
-            extension=extension,
+            extension=file_extension(name, is_dir),
             path=path,
             is_dir=is_dir,
             size_bytes=stat.st_size,

@@ -162,10 +162,45 @@ connection from inside them, but never from inside `work`.
 `FolderTreeCtrl` is a `wx.dataview.TreeListCtrl` - top-level items are the
 currently open folder's immediate children, same as before, but a subfolder
 row can be expanded in place to reveal *its* immediate children instead of
-navigating away from it. Three columns today (Name, Size, Modified); more
-(file type, glob match, recursive size, ...) are meant to be added to
+navigating away from it. Four columns today (Name, Extension, Size,
+Modified); more (glob match, ...) are meant to be added to
 `_COLUMNS`/`_SORT_KEYS` alongside `FileEntry` gaining the backing field.
 Clicking a header sorts by it, click again to reverse.
+
+- **Extension column** - `FileEntry.extension` is a `@property` (not a
+  stored field) derived from `name`/`is_dir` via `models.file_extension`
+  (`os.path.splitext`, so `"archive.tar.gz"` is `.gz`, matching Python's own
+  convention rather than trying to guess multi-part extensions) - a folder's
+  is always `""`. The same `file_extension` helper backs
+  `FileSystemService.get_properties`' `FileProperties.extension`, so the
+  tree's Extension column and the Properties dialog's Extension field can
+  never disagree on what "the extension" means for a given name. Sorting on
+  this column (`_SORT_KEYS[COL_EXTENSION]`) always uses the real extension
+  regardless of the "Show file extensions" setting below - see that
+  bullet for why hiding it from the Name column is display-only and never
+  touches sort order.
+
+- **"Show file extensions" setting hides the suffix in the Name column
+  only, never the Extension column** (`SettingsRepository.get_show_file_extensions`/
+  `set_show_file_extensions`, key `show_file_extensions`, defaults `True` -
+  same "default True" convention as `confirm_delete`) - `FolderTreeCtrl._name_label`
+  is the one place that decides the Name column's actual displayed text,
+  stripping `entry.extension` off the end when the setting is off;
+  `entry.name`/`entry.path` and the dedicated Extension column are
+  completely unaffected either way, since the whole point of a separate,
+  always-populated Extension column would be defeated if turning this
+  setting off also blanked it. `FolderExplorerPage.set_show_extensions`
+  calls `FolderTreeCtrl.set_show_extensions`, which - unlike
+  `set_show_hidden` - never reloads the folder or touches
+  `FileSystemService` at all: every already-built row's Name column is
+  just relabeled in place (`_relabel_names`, walking the whole cached
+  `_Node` tree the same way `_snapshot_expanded`/`_remove_from_children`
+  do), so toggling it preserves the scroll position, the expand state, and
+  the current sort - there's nothing here that a full reload would even
+  need to fix. `_build_node` and `apply_rename` (rename's row-text update -
+  see below) both go through `_name_label` too, so a freshly-built or
+  freshly-renamed row's Name column is never out of step with the current
+  setting.
 
 - **A folder's contents are only ever queried once it's expanded** - the
   whole point of this control. Expanding a row shows a single "Loading…"
@@ -532,24 +567,27 @@ try/finally shape `MainFrame._on_settings` already uses for `SettingsDialog`.
 ### Settings (`app/settings_dialog.py`, File > Settings...)
 
 `SettingsDialog` is a plain `wx.Dialog` with a `CreateButtonSizer(OK|CANCEL)`,
-the same shape as `my-redis-viewer`'s `ProfileDialog` - today it holds two
+the same shape as `my-redis-viewer`'s `ProfileDialog` - today it holds three
 checkboxes ("Show hidden files and folders", "Ask for confirmation before
-deleting"), but a future setting is just another control in `_build_ui` plus
-a field on the OK-captured result, not a new pattern. `MainFrame._on_settings`
-only writes through to `SettingsRepository`/`FolderExplorerPage` when
-`ShowModal()` returns `wx.ID_OK` - Cancel discards whatever the user ticked,
-same as any other modal form in this app family.
+deleting", "Show file extensions"), but a future setting is just another
+control in `_build_ui` plus a field on the OK-captured result, not a new
+pattern. `MainFrame._on_settings` only writes through to
+`SettingsRepository`/`FolderExplorerPage` when `ShowModal()` returns
+`wx.ID_OK` - Cancel discards whatever the user ticked, same as any other
+modal form in this app family.
 
-- **`get_confirm_delete` defaults to `True`** (ask before deleting) when
-  never set - the opposite convention from `get_show_hidden_files`/
-  `get_sidebar_collapsed`, both of which default `False` on no row. It's
-  implemented as `self.get(CONFIRM_DELETE_SETTING_KEY) != "0"` rather than
-  the usual `== "1"`, which is what makes "no row yet" read as `True`
-  instead of `False` - asking before an irreversible action is the safer
-  out-of-the-box behavior. `FolderExplorerPage.set_confirm_delete` just
-  updates the flag read on the next delete; unlike `set_show_hidden`, it
-  doesn't reload anything, since this setting doesn't change what's
-  displayed.
+- **`get_confirm_delete`/`get_show_file_extensions` both default to `True`**
+  when never set - the opposite convention from `get_show_hidden_files`/
+  `get_sidebar_collapsed`, both of which default `False` on no row. Both are
+  implemented as `self.get(KEY) != "0"` rather than the usual `== "1"`,
+  which is what makes "no row yet" read as `True` instead of `False` -
+  asking before an irreversible action, and showing extensions the way
+  most file managers do out of the box, are both the safer/more
+  conventional defaults. `FolderExplorerPage.set_confirm_delete`/
+  `set_show_extensions` just update the relevant flag; neither reloads the
+  folder the way `set_show_hidden` does, since neither changes what's
+  fetched from `FileSystemService` - see the Extension column bullet above
+  for why `set_show_extensions` specifically doesn't even need to.
 
 - **The setting itself lives in `SettingsRepository`**
   (`get_show_hidden_files`/`set_show_hidden_files`, key `show_hidden_files`) -
@@ -779,6 +817,31 @@ menu's and File menu's "Properties" item enabled state were confirmed to
 follow the same `count == 1` rule as Open/Rename. The copy-path button was
 confirmed to put the dialog's exact path on the clipboard, same mechanism
 as the breadcrumb's own copy button.
+
+The Extension column and "Show file extensions" setting were verified
+against a real `wx.App` and a real temp folder with a mix of a multi-dot
+name (`archive.tar.gz`), a plain extension, an extensionless file
+(`README`), and a folder: confirmed the Extension column reads `.gz` for
+the multi-dot file (matching `os.path.splitext`, not a guessed multi-part
+extension) and `""` for both the extensionless file and the folder;
+sorting by the Extension column both ascending and descending kept folders
+first (the existing folders-first-regardless-of-column rule, confirmed
+still holding for the new column) and ordered the remaining files
+correctly by extension either direction. Confirmed `set_show_extensions(False)`
+strips only the extension suffix from each row's Name column (leaving
+`entry.name`/`entry.path` and the Extension column itself untouched) and
+`set_show_extensions(True)` restores it, both without any
+`FileSystemService.list_folder` call happening (a spy on the service
+confirmed zero calls across the toggle) - and that `apply_rename` (see the
+File actions section) picks a renamed row's new Name-column text through
+the same `_name_label` logic, so a rename while extensions are hidden
+doesn't leak the new extension back into the Name column. The Settings
+checkbox itself was verified the same real-`ShowModal()`-loop way
+`SettingsDialog`'s other checkboxes were (a real click posted to the OK
+button mid-modal, per the "`EndModal()` needs an active `ShowModal()`"
+gotcha already documented above), confirming unchecking it and clicking OK
+actually persists `show_file_extensions=False` and updates the open
+folder's Name column immediately, live, through `MainFrame._on_settings`.
 
 ## What's next (not built yet)
 

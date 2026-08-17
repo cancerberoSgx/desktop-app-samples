@@ -7,10 +7,13 @@ getter, not a new pattern."""
 
 
 class SettingsDialog(wx.Dialog):
-    def __init__(self, parent: wx.Window, show_hidden_files: bool, confirm_delete: bool) -> None:
-        super().__init__(parent, title="Settings", size=(380, 190))
+    def __init__(
+        self, parent: wx.Window, show_hidden_files: bool, confirm_delete: bool, show_file_extensions: bool
+    ) -> None:
+        super().__init__(parent, title="Settings", size=(380, 220))
         self._result_show_hidden = show_hidden_files
         self._result_confirm_delete = confirm_delete
+        self._result_show_file_extensions = show_file_extensions
 
         outer = wx.BoxSizer(wx.VERTICAL)
 
@@ -20,7 +23,11 @@ class SettingsDialog(wx.Dialog):
 
         self._confirm_delete_ctrl = wx.CheckBox(self, label="Ask for confirmation before deleting")
         self._confirm_delete_ctrl.SetValue(confirm_delete)
-        outer.Add(self._confirm_delete_ctrl, 0, wx.ALL, 16)
+        outer.Add(self._confirm_delete_ctrl, 0, wx.LEFT | wx.RIGHT | wx.TOP, 16)
+
+        self._show_file_extensions_ctrl = wx.CheckBox(self, label="Show file extensions")
+        self._show_file_extensions_ctrl.SetValue(show_file_extensions)
+        outer.Add(self._show_file_extensions_ctrl, 0, wx.ALL, 16)
 
         outer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 16)
         self.SetSizer(outer)
@@ -30,6 +37,7 @@ class SettingsDialog(wx.Dialog):
     def _on_ok(self, event: wx.CommandEvent) -> None:
         self._result_show_hidden = self._show_hidden_ctrl.GetValue()
         self._result_confirm_delete = self._confirm_delete_ctrl.GetValue()
+        self._result_show_file_extensions = self._show_file_extensions_ctrl.GetValue()
         self.EndModal(wx.ID_OK)
 
     def get_show_hidden_files(self) -> bool:
@@ -37,3 +45,6 @@ class SettingsDialog(wx.Dialog):
 
     def get_confirm_delete(self) -> bool:
         return self._result_confirm_delete
+
+    def get_show_file_extensions(self) -> bool:
+        return self._result_show_file_extensions

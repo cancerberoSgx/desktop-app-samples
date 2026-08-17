@@ -9,18 +9,24 @@ from .formatting import format_bytes, format_timestamp
 from .models import FileEntry, FolderListing
 
 # Column indices, index-aligned to _COLUMNS and _SORT_KEYS below.
-COL_NAME, COL_SIZE, COL_MODIFIED = range(3)
+COL_NAME, COL_EXTENSION, COL_SIZE, COL_MODIFIED = range(4)
 _COLUMNS = [
-    ("Name", 360),
+    ("Name", 300),
+    ("Extension", 90),
     ("Size", 110),
     ("Modified", 160),
 ]
 
 # Sort key per column - each returns the raw (unformatted) value to compare,
 # so e.g. Size sorts numerically, not on the "12.3 KB" display string, and
-# Modified sorts on the epoch float, not the formatted date string.
+# Modified sorts on the epoch float, not the formatted date string. Sorting
+# by Extension is always on the real extension regardless of whether it's
+# currently shown in the Name column (see FolderTreeCtrl.set_show_extensions)
+# - hiding it there is a display-only choice, not a reason to change sort
+# order out from under the user.
 _SORT_KEYS: List[Callable[[FileEntry], object]] = [
     lambda e: e.name.lower(),
+    lambda e: e.extension.lower(),
     lambda e: -1 if e.size_bytes is None else e.size_bytes,
     lambda e: -1.0 if e.modified_at is None else e.modified_at,
 ]
@@ -59,8 +65,12 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     """Tree view of the currently open folder - top-level items are its
     immediate children, same as the old flat table, but a subfolder can be
     expanded in place to reveal *its* immediate children instead of
-    navigating away from it. Columns (Name, Size, Modified) are click-to-sort,
-    ascending/descending toggling on repeat clicks, same as before.
+    navigating away from it. Columns (Name, Extension, Size, Modified) are
+    click-to-sort, ascending/descending toggling on repeat clicks, same as
+    before. The Extension column always shows/sorts on the real extension
+    (a folder's is always empty) regardless of the "Show file extensions"
+    setting, which only affects whether the Name column's own text includes
+    it - see `set_show_extensions`/`_name_label`.
 
     Performance: a folder's contents are only ever queried when the user
     actually expands it (see `_on_item_expanding`) - expanding shows a single
@@ -126,6 +136,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         on_context_menu: Optional[Callable[[List[FileEntry]], None]] = None,
         on_delete_requested: Optional[Callable[[], None]] = None,
         on_rename_requested: Optional[Callable[[], None]] = None,
+        show_extensions: bool = True,
     ) -> None:
         super().__init__(parent, style=dv.TL_DEFAULT_STYLE | dv.TL_MULTIPLE)
         # Required for a sortable column to accept header clicks at all - see
@@ -138,6 +149,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self._roots: List[_Node] = []
         self._sort_column = COL_NAME
         self._sort_ascending = True
+        self._show_extensions = show_extensions
         self._on_activate_entry = on_activate_entry
         self._on_expand_folder = on_expand_folder
         self._on_selection_changed = on_selection_changed or (lambda count: None)
@@ -193,6 +205,38 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         note after a delete, without re-querying FileSystemService."""
         return len(self._roots)
 
+    def _name_label(self, entry: FileEntry) -> str:
+        """The icon + display name for the Name column - `entry.extension`
+        is stripped off the end when `self._show_extensions` is False (the
+        "Show file extensions" setting - see set_show_extensions). This is
+        purely cosmetic: `entry.name`/`entry.path` and the dedicated,
+        always-populated Extension column are completely unaffected - only
+        what's *displayed* in the Name column changes."""
+        icon = "📁" if entry.is_dir else "📄"
+        name = entry.name
+        if not self._show_extensions and entry.extension:
+            name = name[: -len(entry.extension)]
+        return f"{icon} {name}"
+
+    def set_show_extensions(self, show_extensions: bool) -> None:
+        """Applies a new "Show file extensions" preference - unlike
+        set_root_entries/a folder reload, this never re-queries
+        FileSystemService and never rebuilds the tree: every already-built
+        row's Name column is just relabeled in place (_relabel_names), since
+        the change is purely how a name already in hand is displayed, not
+        what data is shown. No-op if the value didn't actually change."""
+        if self._show_extensions == show_extensions:
+            return
+        self._show_extensions = show_extensions
+        self._relabel_names(self._roots)
+
+    def _relabel_names(self, nodes: List[_Node]) -> None:
+        for node in nodes:
+            if node.wx_item is not None:
+                self.SetItemText(node.wx_item, COL_NAME, self._name_label(node.entry))
+            if node.loaded:
+                self._relabel_names(node.children)
+
     def _find_node(self, path: str, nodes: Optional[List[_Node]] = None) -> Optional["_Node"]:
         """Searches the whole cached tree (every loaded level, not just
         `_roots`) for the node backing `path` - a selected row can be
@@ -233,8 +277,8 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         if node is None or node.wx_item is None:
             return
         node.entry = dataclasses.replace(node.entry, name=os.path.basename(new_path), path=new_path)
-        icon = "📁" if node.entry.is_dir else "📄"
-        self.SetItemText(node.wx_item, COL_NAME, f"{icon} {node.entry.name}")
+        self.SetItemText(node.wx_item, COL_NAME, self._name_label(node.entry))
+        self.SetItemText(node.wx_item, COL_EXTENSION, node.entry.extension)
         if node.entry.is_dir and node.loaded:
             for child_item in self._existing_children(node.wx_item):
                 self.DeleteItem(child_item)
@@ -357,8 +401,8 @@ class FolderTreeCtrl(dv.TreeListCtrl):
                 self._reselect(node.children, paths)
 
     def _build_node(self, parent_wx_item: dv.TreeListItem, node: _Node) -> dv.TreeListItem:
-        icon = "📁" if node.entry.is_dir else "📄"
-        item = self.AppendItem(parent_wx_item, f"{icon} {node.entry.name}")
+        item = self.AppendItem(parent_wx_item, self._name_label(node.entry))
+        self.SetItemText(item, COL_EXTENSION, node.entry.extension)
         self.SetItemText(item, COL_SIZE, format_bytes(node.entry.size_bytes))
         self.SetItemText(item, COL_MODIFIED, format_timestamp(node.entry.modified_at))
         self.SetItemData(item, node)

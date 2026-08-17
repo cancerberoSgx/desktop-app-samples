@@ -8,6 +8,7 @@ LAST_FOLDER_SETTING_KEY = "last_folder_path"
 SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
 SHOW_HIDDEN_FILES_SETTING_KEY = "show_hidden_files"
 CONFIRM_DELETE_SETTING_KEY = "confirm_delete"
+SHOW_FILE_EXTENSIONS_SETTING_KEY = "show_file_extensions"
 
 
 class FavoriteRepository:
@@ -120,3 +121,12 @@ class SettingsRepository:
 
     def set_confirm_delete(self, confirm: bool) -> None:
         self.set(CONFIRM_DELETE_SETTING_KEY, "1" if confirm else "0")
+
+    def get_show_file_extensions(self) -> bool:
+        """Defaults to `True` (extensions shown in the Name column) when
+        never set - same "default True" convention as get_confirm_delete,
+        the opposite of get_show_hidden_files/get_sidebar_collapsed."""
+        return self.get(SHOW_FILE_EXTENSIONS_SETTING_KEY) != "0"
+
+    def set_show_file_extensions(self, show: bool) -> None:
+        self.set(SHOW_FILE_EXTENSIONS_SETTING_KEY, "1" if show else "0")

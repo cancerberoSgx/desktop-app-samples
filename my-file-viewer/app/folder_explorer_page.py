@@ -39,6 +39,7 @@ class FolderExplorerPage(wx.Panel):
         on_favorites_changed: Optional[Callable[[], None]] = None,
         show_hidden: bool = False,
         confirm_delete: bool = True,
+        show_extensions: bool = True,
         on_selection_changed: Optional[Callable[[int], None]] = None,
     ) -> None:
         super().__init__(parent)
@@ -53,6 +54,7 @@ class FolderExplorerPage(wx.Panel):
         self._loading = False
         self._show_hidden = show_hidden
         self._confirm_delete = confirm_delete
+        self._show_extensions = show_extensions
         # Set by open_folder(..., select_path=...) - the entry (a pasted/typed
         # file path's parent folder was just opened) to select once that
         # folder's listing lands; see _on_folder_loaded.
@@ -117,6 +119,7 @@ class FolderExplorerPage(wx.Panel):
             on_context_menu=self._on_tree_context_menu,
             on_delete_requested=self.delete_selected,
             on_rename_requested=self.rename_selected,
+            show_extensions=self._show_extensions,
         )
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
@@ -495,6 +498,16 @@ class FolderExplorerPage(wx.Panel):
         self._show_hidden = show_hidden
         if self._current_path is not None:
             self._load_current_folder()
+
+    def set_show_extensions(self, show_extensions: bool) -> None:
+        """Applies a new "Show file extensions" preference - unlike
+        set_show_hidden, this never reloads the folder: it's a purely
+        cosmetic relabeling of names already in hand
+        (FolderTreeCtrl.set_show_extensions), not a change to what's
+        fetched from FileSystemService, so already-expanded rows and the
+        current scroll position are both left untouched."""
+        self._show_extensions = show_extensions
+        self._list.set_show_extensions(show_extensions)
 
     # ------------------------------------------------------------------
     # Favorites

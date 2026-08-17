@@ -1,5 +1,15 @@
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+
+def file_extension(name: str, is_dir: bool) -> str:
+    """The extension (including the leading dot, e.g. ".txt") for a file
+    named `name`, or "" for a folder or an extensionless file - shared by
+    `FileEntry.extension` (the tree's sortable Extension column) and
+    `FileSystemService.get_properties` (the Properties dialog's Extension
+    field), so both agree on exactly one definition."""
+    return "" if is_dir else os.path.splitext(name)[1]
 
 
 @dataclass
@@ -32,6 +42,15 @@ class FileEntry:
     is_dir: bool
     size_bytes: Optional[int] = None
     modified_at: Optional[float] = None
+
+    @property
+    def extension(self) -> str:
+        """The file's extension (e.g. ".txt"), or "" for a folder or an
+        extensionless file - see file_extension(). A property, not a stored
+        field, so it's always derived from (and can never drift out of
+        sync with) `name`/`is_dir` - FolderTreeCtrl's Extension column
+        sorts and displays on this."""
+        return file_extension(self.name, self.is_dir)
 
 
 @dataclass
