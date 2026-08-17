@@ -8,7 +8,7 @@ import wx
 from .async_task import AsyncTaskRunner
 from .file_system_service import FileSystemService
 from .folder_tree_ctrl import FolderTreeCtrl
-from .models import FileEntry, FolderListing
+from .models import DeleteResult, FileEntry, FolderListing
 from .repositories import FavoriteRepository
 
 """The main screen: a toolbar + clickable breadcrumb + the sortable folder
@@ -37,6 +37,7 @@ class FolderExplorerPage(wx.Panel):
         on_folder_opened: Optional[Callable[[str], None]] = None,
         on_favorites_changed: Optional[Callable[[], None]] = None,
         show_hidden: bool = False,
+        confirm_delete: bool = True,
         on_selection_changed: Optional[Callable[[int], None]] = None,
     ) -> None:
         super().__init__(parent)
@@ -50,6 +51,7 @@ class FolderExplorerPage(wx.Panel):
         self._current_path: Optional[str] = None
         self._loading = False
         self._show_hidden = show_hidden
+        self._confirm_delete = confirm_delete
         # Set by open_folder(..., select_path=...) - the entry (a pasted/typed
         # file path's parent folder was just opened) to select once that
         # folder's listing lands; see _on_folder_loaded.
@@ -111,6 +113,9 @@ class FolderExplorerPage(wx.Panel):
             on_activate_entry=self._on_activate_entry,
             on_expand_folder=self._on_expand_folder,
             on_selection_changed=self._on_tree_selection_changed,
+            on_context_menu=self._on_tree_context_menu,
+            on_delete_requested=self.delete_selected,
+            on_rename_requested=self.rename_selected,
         )
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
@@ -185,6 +190,107 @@ class FolderExplorerPage(wx.Panel):
     def _on_tree_selection_changed(self, count: int) -> None:
         self._update_button_states()
         self._on_selection_changed(count)
+
+    # ------------------------------------------------------------------
+    # Selected-entry actions: Open / Rename / Delete - available from the
+    # tree's own keyboard shortcuts (Enter/double-click, F2, Delete - see
+    # FolderTreeCtrl), its right-click context menu (_on_tree_context_menu
+    # below), and the File menu (MainFrame._build_menu_bar), all funnelling
+    # through these same three methods so there's exactly one place each
+    # action's actual behavior lives.
+    # ------------------------------------------------------------------
+    def open_selected(self) -> None:
+        """Only meaningful for exactly one selected row - a no-op for zero
+        or several, same as the File menu/context menu's "Open" item being
+        disabled in those cases. Reuses _on_activate_entry, the same method
+        Enter/double-click already call, so "Open" behaves identically
+        everywhere it can be triggered from."""
+        entries = self._list.get_selected_entries()
+        if len(entries) == 1:
+            self._on_activate_entry(entries[0])
+
+    def rename_selected(self) -> None:
+        """Only meaningful for exactly one selected row - a no-op for zero
+        or several. Prompts for a new name, then renames through
+        FileSystemService via the shared self._async (reusing it, rather
+        than a throwaway runner like _on_expand_folder, is fine here: this
+        is a page-level action like folder navigation, not several
+        concurrent per-row fetches)."""
+        entries = self._list.get_selected_entries()
+        if len(entries) != 1 or self._async.is_busy():
+            return
+        entry = entries[0]
+        with wx.TextEntryDialog(self, "New name:", "Rename", value=entry.name) as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            new_name = dlg.GetValue()
+        if new_name == entry.name:
+            return  # nothing to do - avoid a pointless round trip/rebuild
+        old_path = entry.path
+        self._async.run(
+            work=lambda: self._file_service.rename(old_path, new_name),
+            on_success=lambda new_path: self._list.apply_rename(old_path, new_path),
+            on_error=lambda exc: wx.MessageBox(
+                f"Could not rename '{entry.name}': {exc}", "My File Viewer", wx.OK | wx.ICON_ERROR, self
+            ),
+        )
+
+    def delete_selected(self) -> None:
+        """Available for any non-empty selection (unlike Open/Rename), one
+        or many. Asks for confirmation first unless the user has turned
+        that off in Settings (self._confirm_delete - see
+        MainFrame._on_settings/set_confirm_delete)."""
+        entries = self._list.get_selected_entries()
+        if not entries or self._async.is_busy():
+            return
+        if self._confirm_delete and wx.MessageBox(
+            _confirm_delete_message(entries), "Delete", wx.YES_NO | wx.ICON_WARNING, self
+        ) != wx.YES:
+            return
+        # Dropping a selected descendant of another selected folder before
+        # asking FileSystemService to delete anything: deleting the folder
+        # already removes it, so a separate delete call for it would just
+        # fail (it's gone by the time its turn comes) for no reason.
+        paths = _filter_top_level_selected([entry.path for entry in entries])
+        self._async.run(
+            work=lambda: self._file_service.delete(paths),
+            on_success=self._on_delete_done,
+        )
+
+    def _on_delete_done(self, result: DeleteResult) -> None:
+        if result.deleted:
+            self._list.remove_paths(result.deleted)
+            self._header_note.SetLabel(f"{self._list.root_count()} item(s)")
+        if result.errors:
+            lines = "\n".join(f"{os.path.basename(p)}: {msg}" for p, msg in result.errors.items())
+            wx.MessageBox(
+                f"Some items could not be deleted:\n{lines}", "My File Viewer", wx.OK | wx.ICON_ERROR, self
+            )
+
+    def set_confirm_delete(self, confirm_delete: bool) -> None:
+        """Applies a new "ask before deleting" preference - takes effect on
+        the next delete, no reload needed (unlike set_show_hidden, this
+        setting doesn't change what's displayed)."""
+        self._confirm_delete = confirm_delete
+
+    # ------------------------------------------------------------------
+    # Context menu (right-click / the keyboard "menu" key on a row)
+    # ------------------------------------------------------------------
+    def _on_tree_context_menu(self, entries: List[FileEntry]) -> None:
+        if not entries:
+            return
+        menu = wx.Menu()
+        open_item = menu.Append(wx.ID_ANY, "Open")
+        open_item.Enable(len(entries) == 1)
+        rename_item = menu.Append(wx.ID_ANY, "Rename")
+        rename_item.Enable(len(entries) == 1)
+        menu.AppendSeparator()
+        delete_item = menu.Append(wx.ID_ANY, "Delete")  # always enabled - entries is non-empty here
+        self.Bind(wx.EVT_MENU, lambda evt: self.open_selected(), open_item)
+        self.Bind(wx.EVT_MENU, lambda evt: self.rename_selected(), rename_item)
+        self.Bind(wx.EVT_MENU, lambda evt: self.delete_selected(), delete_item)
+        self._list.PopupMenu(menu)
+        menu.Destroy()
 
     def _on_copy_path(self, event: wx.CommandEvent) -> None:
         if self._current_path is None:
@@ -456,6 +562,28 @@ def _parent_of(path: str) -> str:
 def _has_parent(path: str) -> bool:
     normalized = path.rstrip(os.sep) or os.sep
     return _parent_of(path) != normalized
+
+
+def _confirm_delete_message(entries: List[FileEntry]) -> str:
+    if len(entries) == 1:
+        kind = "folder" if entries[0].is_dir else "file"
+        return f"Delete the {kind} '{entries[0].name}'? This cannot be undone."
+    return f"Delete these {len(entries)} items? This cannot be undone."
+
+
+def _filter_top_level_selected(paths: List[str]) -> List[str]:
+    """Drops any path that's a descendant of another path already in the
+    list - deleting a selected folder already removes everything inside it,
+    so a separately-selected descendant doesn't need (and, since it's
+    already gone by the time its own turn comes, would just fail) its own
+    delete call. Sorting shortest-first before the containment check is
+    what guarantees a folder is always seen (and kept) before anything
+    nested under it."""
+    result: List[str] = []
+    for path in sorted(paths, key=len):
+        if not any(path == kept or path.startswith(kept + os.sep) for kept in result):
+            result.append(path)
+    return result
 
 
 def _get_clipboard_text() -> Optional[str]:

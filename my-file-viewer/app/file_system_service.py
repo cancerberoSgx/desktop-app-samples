@@ -1,8 +1,9 @@
 import os
+import shutil
 import stat as stat_module
 from typing import List
 
-from .models import FileEntry, FolderListing
+from .models import DeleteResult, FileEntry, FolderListing
 
 """The "service" for every filesystem action this app performs, per
 CLAUDE.md's async rule: every method here is a plain, blocking function -
@@ -77,6 +78,40 @@ class FileSystemService:
                 skipped += 1
 
         return FolderListing(entries=entries, skipped=skipped)
+
+    def delete(self, paths: List[str]) -> DeleteResult:
+        """Deletes every path in `paths` - a file via os.remove, a folder
+        (recursively) via shutil.rmtree. Each path succeeds or fails on its
+        own (see DeleteResult) rather than the whole batch aborting on the
+        first failure, since the caller (FolderExplorerPage.delete_selected)
+        may be deleting a mixed multi-selection where one item being
+        read-only/gone-by-the-time-we-get-to-it shouldn't stop the rest."""
+        result = DeleteResult()
+        for path in paths:
+            try:
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                result.deleted.append(path)
+            except OSError as exc:
+                result.errors[path] = str(exc)
+        return result
+
+    def rename(self, path: str, new_name: str) -> str:
+        """Renames the file/folder at `path` to `new_name` (a bare name,
+        not a path - renaming can't move an entry to a different folder)
+        and returns the new absolute path. Raises ValueError for a name
+        that's empty or contains a path separator, and whatever OSError
+        os.rename itself raises (e.g. FileExistsError, PermissionError) -
+        both are surfaced identically by the caller via AsyncTaskRunner's
+        on_error, so no special-casing is needed there."""
+        new_name = new_name.strip()
+        if not new_name or os.sep in new_name or (os.altsep and os.altsep in new_name):
+            raise ValueError("Enter a valid name.")
+        new_path = os.path.join(os.path.dirname(path), new_name)
+        os.rename(path, new_path)
+        return new_path
 
 
 def _is_hidden(name: str, stat_result: os.stat_result) -> bool:

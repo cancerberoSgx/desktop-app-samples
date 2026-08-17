@@ -7,6 +7,7 @@ from .models import Favorite
 LAST_FOLDER_SETTING_KEY = "last_folder_path"
 SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
 SHOW_HIDDEN_FILES_SETTING_KEY = "show_hidden_files"
+CONFIRM_DELETE_SETTING_KEY = "confirm_delete"
 
 
 class FavoriteRepository:
@@ -107,3 +108,15 @@ class SettingsRepository:
 
     def set_show_hidden_files(self, show_hidden: bool) -> None:
         self.set(SHOW_HIDDEN_FILES_SETTING_KEY, "1" if show_hidden else "0")
+
+    def get_confirm_delete(self) -> bool:
+        """Defaults to `True` (ask before deleting) when never set - the
+        opposite convention from get_show_hidden_files/get_sidebar_collapsed
+        (both default `False` on no row), since asking before an
+        irreversible action is the safer out-of-the-box behavior. Checking
+        `!= "0"` rather than `== "1"` is what makes "no row yet" read as
+        `True` here instead of `False`."""
+        return self.get(CONFIRM_DELETE_SETTING_KEY) != "0"
+
+    def set_confirm_delete(self, confirm: bool) -> None:
+        self.set(CONFIRM_DELETE_SETTING_KEY, "1" if confirm else "0")

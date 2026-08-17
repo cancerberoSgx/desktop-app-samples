@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -46,3 +46,14 @@ class FolderListing:
     entries: List[FileEntry] = field(default_factory=list)
     skipped: int = 0
     error: Optional[str] = None
+
+
+@dataclass
+class DeleteResult:
+    """Result of FileSystemService.delete(paths) - a batch action, so unlike
+    list_folder's single `error`, each path either succeeds (`deleted`) or
+    fails independently (`errors`, path -> message) rather than the whole
+    call aborting on the first failure."""
+
+    deleted: List[str] = field(default_factory=list)
+    errors: Dict[str, str] = field(default_factory=dict)

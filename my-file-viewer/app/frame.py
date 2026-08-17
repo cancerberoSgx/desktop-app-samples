@@ -57,6 +57,7 @@ class MainFrame(wx.Frame):
             on_folder_opened=self._on_folder_opened,
             on_favorites_changed=self._on_favorites_changed,
             show_hidden=self.settings_repository.get_show_hidden_files(),
+            confirm_delete=self.settings_repository.get_confirm_delete(),
             on_selection_changed=self._on_selection_changed,
         )
         root_sizer.Add(self.explorer_page, 1, wx.EXPAND)
@@ -90,6 +91,18 @@ class MainFrame(wx.Frame):
         menu_bar = wx.MenuBar()
 
         file_menu = wx.Menu()
+        self._open_menu_item = file_menu.Append(wx.ID_OPEN, "Open\tEnter")
+        self._rename_menu_item = file_menu.Append(wx.ID_ANY, "Rename\tF2")
+        self._delete_menu_item = file_menu.Append(wx.ID_DELETE, "Delete\tDel")
+        # Disabled until a selection actually makes one of these legal - see
+        # _on_selection_changed, the one place that updates all three (kept
+        # in sync with the tree's own context menu the same way, per
+        # FolderTreeCtrl's docstring on why the enabled/disabled policy for
+        # these actions lives in FolderExplorerPage/MainFrame, not the tree).
+        self._open_menu_item.Enable(False)
+        self._rename_menu_item.Enable(False)
+        self._delete_menu_item.Enable(False)
+        file_menu.AppendSeparator()
         file_menu.Append(wx.ID_PREFERENCES, "Settings...")
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
@@ -107,6 +120,9 @@ class MainFrame(wx.Frame):
 
         self.SetMenuBar(menu_bar)
 
+        self.Bind(wx.EVT_MENU, self._on_menu_open, self._open_menu_item)
+        self.Bind(wx.EVT_MENU, self._on_menu_rename, self._rename_menu_item)
+        self.Bind(wx.EVT_MENU, self._on_menu_delete, self._delete_menu_item)
         self.Bind(wx.EVT_MENU, self._on_settings, id=wx.ID_PREFERENCES)
         self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_copy_paths, id=wx.ID_COPY)
@@ -138,14 +154,38 @@ class MainFrame(wx.Frame):
 
     def _on_selection_changed(self, count: int) -> None:
         self.SetStatusText(f"Selected: {count}", 1)
+        # Open/Rename only make sense for exactly one selected row; Delete
+        # is fine for any non-empty selection - kept in sync with the
+        # context menu's own enabled state in
+        # FolderExplorerPage._on_tree_context_menu.
+        self._open_menu_item.Enable(count == 1)
+        self._rename_menu_item.Enable(count == 1)
+        self._delete_menu_item.Enable(count >= 1)
+
+    def _on_menu_open(self, event: wx.CommandEvent) -> None:
+        self.explorer_page.open_selected()
+
+    def _on_menu_rename(self, event: wx.CommandEvent) -> None:
+        self.explorer_page.rename_selected()
+
+    def _on_menu_delete(self, event: wx.CommandEvent) -> None:
+        self.explorer_page.delete_selected()
 
     def _on_settings(self, event: wx.CommandEvent) -> None:
-        dialog = SettingsDialog(self, show_hidden_files=self.settings_repository.get_show_hidden_files())
+        dialog = SettingsDialog(
+            self,
+            show_hidden_files=self.settings_repository.get_show_hidden_files(),
+            confirm_delete=self.settings_repository.get_confirm_delete(),
+        )
         try:
             if dialog.ShowModal() == wx.ID_OK:
                 show_hidden = dialog.get_show_hidden_files()
                 self.settings_repository.set_show_hidden_files(show_hidden)
                 self.explorer_page.set_show_hidden(show_hidden)
+
+                confirm_delete = dialog.get_confirm_delete()
+                self.settings_repository.set_confirm_delete(confirm_delete)
+                self.explorer_page.set_confirm_delete(confirm_delete)
         finally:
             dialog.Destroy()
 

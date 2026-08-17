@@ -1,4 +1,6 @@
-from typing import Callable, List, Optional
+import dataclasses
+import os
+from typing import Callable, Iterable, List, Optional
 
 import wx
 import wx.dataview as dv
@@ -71,9 +73,25 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     (`_toggle_selected_expand`) - Enter/double-click activates it (opens a
     file, navigates into a folder) via `EVT_TREELIST_ITEM_ACTIVATED`, which
     wx.dataview.TreeListCtrl already fires natively on the Enter key, no
-    extra binding needed. `collapse_all()` collapses every expanded row at
+    extra binding needed. Delete and F2 call back out to
+    `on_delete_requested`/`on_rename_requested` (FolderExplorerPage's
+    `delete_selected`/`rename_selected`) rather than doing anything with the
+    selection here directly - this control only ever reports "the user asked
+    to do X", never decides whether X is currently legal (single vs. multi
+    selection); that policy lives in FolderExplorerPage, the one place that
+    also drives the File menu's enabled state for the same actions, so
+    there's a single source of truth for "is this action available right
+    now" instead of two. `collapse_all()` collapses every expanded row at
     once - wired to FolderExplorerPage's toolbar button next to the
     breadcrumb.
+
+    Right-click (or the keyboard "menu" key) fires `on_context_menu` with
+    whatever ends up selected - see `_on_item_context_menu`: a right-click on
+    a row that's already part of the current selection leaves that whole
+    selection alone (so multi-select-then-right-click doesn't collapse it
+    down to one), while right-clicking a row outside the current selection
+    replaces it with just that row first, the same convention most file
+    managers use.
 
     Multi-selection (`TL_MULTIPLE`): Up/Down/PageUp/PageDown/Home/End move a
     single selection same as before; holding Shift with any of them extends
@@ -105,6 +123,9 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         on_activate_entry: Callable[[FileEntry], None],
         on_expand_folder: Callable[[str, Callable[[FolderListing], None]], None],
         on_selection_changed: Optional[Callable[[int], None]] = None,
+        on_context_menu: Optional[Callable[[List[FileEntry]], None]] = None,
+        on_delete_requested: Optional[Callable[[], None]] = None,
+        on_rename_requested: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent, style=dv.TL_DEFAULT_STYLE | dv.TL_MULTIPLE)
         # Required for a sortable column to accept header clicks at all - see
@@ -120,12 +141,16 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self._on_activate_entry = on_activate_entry
         self._on_expand_folder = on_expand_folder
         self._on_selection_changed = on_selection_changed or (lambda count: None)
+        self._on_context_menu = on_context_menu or (lambda entries: None)
+        self._on_delete_requested = on_delete_requested or (lambda: None)
+        self._on_rename_requested = on_rename_requested or (lambda: None)
         self._update_column_headers()
 
         self.Bind(dv.EVT_TREELIST_COLUMN_SORTED, self._on_column_sorted)
         self.Bind(dv.EVT_TREELIST_ITEM_EXPANDING, self._on_item_expanding)
         self.Bind(dv.EVT_TREELIST_ITEM_ACTIVATED, self._on_item_activated)
         self.Bind(dv.EVT_TREELIST_SELECTION_CHANGED, self._on_selection_changed_event)
+        self.Bind(dv.EVT_TREELIST_ITEM_CONTEXT_MENU, self._on_item_context_menu)
         self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
 
     def set_root_entries(self, entries: List[FileEntry]) -> None:
@@ -162,6 +187,67 @@ class FolderTreeCtrl(dv.TreeListCtrl):
                 self._notify_selection_changed()
                 return True
         return False
+
+    def root_count(self) -> int:
+        """Number of top-level rows - used to refresh the "N item(s)" header
+        note after a delete, without re-querying FileSystemService."""
+        return len(self._roots)
+
+    def _find_node(self, path: str, nodes: Optional[List[_Node]] = None) -> Optional["_Node"]:
+        """Searches the whole cached tree (every loaded level, not just
+        `_roots`) for the node backing `path` - a selected row can be
+        nested arbitrarily deep once its ancestors have been expanded."""
+        for node in self._roots if nodes is None else nodes:
+            if node.entry.path == path:
+                return node
+            if node.loaded:
+                found = self._find_node(path, node.children)
+                if found is not None:
+                    return found
+        return None
+
+    def apply_rename(self, old_path: str, new_path: str) -> None:
+        """Updates the cached _Node for `old_path` in place to reflect a
+        successful FileSystemService.rename, then rebuilds so the row (and
+        its new sort position) shows up without re-querying
+        FileSystemService for anything - called by
+        FolderExplorerPage.rename_selected() once the async rename
+        succeeds. If the renamed entry is a folder that had already been
+        expanded, its cached children are dropped and it's reset to
+        unloaded/collapsed rather than patched up: renaming a folder changes
+        every descendant's real path too (they're now under the new name),
+        and patching each one recursively isn't worth it for a deliberate,
+        infrequent action - the same trade-off FolderExplorerPage.set_show_hidden
+        already makes for a full reload."""
+        node = self._find_node(old_path)
+        if node is None:
+            return
+        node.entry = dataclasses.replace(node.entry, name=os.path.basename(new_path), path=new_path)
+        if node.entry.is_dir and node.loaded:
+            node.loaded = False
+            node.loading = False
+            node.load_error = None
+            node.children = []
+            node.expanded = False
+        self._rebuild_all()
+
+    def remove_paths(self, paths: Iterable[str]) -> None:
+        """Removes the cached _Node(s) for `paths` from wherever they live
+        in the tree (top-level or an already-loaded folder's children), then
+        rebuilds - called by FolderExplorerPage.delete_selected() once the
+        async delete succeeds, so a deleted row disappears without
+        re-querying FileSystemService for its (now-changed) parent
+        folder."""
+        path_set = set(paths)
+        self._roots = [node for node in self._roots if node.entry.path not in path_set]
+        self._remove_from_children(self._roots, path_set)
+        self._rebuild_all()
+
+    def _remove_from_children(self, nodes: List[_Node], path_set: set) -> None:
+        for node in nodes:
+            if node.loaded:
+                node.children = [child for child in node.children if child.entry.path not in path_set]
+                self._remove_from_children(node.children, path_set)
 
     def collapse_all(self) -> None:
         """Collapses every currently-expanded folder row - just a UI
@@ -317,7 +403,9 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         return children
 
     # ------------------------------------------------------------------
-    # Activation (double-click / Enter) and keyboard expand (Space)
+    # Activation (double-click / Enter), keyboard expand (Space), and
+    # Delete/F2 (see the class docstring for why these just call back out
+    # rather than deciding anything about the selection here)
     # ------------------------------------------------------------------
     def _on_item_activated(self, event: dv.TreeListEvent) -> None:
         # Enter/double-click - wx.dataview.TreeListCtrl already fires this
@@ -327,10 +415,15 @@ class FolderTreeCtrl(dv.TreeListCtrl):
             self._on_activate_entry(node.entry)
 
     def _on_key_down(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() != wx.WXK_SPACE:
+        code = event.GetKeyCode()
+        if code == wx.WXK_SPACE:
+            self._toggle_selected_expand()
+        elif code == wx.WXK_DELETE:
+            self._on_delete_requested()
+        elif code == wx.WXK_F2:
+            self._on_rename_requested()
+        else:
             event.Skip()
-            return
-        self._toggle_selected_expand()
 
     def _toggle_selected_expand(self) -> None:
         """Space toggles every selected folder row open/closed,
@@ -347,6 +440,26 @@ class FolderTreeCtrl(dv.TreeListCtrl):
                 self.Collapse(item)
             else:
                 self.Expand(item)
+
+    # ------------------------------------------------------------------
+    # Context menu (right-click / the keyboard "menu" key)
+    # ------------------------------------------------------------------
+    def _on_item_context_menu(self, event: dv.TreeListEvent) -> None:
+        item = event.GetItem()
+        node = self.GetItemData(item)
+        if not isinstance(node, _Node):
+            return  # a marker row (Loading…/error) - nothing to act on
+        if not self.IsSelected(item):
+            # Right-clicking a row outside the current selection replaces
+            # it with just that row, same convention most file managers
+            # use - but right-clicking a row that's already part of the
+            # current (possibly multi-row) selection leaves it alone, so
+            # "select several rows, then right-click one of them" doesn't
+            # collapse the selection down to one.
+            self.UnselectAll()
+            self.Select(item)
+            self._notify_selection_changed()
+        self._on_context_menu(self.get_selected_entries())
 
     # ------------------------------------------------------------------
     # Selection count (for FolderExplorerPage/MainFrame's "Selected: N")
