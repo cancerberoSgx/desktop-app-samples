@@ -95,6 +95,7 @@ class MainFrame(wx.Frame):
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
 
         edit_menu = wx.Menu()
+        edit_menu.Append(wx.ID_COPY, "Copy Paths\tCtrl+C")
         edit_menu.Append(wx.ID_PASTE, "Paste\tCtrl+V")
 
         help_menu = wx.Menu()
@@ -108,6 +109,7 @@ class MainFrame(wx.Frame):
 
         self.Bind(wx.EVT_MENU, self._on_settings, id=wx.ID_PREFERENCES)
         self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
+        self.Bind(wx.EVT_MENU, self._on_copy_paths, id=wx.ID_COPY)
         self.Bind(wx.EVT_MENU, self._on_paste, id=wx.ID_PASTE)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
 
@@ -146,6 +148,9 @@ class MainFrame(wx.Frame):
                 self.explorer_page.set_show_hidden(show_hidden)
         finally:
             dialog.Destroy()
+
+    def _on_copy_paths(self, event: wx.CommandEvent) -> None:
+        self.explorer_page.copy_selected_paths()
 
     def _on_paste(self, event: wx.CommandEvent) -> None:
         self.explorer_page.try_paste_navigate()

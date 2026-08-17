@@ -252,16 +252,27 @@ Clicking a header sorts by it, click again to reverse.
   `MainFrame._on_selection_changed`, which is the only place that actually
   calls `SetStatusText(f"Selected: {count}", 1)`.
 
-### Breadcrumb: copy path button and paste-a-path navigation (`FolderExplorerPage`)
+### Clipboard: copy path button, Edit > Copy Paths, paste-a-path navigation (`FolderExplorerPage`)
 
-The breadcrumb row has two extra controls beyond the clickable path segments
+The breadcrumb row has one extra control beyond the clickable path segments
 themselves - a copy button (`_copy_path_btn`, "⧉") that puts the currently
-open folder's path on the clipboard, and a hidden paste-navigation feature
-with no dedicated button: pasting (Edit > Paste, `wx.ID_PASTE`, or the native
-Ctrl+V accelerator it carries - `MainFrame._build_menu_bar`) is the trigger.
-Both sit as siblings of `_breadcrumb_panel` in `breadcrumb_row`, same as
-`_collapse_all_btn`, so `_rebuild_breadcrumb`'s `Clear(delete_windows=True)`
-never touches them.
+open folder's path on the clipboard. Two more clipboard actions live on the
+`&Edit` menu instead of a button, since neither needs one: `wx.ID_COPY`
+("Copy Paths\tCtrl+C") and `wx.ID_PASTE` ("Paste\tCtrl+V") -
+`MainFrame._build_menu_bar` gives each its accelerator, so Ctrl+C/Ctrl+V work
+from anywhere in the window (not just with a menu open), the same way
+`Alt+F4` does for Exit. `_copy_path_btn` sits as a sibling of
+`_breadcrumb_panel` in `breadcrumb_row`, same as `_collapse_all_btn`, so
+`_rebuild_breadcrumb`'s `Clear(delete_windows=True)` never touches it.
+
+- **Copy Paths (Ctrl+C)**: `MainFrame._on_copy_paths` (bound to `wx.ID_COPY`)
+  calls `FolderExplorerPage.copy_selected_paths()`, which joins
+  `FolderTreeCtrl.get_selected_entries()`'s `FileEntry.path` (already
+  absolute - see `FileSystemService.list_folder`) one per line and puts that
+  on the clipboard - a no-op if nothing is selected. Works for any number of
+  selected rows, files and folders alike, since `get_selected_entries`
+  already handles the whole multi-selection (see "Multi-selection" above),
+  not just a single row.
 
 - **Paste-a-path flow**: `MainFrame._on_paste` (bound to `wx.ID_PASTE`) calls
   `FolderExplorerPage.try_paste_navigate()`, the one entry point for this
@@ -463,6 +474,14 @@ the normal clickable breadcrumb without navigating anywhere. Also confirmed
 `_pending_select_path` on every other navigation path (Up, a favorite click,
 double-clicking a subfolder, ...), so a stale pending selection from an
 earlier paste can never resurface on an unrelated later navigation.
+
+Edit > Copy Paths (Ctrl+C) was verified the same way: selecting a mix of
+files and a folder in a real temp folder, calling
+`FolderExplorerPage.copy_selected_paths()` directly, and confirming the real
+clipboard ends up with exactly those rows' absolute paths, one per line,
+matching the selection with no extra/missing entries; and that calling it
+with nothing selected leaves a pre-existing clipboard value untouched rather
+than clobbering it with an empty string.
 
 ## What's next (not built yet)
 

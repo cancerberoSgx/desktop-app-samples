@@ -197,6 +197,26 @@ class FolderExplorerPage(wx.Panel):
             wx.TheClipboard.Close()
 
     # ------------------------------------------------------------------
+    # Copy Paths: Edit > Copy Paths / Ctrl+C (see MainFrame._on_copy_paths)
+    # ------------------------------------------------------------------
+    def copy_selected_paths(self) -> None:
+        """Copies the absolute path of every currently selected row (file
+        or folder, however many) to the clipboard, one per line - a no-op
+        if nothing is selected. `FileEntry.path` is already absolute (see
+        FileSystemService.list_folder), so no extra resolving is needed
+        here, unlike the free-text path in try_paste_navigate below."""
+        entries = self._list.get_selected_entries()
+        if not entries:
+            return
+        text = "\n".join(entry.path for entry in entries)
+        if not wx.TheClipboard.Open():
+            return
+        try:
+            wx.TheClipboard.SetData(wx.TextDataObject(text))
+        finally:
+            wx.TheClipboard.Close()
+
+    # ------------------------------------------------------------------
     # Paste-a-path: Edit > Paste / Ctrl+V (see MainFrame._on_paste)
     # ------------------------------------------------------------------
     def try_paste_navigate(self) -> None:
