@@ -9,6 +9,7 @@ from .async_task import AsyncTaskRunner
 from .file_system_service import FileSystemService
 from .folder_tree_ctrl import FolderTreeCtrl
 from .models import DeleteResult, FileEntry, FolderListing
+from .properties_dialog import PropertiesDialog
 from .repositories import FavoriteRepository
 
 """The main screen: a toolbar + clickable breadcrumb + the sortable folder
@@ -217,11 +218,12 @@ class FolderExplorerPage(wx.Panel):
         self._on_selection_changed(count)
 
     # ------------------------------------------------------------------
-    # Selected-entry actions: Open / Rename / Delete - available from the
-    # tree's own keyboard shortcuts (Enter/double-click, F2, Delete - see
-    # FolderTreeCtrl), its right-click context menu (_on_tree_context_menu
+    # Selected-entry actions: Open / Rename / Delete / Properties -
+    # available from the tree's own keyboard shortcuts (Enter/double-click,
+    # F2, Delete - see FolderTreeCtrl; Properties has no keyboard shortcut
+    # of its own), its right-click context menu (_on_tree_context_menu
     # below), and the File menu (MainFrame._build_menu_bar), all funnelling
-    # through these same three methods so there's exactly one place each
+    # through these same four methods so there's exactly one place each
     # action's actual behavior lives.
     # ------------------------------------------------------------------
     def open_selected(self) -> None:
@@ -298,6 +300,21 @@ class FolderExplorerPage(wx.Panel):
         setting doesn't change what's displayed)."""
         self._confirm_delete = confirm_delete
 
+    def show_properties_for_selected(self) -> None:
+        """Only meaningful for exactly one selected row - a no-op for zero
+        or several, same as Open/Rename. `PropertiesDialog` does its own
+        (async) FileSystemService work once shown - see its docstring for
+        why a blocking ShowModal() here doesn't stop its background fetches
+        from landing."""
+        entries = self._list.get_selected_entries()
+        if len(entries) != 1:
+            return
+        dialog = PropertiesDialog(self, self._file_service, entries[0].path)
+        try:
+            dialog.ShowModal()
+        finally:
+            dialog.Destroy()
+
     # ------------------------------------------------------------------
     # Context menu (right-click / the keyboard "menu" key on a row)
     # ------------------------------------------------------------------
@@ -311,9 +328,13 @@ class FolderExplorerPage(wx.Panel):
         rename_item.Enable(len(entries) == 1)
         menu.AppendSeparator()
         delete_item = menu.Append(wx.ID_ANY, "Delete")  # always enabled - entries is non-empty here
+        menu.AppendSeparator()
+        properties_item = menu.Append(wx.ID_ANY, "Properties")
+        properties_item.Enable(len(entries) == 1)
         self.Bind(wx.EVT_MENU, lambda evt: self.open_selected(), open_item)
         self.Bind(wx.EVT_MENU, lambda evt: self.rename_selected(), rename_item)
         self.Bind(wx.EVT_MENU, lambda evt: self.delete_selected(), delete_item)
+        self.Bind(wx.EVT_MENU, lambda evt: self.show_properties_for_selected(), properties_item)
         self._list.PopupMenu(menu)
         menu.Destroy()
 

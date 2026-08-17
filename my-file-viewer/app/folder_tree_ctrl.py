@@ -5,7 +5,7 @@ from typing import Callable, Iterable, List, Optional
 import wx
 import wx.dataview as dv
 
-from .formatting import format_bytes, format_modified
+from .formatting import format_bytes, format_timestamp
 from .models import FileEntry, FolderListing
 
 # Column indices, index-aligned to _COLUMNS and _SORT_KEYS below.
@@ -360,7 +360,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         icon = "📁" if node.entry.is_dir else "📄"
         item = self.AppendItem(parent_wx_item, f"{icon} {node.entry.name}")
         self.SetItemText(item, COL_SIZE, format_bytes(node.entry.size_bytes))
-        self.SetItemText(item, COL_MODIFIED, format_modified(node.entry.modified_at))
+        self.SetItemText(item, COL_MODIFIED, format_timestamp(node.entry.modified_at))
         self.SetItemData(item, node)
         node.wx_item = item
 

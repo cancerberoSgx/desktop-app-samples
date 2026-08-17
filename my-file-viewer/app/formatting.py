@@ -21,10 +21,14 @@ def format_bytes(num_bytes: Optional[int]) -> str:
     return f"{value:.1f} TB"
 
 
-def format_modified(epoch_seconds: Optional[float]) -> str:
-    """Human-readable local timestamp for a `os.stat().st_mtime` value.
-    `None` renders as "-" (entry could not be stat-ed - see
-    FileSystemService.list_folder's `skipped` count)."""
+def format_timestamp(epoch_seconds: Optional[float]) -> str:
+    """Human-readable local timestamp for an `os.stat()` epoch value
+    (`st_mtime`/`st_ctime`/`st_atime`/a platform "birth time"). `None`
+    renders as "-" - either the entry could not be stat-ed (see
+    FileSystemService.list_folder's `skipped` count) or, for a creation
+    date on a platform/filesystem with no reliable one (see
+    FileSystemService.get_properties), there simply isn't a value to
+    show."""
     if epoch_seconds is None:
         return "-"
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(epoch_seconds))

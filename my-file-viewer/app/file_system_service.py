@@ -1,9 +1,10 @@
 import os
 import shutil
 import stat as stat_module
-from typing import List
+import sys
+from typing import List, Optional
 
-from .models import DeleteResult, FileEntry, FolderListing
+from .models import DeleteResult, FileEntry, FileProperties, FolderListing
 
 """The "service" for every filesystem action this app performs, per
 CLAUDE.md's async rule: every method here is a plain, blocking function -
@@ -112,6 +113,68 @@ class FileSystemService:
         new_path = os.path.join(os.path.dirname(path), new_name)
         os.rename(path, new_path)
         return new_path
+
+    def get_properties(self, path: str) -> FileProperties:
+        """A single os.stat() worth of data for the Properties dialog - fast
+        regardless of whether `path` is a file or a folder, since (unlike
+        calculate_folder_size below) it never walks a folder's contents.
+        `size_bytes` is the raw stat size either way, but that number is
+        only meaningful for a file - a folder's own directory-entry size
+        isn't what a user means by "how big is this folder", which is
+        exactly why PropertiesDialog reads it only when `is_dir` is
+        `False` and otherwise kicks off calculate_folder_size separately."""
+        stat = os.stat(path)
+        is_dir = os.path.isdir(path)
+        name = os.path.basename(path.rstrip(os.sep)) or path
+        extension = "" if is_dir else os.path.splitext(name)[1]
+        return FileProperties(
+            name=name,
+            extension=extension,
+            path=path,
+            is_dir=is_dir,
+            size_bytes=stat.st_size,
+            permissions=stat_module.filemode(stat.st_mode),
+            created_at=_created_at(stat),
+            modified_at=stat.st_mtime,
+            accessed_at=stat.st_atime,
+        )
+
+    def calculate_folder_size(self, path: str) -> int:
+        """Recursive size of everything under `path` - potentially slow for
+        a large tree (one os.walk + one os.lstat per file), so always
+        called through its own AsyncTaskRunner (see
+        PropertiesDialog._load_folder_size), never synchronously from the
+        UI thread. A file that can't be stat-ed (permission denied, removed
+        mid-walk, a broken symlink) is silently skipped rather than
+        aborting the whole calculation - the same tolerant-of-partial-
+        failure spirit as list_folder's `skipped` count, just without a
+        count to report back here since Properties only needs one
+        approximate total. `os.lstat` (not `os.stat`) so a symlink itself
+        is sized rather than followed - avoids double-counting (or an
+        infinite loop on a symlink cycle) a target that's also reachable
+        by a real path elsewhere in the same tree."""
+        total = 0
+        for root, _dirs, files in os.walk(path, onerror=lambda exc: None):
+            for name in files:
+                try:
+                    total += os.lstat(os.path.join(root, name)).st_size
+                except OSError:
+                    pass
+        return total
+
+
+def _created_at(stat_result: os.stat_result) -> Optional[float]:
+    """Best-effort creation time - macOS/BSD expose a real one
+    (`st_birthtime`); on Windows, `st_ctime` *is* the creation time; on
+    Linux, `st_ctime` is metadata-change time, not creation, and the stdlib
+    `stat` interface has no reliable creation time there at all, so this
+    returns `None` (rendered as "-" by formatting.format_timestamp) rather
+    than mislabeling metadata-change time as "Created"."""
+    if hasattr(stat_result, "st_birthtime"):
+        return stat_result.st_birthtime
+    if sys.platform == "win32":
+        return stat_result.st_ctime
+    return None
 
 
 def _is_hidden(name: str, stat_result: os.stat_result) -> bool:

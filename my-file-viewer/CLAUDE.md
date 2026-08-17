@@ -330,16 +330,18 @@ from anywhere in the window (not just with a menu open), the same way
   calls `_rebuild_breadcrumb()` itself, since no `open_folder` call happens
   in that path to do it automatically.
 
-### File actions: Open / Rename / Delete (`FolderExplorerPage`, `FolderTreeCtrl`)
+### File actions: Open / Rename / Delete / Properties (`FolderExplorerPage`, `FolderTreeCtrl`)
 
-Three actions apply to whatever's selected in the tree - Open and Rename only
-make sense for exactly one selected row, Delete works on any non-empty
-selection (one or many). All three are reachable four ways: the tree's own
-keyboard shortcuts (Enter/double-click, F2, Delete), its right-click context
-menu, and the File menu - and all four routes funnel through the same three
-`FolderExplorerPage` methods (`open_selected`/`rename_selected`/
-`delete_selected`), so each action's actual behavior - and its "is this legal
-right now" rule - lives in exactly one place.
+Four actions apply to whatever's selected in the tree - Open, Rename, and
+Properties only make sense for exactly one selected row, Delete works on any
+non-empty selection (one or many). All four are reachable from the tree's
+right-click context menu and the File menu; Open/Rename/Delete additionally
+have their own keyboard shortcuts (Enter/double-click, F2, Delete -
+Properties doesn't get one, matching most file managers). Every route
+funnels through the same four `FolderExplorerPage` methods
+(`open_selected`/`rename_selected`/`delete_selected`/
+`show_properties_for_selected`), so each action's actual behavior - and its
+"is this legal right now" rule - lives in exactly one place.
 
 - **The tree control only ever reports intent, never decides legality**:
   `FolderTreeCtrl`'s Delete/F2 key handling and its `on_context_menu`
@@ -353,14 +355,17 @@ right now" rule - lives in exactly one place.
   now" and risking disagreement.
 
 - **File menu enabled state**: `MainFrame._build_menu_bar` creates
-  `_open_menu_item`/`_rename_menu_item`/`_delete_menu_item`
-  ("Open\tEnter"/"Rename\tF2"/"Delete\tDel"), all disabled until a selection
-  exists. `_on_selection_changed` (already the callback wired from
+  `_open_menu_item`/`_rename_menu_item`/`_delete_menu_item`/
+  `_properties_menu_item` ("Open\tEnter"/"Rename\tF2"/"Delete\tDel"/
+  "Properties..."), all disabled until a selection exists.
+  `_on_selection_changed` (already the callback wired from
   `FolderTreeCtrl` -> `FolderExplorerPage._on_tree_selection_changed` for
-  "Selected: N") is the one place that also flips these three based on
-  `count` - `count == 1` for Open/Rename, `count >= 1` for Delete. The
-  context menu (`FolderExplorerPage._on_tree_context_menu`) applies the
-  identical rule to its own "Open"/"Rename" items.
+  "Selected: N") is the one place that also flips these four based on
+  `count` - `count == 1` for Open/Rename/Properties, `count >= 1` for
+  Delete. The context menu (`FolderExplorerPage._on_tree_context_menu`)
+  applies the identical rule to its own "Open"/"Rename"/"Properties" items -
+  laid out as Open/Rename, a separator, Delete, a separator, Properties
+  (Properties last, its own group, is the usual file-manager convention).
 
 - **Why Enter and the "Open\tEnter" menu accelerator don't double-fire**:
   Enter/double-click activation is unchanged, native
@@ -456,6 +461,73 @@ right now" rule - lives in exactly one place.
   (`wx.NO`) aborts before `FileSystemService.delete` is ever called, the
   same "only act on an explicit OK/Yes" convention `SettingsDialog`/
   `open_folder`'s error `wx.MessageBox` already follow.
+
+### Properties dialog (`app/properties_dialog.py`, File > Properties... / right-click > Properties)
+
+`PropertiesDialog` is a plain `wx.Dialog` with a `CreateButtonSizer(OK)` (no
+Cancel - it's read-only, there's nothing to submit), same dialog family as
+`SettingsDialog`. `FolderExplorerPage.show_properties_for_selected` (only
+meaningful for exactly one selected row, same as Open/Rename) constructs and
+`ShowModal()`s it for that entry's path, then `Destroy()`s it - the same
+try/finally shape `MainFrame._on_settings` already uses for `SettingsDialog`.
+
+- **Two separate `FileSystemService` methods, not one** -
+  `get_properties(path)` (name, extension, full path, permissions
+  (`stat.filemode(stat.st_mode)`), and created/modified/accessed dates -
+  one `os.stat()` call, always fast) and `calculate_folder_size(path)`
+  (walks the whole tree with `os.walk`/`os.lstat`, potentially slow for a
+  big folder). Both are still only ever called through `AsyncTaskRunner`
+  per this app's blanket rule, but splitting them lets the dialog show the
+  fast data immediately while the slow one is still in flight, rather than
+  the whole dialog waiting on whichever field is most expensive to compute.
+  `get_properties` deliberately leaves a folder's *recursive* size out of
+  `FileProperties.size_bytes` (that field holds the folder's own,
+  meaningless-to-show directory-entry size in that case) - `PropertiesDialog`
+  is the one place that knows to read `size_bytes` only when `is_dir` is
+  `False`, and otherwise kick off `calculate_folder_size` separately.
+
+- **"Calculating..." while the recursive size is in flight, without
+  freezing the UI**: `_on_properties_loaded` (the fast `get_properties`
+  fetch's `on_success`) immediately fills in every other field, and for a
+  folder, sets the Size field to "Calculating..." and calls
+  `_load_folder_size`, which runs `calculate_folder_size` through its own
+  throwaway `AsyncTaskRunner` (same "one throwaway runner per independent
+  concurrent fetch" convention as `FolderExplorerPage._on_expand_folder`) -
+  `_on_folder_size_loaded` replaces the label once it lands. Confirmed by
+  hand-testing (see "Verification performed") that `wx.CallAfter`-delivered
+  results still arrive correctly even though the dialog is open via a
+  blocking `ShowModal()` - the nested modal event loop still pumps the same
+  queued events - and, using an artificially slowed
+  `calculate_folder_size`, that a `wx.CallLater` timer kept firing on
+  schedule throughout the whole wait, proving the main thread was never
+  blocked by the calculation.
+
+- **`calculate_folder_size` uses `os.lstat`, not `os.stat`** - a symlink is
+  sized as itself rather than followed, avoiding double-counting (or an
+  infinite loop on a symlink cycle) a target that's also reachable via a
+  real path elsewhere in the same tree. Like `list_folder`'s `skipped`
+  count, a file that can't be stat-ed mid-walk (permission denied, removed
+  concurrently) is silently skipped rather than aborting the whole
+  calculation - Properties only needs one approximate total, not a report
+  of what couldn't be read.
+
+- **Creation date is best-effort, platform-dependent**
+  (`file_system_service._created_at`): macOS/BSD's real `st_birthtime` is
+  used when present; on Windows, `st_ctime` *is* the creation time; on
+  Linux, `st_ctime` means metadata-change time, not creation, and the
+  stdlib `stat` interface exposes no reliable creation time there at all -
+  rather than mislabel metadata-change time as "Created", this case returns
+  `None`, which `formatting.format_timestamp` renders as "-". This is also
+  why `format_modified` was renamed `format_timestamp`: it's now shared by
+  four different timestamp kinds (a tree row's Modified column, plus
+  Properties' Created/Modified/Accessed), not just one.
+
+- **The full-path row has its own copy button** (`⧉`, same glyph and
+  clipboard mechanism as the breadcrumb's `_copy_path_btn` - see the
+  Clipboard section above) - `PropertiesDialog._on_copy_path` puts the
+  dialog's `path` argument on the clipboard, independent of
+  `FolderExplorerPage.copy_selected_paths`/`_on_copy_path`, since this
+  dialog has no access to (and no need for) the tree's current selection.
 
 ### Settings (`app/settings_dialog.py`, File > Settings...)
 
@@ -685,12 +757,39 @@ correctly against that cwd; a nonexistent path fell back silently to the
 last-folder-or-home logic with no error popup; and passing no path at all
 preserved the original startup behavior unchanged.
 
+The Properties dialog was verified against a real `wx.App` and real temp
+files/folders, both directly (`FileSystemService.get_properties`/
+`calculate_folder_size` called and asserted against known values - a file's
+exact size/extension/permissions, a folder's recursive size across a small
+multi-file tree) and through the real `PropertiesDialog`: a file's Size
+field showed its real size immediately (no "Calculating..." step, since
+there's nothing to walk); a folder's Size field read "Calculating..."
+immediately after the fast fields populated, then updated to the real
+recursive total. Critically, with `calculate_folder_size` monkeypatched to
+sleep for 600ms, a real blocking `ShowModal()` call was driven with a
+`wx.CallLater`-scheduled poll (the same "schedule a callback, then
+`ShowModal()`, then let the callback `EndModal()` it" technique
+`SettingsDialog` was already verified with) - confirming the poll's timer
+kept firing on its 50ms schedule for the full wait (proving the UI thread
+was never blocked by the calculation) and that "Calculating..." was
+genuinely observed before the real total replaced it. `show_properties_for_selected`
+was confirmed to no-op for zero or multiple selected rows and open the
+dialog only for exactly one, matching Open/Rename's own rule; the context
+menu's and File menu's "Properties" item enabled state were confirmed to
+follow the same `count == 1` rule as Open/Rename. The copy-path button was
+confirmed to put the dialog's exact path on the clipboard, same mechanism
+as the breadcrumb's own copy button.
+
 ## What's next (not built yet)
 
-- Recursive folder size (a directory's Size column currently always reads "-").
 - A file-type column and complex glob-based selection (mentioned in the initial
   spec as planned future columns/features).
-- More file details (a details pane/dialog for a selected entry).
+- Recursive folder size is now available on demand (Properties dialog), but
+  the folder contents tree's own Size column still always reads "-" for a
+  folder - showing it there for every visible folder row would mean an
+  async recursive walk per row, not just per Properties click, so it's left
+  as a possible future column rather than done as a side effect of this
+  feature.
 - Packaging beyond the PyInstaller `.spec`/GitHub Actions build - no AUR
   `PKGBUILD` and no `docs/my-file-viewer/` GitHub Pages homepage yet, unlike the
   sibling apps (neither was part of the initial spec for this project).

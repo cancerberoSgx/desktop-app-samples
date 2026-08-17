@@ -110,14 +110,17 @@ class MainFrame(wx.Frame):
         self._open_menu_item = file_menu.Append(wx.ID_OPEN, "Open\tEnter")
         self._rename_menu_item = file_menu.Append(wx.ID_ANY, "Rename\tF2")
         self._delete_menu_item = file_menu.Append(wx.ID_DELETE, "Delete\tDel")
+        file_menu.AppendSeparator()
+        self._properties_menu_item = file_menu.Append(wx.ID_PROPERTIES, "Properties...")
         # Disabled until a selection actually makes one of these legal - see
-        # _on_selection_changed, the one place that updates all three (kept
+        # _on_selection_changed, the one place that updates all four (kept
         # in sync with the tree's own context menu the same way, per
         # FolderTreeCtrl's docstring on why the enabled/disabled policy for
         # these actions lives in FolderExplorerPage/MainFrame, not the tree).
         self._open_menu_item.Enable(False)
         self._rename_menu_item.Enable(False)
         self._delete_menu_item.Enable(False)
+        self._properties_menu_item.Enable(False)
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_PREFERENCES, "Settings...")
         file_menu.AppendSeparator()
@@ -139,6 +142,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_menu_open, self._open_menu_item)
         self.Bind(wx.EVT_MENU, self._on_menu_rename, self._rename_menu_item)
         self.Bind(wx.EVT_MENU, self._on_menu_delete, self._delete_menu_item)
+        self.Bind(wx.EVT_MENU, self._on_menu_properties, self._properties_menu_item)
         self.Bind(wx.EVT_MENU, self._on_settings, id=wx.ID_PREFERENCES)
         self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_copy_paths, id=wx.ID_COPY)
@@ -170,13 +174,14 @@ class MainFrame(wx.Frame):
 
     def _on_selection_changed(self, count: int) -> None:
         self.SetStatusText(f"Selected: {count}", 1)
-        # Open/Rename only make sense for exactly one selected row; Delete
-        # is fine for any non-empty selection - kept in sync with the
-        # context menu's own enabled state in
+        # Open/Rename/Properties only make sense for exactly one selected
+        # row; Delete is fine for any non-empty selection - kept in sync
+        # with the context menu's own enabled state in
         # FolderExplorerPage._on_tree_context_menu.
         self._open_menu_item.Enable(count == 1)
         self._rename_menu_item.Enable(count == 1)
         self._delete_menu_item.Enable(count >= 1)
+        self._properties_menu_item.Enable(count == 1)
 
     def _on_menu_open(self, event: wx.CommandEvent) -> None:
         self.explorer_page.open_selected()
@@ -186,6 +191,9 @@ class MainFrame(wx.Frame):
 
     def _on_menu_delete(self, event: wx.CommandEvent) -> None:
         self.explorer_page.delete_selected()
+
+    def _on_menu_properties(self, event: wx.CommandEvent) -> None:
+        self.explorer_page.show_properties_for_selected()
 
     def _on_settings(self, event: wx.CommandEvent) -> None:
         dialog = SettingsDialog(
