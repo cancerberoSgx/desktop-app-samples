@@ -605,6 +605,27 @@ listing.
     node starts each rebuild pass with no wx item until `_build_node`
     actually gives it a fresh one.
 
+  - **Going from a filtered view back to the full listing scrolls the
+    selection back into view** (`set_quick_search`'s `was_active and not
+    words` branch, calling the new `_ensure_selection_visible`) - ending
+    quick search (Escape, or clicking a filtered row, which ends it as a
+    side effect of the click stealing keyboard focus from the search box)
+    always goes through the same `_rebuild_all()` as any other filter
+    change, which always starts drawing from the top same as every other
+    `_rebuild_all` call. Without this, a row that was selected and visible
+    in the short, filtered view - still selected afterward, since
+    `_rebuild_all`'s own `_reselect` already preserves that - could end up
+    scrolled off-screen in the much longer, now-unfiltered listing instead
+    of staying in view, which is exactly what it looked like from a user's
+    side: "the file is still selected but I lost the scroll." Narrower than
+    `apply_rename`/`remove_paths`'s own scroll-preservation (which avoid
+    `_rebuild_all()`/`DeleteAllItems()` entirely): a full rebuild is
+    unavoidable here (see above), so this only re-establishes the scroll
+    position afterward rather than never losing it in the first place -
+    and deliberately only on this one transition (filter cleared while a
+    selection exists), not on every `_rebuild_all()` call (an ordinary
+    re-sort's scroll reset is unchanged, existing behavior).
+
 - **Highlighting is plain-text bracketing, not color/bold, because this wx
   build's Name column genuinely can't do the latter** - confirmed directly:
   the Name column's renderer is `wx.dataview.DataViewIconTextRenderer`
@@ -1204,6 +1225,21 @@ and dispatching a hand-constructed Ctrl+P `wx.KeyEvent` straight to
 the File-menu-accelerator-only path was unreliable in that same scenario.
 The menu path (`MainFrame._on_quick_search`) was re-confirmed unaffected
 alongside it.
+
+The scroll-restoration fix was verified against a real `wx.App` and a real
+203-file temp folder (200 unrelated files plus 3 matches spread across the
+alphabetical order, so the full listing's scroll position is meaningful),
+spying on `FolderTreeCtrl.EnsureVisible` itself rather than trying to query
+on-screen visibility directly (`TreeListCtrl` exposes no per-item "is this
+actually visible" call). Confirmed for both reported scenarios: pressing
+Escape with a filtered row selected calls `EnsureVisible` for that row once
+the filter clears and the full listing is rebuilt; and selecting a row while
+filtered, then triggering the same kill-focus path a real click on that row
+takes (stealing focus from the search box), leaves that row both selected
+*and* the target of an `EnsureVisible` call - not just scrolled to the top
+of the now much-longer unfiltered listing. Also confirmed this is scoped to
+exactly the filter-clearing transition: entering a filter (typing narrows
+the list) doesn't call it.
 
 ## What's next (not built yet)
 

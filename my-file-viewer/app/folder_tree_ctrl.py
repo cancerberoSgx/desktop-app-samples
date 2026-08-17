@@ -332,12 +332,31 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         once, and there's no cheaper partial-hide call on a TreeListCtrl
         than simply not building a row in the first place. No-op if the
         effective word list didn't actually change (typing a second space
-        in a row, for instance)."""
+        in a row, for instance).
+
+        Going from an active filter back to none - Escape, or clicking a
+        filtered row (which ends quick search as a side effect of the
+        click stealing keyboard focus from the search box, see
+        FolderExplorerPage._on_search_box_kill_focus) - is a rebuild from a
+        short, filtered list back to the full one, which always starts
+        drawing from the top same as any other _rebuild_all call; without
+        _ensure_selection_visible below, whatever row the user was just
+        looking at (still selected - _rebuild_all's own _reselect already
+        preserves that) could end up scrolled off-screen instead of
+        staying in view."""
         words = query.lower().split() if query else []
         if words == self._quick_search_words:
             return
+        was_active = bool(self._quick_search_words)
         self._quick_search_words = words
         self._rebuild_all()
+        if was_active and not words:
+            self._ensure_selection_visible()
+
+    def _ensure_selection_visible(self) -> None:
+        selections = self.GetSelections()
+        if selections:
+            self.EnsureVisible(selections[0])
 
     def _name_matches_quick_search(self, entry: FileEntry) -> bool:
         lname = entry.name.lower()

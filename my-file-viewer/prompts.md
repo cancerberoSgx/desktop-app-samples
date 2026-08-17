@@ -93,3 +93,7 @@ When seeing the file list , user can enter "quick search" mode by pressing ctrl-
  * if user enters multiple words "foo bar" it will filter out and display those files that contains at least one word case insensitive.
 In any case, the filtered files in file list must high light the matched word in their file names. 
 The behavior for existing the "quick search" mode is the same as "key mode" by entering ESC
+p2
+it's working fine but sometimes it's ctrl-p is not triggering quick search, for example, if I select a file and then press ctrl-p. From the menu it always works
+
+after I close "quick search" or "keys" mode with esc or Y click one of the filtered files the file list resets and I lost the scroll. The file appear to be still selelected by I lost the vertical scroll
