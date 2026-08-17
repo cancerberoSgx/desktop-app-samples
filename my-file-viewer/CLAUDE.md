@@ -13,8 +13,9 @@ preferences, same as whether the sidebar was collapsed. File > Settings...
 opens a modal for app preferences - today just whether hidden files/folders
 are shown (off by default). One or more rows can be selected at a time
 (Shift+Up/Down/PageUp/PageDown/Home/End for a range, any of those without
-Shift for a single row) - the status bar's right-hand field always reads
-"Selected: N".
+Shift for a single row) - the status bar's rightmost field always reads
+"Selected: N", with the current folder's "N item(s)" count in its own field
+just to the left of it.
 
 This project was templated from the sibling `my-redis-viewer` app for its overall
 architecture (SQLite + migrations under `app/db/`, `AsyncTaskRunner` facade for
@@ -253,9 +254,9 @@ Clicking a header sorts by it, click again to reverse.
   loaded `_Node` and calls `Collapse()` on it - a UI-only operation, so the
   `_Node.children` cache is untouched and re-expanding afterwards still won't
   re-query `FileSystemService`. The button lives in its own row sizer
-  alongside (not inside) `_breadcrumb_panel`, since `_rebuild_breadcrumb`
-  calls `Clear(delete_windows=True)` on `_breadcrumb_sizer` on every
-  navigation and would otherwise destroy it.
+  (`breadcrumb_row`) alongside (not inside) `_breadcrumb_panel`, since
+  `_rebuild_breadcrumb` calls `Clear(delete_windows=True)` on
+  `_breadcrumb_sizer` on every navigation and would otherwise destroy it.
 
 - **Expand/collapse state survives a re-sort** even though there's no
   `EVT_TREELIST_ITEM_COLLAPSED` to track it incrementally: right before
@@ -298,13 +299,24 @@ Clicking a header sorts by it, click again to reverse.
   callback parameter instead, the way `on_activate_entry`/`on_expand_folder`/
   `on_selection_changed` already do.
 
-- **"Selected: N" status bar field** - `MainFrame.CreateStatusBar(2)`, with
-  `SetStatusWidths([-1, 120])` so field 0 (the existing "Viewing: .../Ready"
-  text) stretches and field 1 stays a fixed-width right-hand column.
-  `FolderTreeCtrl`'s `on_selection_changed(count)` callback flows
-  `FolderTreeCtrl` -> `FolderExplorerPage._on_tree_selection_changed` ->
-  `MainFrame._on_selection_changed`, which is the only place that actually
-  calls `SetStatusText(f"Selected: {count}", 1)`.
+- **Three-field status bar**: `MainFrame.CreateStatusBar(3)`, with
+  `SetStatusWidths([-1, 220, 120])` - field 0 (the existing "Viewing:
+  .../Ready" text) stretches, fields 1 ("N item(s)") and 2 ("Selected: N")
+  are fixed-width, in that left-to-right order (the item count sits
+  immediately left of "Selected: N", per the human's explicit layout
+  request - it used to be a `_header_note` `wx.StaticText` next to the
+  breadcrumb before moving here). `FolderTreeCtrl`'s `on_selection_changed(count)`
+  callback still flows `FolderTreeCtrl` -> `FolderExplorerPage._on_tree_selection_changed`
+  -> `MainFrame._on_selection_changed`, which calls
+  `SetStatusText(f"Selected: {count}", 2)`. The item count flows the same
+  way through a parallel callback, `on_item_count_changed(text)`: every
+  place `FolderExplorerPage` used to call `self._header_note.SetLabel(...)`
+  (a folder finishing loading, a delete changing the count, "Open a folder
+  to see its contents." before any folder is open) now calls
+  `self._on_item_count_changed(text)` instead, wired to
+  `MainFrame._on_item_count_changed`, the only place that actually calls
+  `SetStatusText(text, 1)` - the same "page reports, frame renders" split
+  already used for selection count and folder-opened status text.
 
 ### Clipboard: copy path button, Edit > Copy Paths, paste-a-path navigation (`FolderExplorerPage`)
 
@@ -842,6 +854,20 @@ button mid-modal, per the "`EndModal()` needs an active `ShowModal()`"
 gotcha already documented above), confirming unchecking it and clicking OK
 actually persists `show_file_extensions=False` and updates the open
 folder's Name column immediately, live, through `MainFrame._on_settings`.
+
+Moving the "N item(s)" count from the breadcrumb row into its own status
+bar field was verified against a real `MainFrame`
+(`app.frame.get_connection` monkeypatched to an in-memory sqlite connection,
+same isolation as the command-line-target tests above) and a real 165-file
+temp folder: confirmed the status bar has exactly 3 fields, reading
+"Viewing: <path>" / "165 item(s)" / "Selected: 0" left to right, with
+`SetStatusWidths([-1, 220, 120])`; that selecting a row updates field 2
+("Selected: N") without touching field 1's item count; and, via
+`FolderExplorerPage`'s `on_item_count_changed` callback wired to a plain
+list instead of `MainFrame`, that it fires "Open a folder to see its
+contents." once at construction (before any folder is open), the real
+count once a folder loads, and the reduced count after a delete - the exact
+three call sites that used to set `_header_note.SetLabel(...)` directly.
 
 ## What's next (not built yet)
 

@@ -35,14 +35,16 @@ class MainFrame(wx.Frame):
         self.file_service = FileSystemService()
 
         self._build_menu_bar()
-        self.CreateStatusBar(2)
-        # Field 0 stretches (path/status text); field 1 is a fixed-width
-        # right-hand "Selected: N" - negative width means "proportion of
-        # the remaining space" in wx, so -1 vs. a fixed pixel width is what
-        # keeps field 1 a constant size while field 0 does the stretching.
-        self.GetStatusBar().SetStatusWidths([-1, 120])
+        self.CreateStatusBar(3)
+        # Field 0 stretches (path/status text); fields 1 ("N item(s)") and 2
+        # ("Selected: N") are fixed-width, in that left-to-right order -
+        # negative width means "proportion of the remaining space" in wx, so
+        # -1 vs. a fixed pixel width is what keeps fields 1/2 a constant
+        # size while field 0 does the stretching.
+        self.GetStatusBar().SetStatusWidths([-1, 220, 120])
         self.SetStatusText("Ready", 0)
-        self.SetStatusText("Selected: 0", 1)
+        self.SetStatusText("", 1)
+        self.SetStatusText("Selected: 0", 2)
 
         root_panel = wx.Panel(self)
         root_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -65,6 +67,7 @@ class MainFrame(wx.Frame):
             confirm_delete=self.settings_repository.get_confirm_delete(),
             show_extensions=self.settings_repository.get_show_file_extensions(),
             on_selection_changed=self._on_selection_changed,
+            on_item_count_changed=self._on_item_count_changed,
         )
         root_sizer.Add(self.explorer_page, 1, wx.EXPAND)
 
@@ -173,8 +176,11 @@ class MainFrame(wx.Frame):
     def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
         self.settings_repository.set_sidebar_collapsed(collapsed)
 
+    def _on_item_count_changed(self, text: str) -> None:
+        self.SetStatusText(text, 1)
+
     def _on_selection_changed(self, count: int) -> None:
-        self.SetStatusText(f"Selected: {count}", 1)
+        self.SetStatusText(f"Selected: {count}", 2)
         # Open/Rename/Properties only make sense for exactly one selected
         # row; Delete is fine for any non-empty selection - kept in sync
         # with the context menu's own enabled state in

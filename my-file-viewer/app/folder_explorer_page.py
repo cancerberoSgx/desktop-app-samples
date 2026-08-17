@@ -41,6 +41,7 @@ class FolderExplorerPage(wx.Panel):
         confirm_delete: bool = True,
         show_extensions: bool = True,
         on_selection_changed: Optional[Callable[[int], None]] = None,
+        on_item_count_changed: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._file_service = file_service
@@ -48,6 +49,7 @@ class FolderExplorerPage(wx.Panel):
         self._on_folder_opened = on_folder_opened or (lambda path: None)
         self._on_favorites_changed = on_favorites_changed or (lambda: None)
         self._on_selection_changed = on_selection_changed or (lambda count: None)
+        self._on_item_count_changed = on_item_count_changed or (lambda text: None)
         self._async = AsyncTaskRunner(self)
 
         self._current_path: Optional[str] = None
@@ -102,9 +104,6 @@ class FolderExplorerPage(wx.Panel):
         self._collapse_all_btn.SetToolTip("Collapse all expanded folders")
         breadcrumb_row.Add(self._collapse_all_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         outer.Add(breadcrumb_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
-
-        self._header_note = wx.StaticText(self, label="")
-        outer.Add(self._header_note, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         self._error_text = wx.StaticText(self, label="")
         self._error_text.SetForegroundColour(wx.Colour(180, 30, 30))
@@ -290,7 +289,7 @@ class FolderExplorerPage(wx.Panel):
     def _on_delete_done(self, result: DeleteResult) -> None:
         if result.deleted:
             self._list.remove_paths(result.deleted)
-            self._header_note.SetLabel(f"{self._list.root_count()} item(s)")
+            self._on_item_count_changed(f"{self._list.root_count()} item(s)")
         if result.errors:
             lines = "\n".join(f"{os.path.basename(p)}: {msg}" for p, msg in result.errors.items())
             wx.MessageBox(
@@ -461,9 +460,7 @@ class FolderExplorerPage(wx.Panel):
             self._list.select_path(self._pending_select_path)
             self._pending_select_path = None
         note = f"  ·  {listing.skipped} item(s) could not be read" if listing.skipped else ""
-        self._header_note.SetLabel(
-            f"{len(listing.entries)} item(s){note}"
-        )
+        self._on_item_count_changed(f"{len(listing.entries)} item(s){note}")
 
     def _on_folder_load_error(self, message: str) -> None:
         self._set_error(message)
@@ -562,7 +559,7 @@ class FolderExplorerPage(wx.Panel):
 
     def _update_header(self) -> None:
         if self._current_path is None:
-            self._header_note.SetLabel("Open a folder to see its contents.")
+            self._on_item_count_changed("Open a folder to see its contents.")
 
     def _set_status(self, message: str) -> None:
         self._status_text.SetLabel(message)
