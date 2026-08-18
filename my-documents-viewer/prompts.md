@@ -72,48 +72,11 @@ ok, move the chunk size value to the profiles table. In the edit/create profile 
 currently when I search something, several snippets of the same document are displayed. Our users need to see only one document and optionally the relevant chunks.
 Question, assuming the documents will be 100% text files, is it possible to display the entire content in an internal text viewer and make a virtual table of content that points and hightlight matched relevant chunks ? (don't write code, just plan and explain how would you imlpement this in a user friendly manner)
 
+p2
+in new profile and edit profile dialog I cannot see the "save" buttons, enlarge it 
 
-A:
-Good news from the investigation — the data model is actually more ready than I assumed. Here's the corrected, concrete plan.
-
-## What's already there (no migration needed)
-
-- `chunks` table already stores `start_offset`/`end_offset` (character offsets into the original extracted text) and `chunk_index`, populated by `app/chunking.py` at index time for every chunk, past and future.
-- Chunking uses `CHUNK_SIZE=800`/`CHUNK_OVERLAP=150` chars with whitespace-aware boundaries — offsets are correct for locating the region in the source file, just occasionally include a little pre-strip leading/trailing whitespace (irrelevant for highlighting a span).
-- Documents are guaranteed UTF-8 `.txt`/`.md`, and `extract_text()`/indexing already reads whole files into memory with no size cap — a full-file load for a viewer is consistent with what the app already does, no new streaming concerns.
-
-The one real gap: `hybrid_search`'s final SQL only selects `chunks.text, chunks.document_id, documents.path` — offsets and `chunk_index` are computed and stored but currently dropped before reaching `SearchResult`. And there's zero grouping by document or viewer UI today (`_on_open_selected` just shows a `wx.MessageBox`). So this is a data-plumbing + new-UI task, not a schema migration.
-
-## Plan
-
-**1. Extend `hybrid_search` / `SearchResult` to carry offsets**
-Add `chunk_id`, `chunk_index`, `start_offset`, `end_offset` to the SELECT and to `SearchResult` (`app/models.py`). Cheap, backward-compatible (existing indexed data already has these values).
-
-**2. Group by document before rendering**
-In `SearchPage` (or a small helper on `DocumentRepository`), fold the flat `SearchResult` list into one entry per `document_id`: keep all its matching chunks (sorted by `start_offset` for reading order), and pick a representative score (max RRF score across its chunks reads most intuitively — "one great hit" shouldn't rank below "five mediocre hits" elsewhere, but worth confirming as a product choice). Replace the 3-column ListCtrl's one-row-per-chunk display with one row per document: path, best snippet, match count, top score.
-
-**3. Build a Document Viewer panel**
-Use `wx.stc.StyledTextCtrl` (Scintilla) rather than plain `wx.TextCtrl` — gives indicator/marker APIs for painting highlight ranges, `GotoLine`/`ScrollToLine` for precise jumps, and solid handling of files larger than a trivial size, even though no syntax highlighting is needed. Wire it as a `wx.SplitterWindow` pane inside `SearchPage` itself (not a modal dialog) — right side holds the viewer, so selecting a different result just reloads the same pane instead of spawning dialog after dialog. Load the file via `AsyncTaskRunner` (per this repo's convention for any blocking I/O off a `wx.EVT_*` handler), even though `.txt`/`.md` reads are normally fast — protects against an unusually large file.
-
-**4. Virtual TOC of matched chunks**
-A small list above/beside the text pane, one row per matched chunk **in document order** (by `start_offset`, not by score — helps the user read top-to-bottom), each showing a short preview and its rank source (FTS/vector/hybrid badge) as a secondary cue. Clicking a row scrolls+highlights; add prev/next navigation (buttons or keys) to walk matches without the mouse.
-
-**5. Highlighting precision: FTS vs vector hits**
-- **FTS hits**: use `start_offset`/`end_offset` to place a highlight, but for extra precision within that span you can additionally use FTS5's `highlight()`/`snippet()` output to find which words within the chunk actually matched, then map those relative-to-chunk positions onto the absolute document offset — so the highlight is the matched terms, not the whole 800-char chunk.
-- **Vector-only hits**: there's no lexical span to point to — highlight the entire chunk's `[start_offset, end_offset)` range, softer/different color than an FTS match, so users can visually tell "semantic match" from "keyword match."
-- Keep all matched spans lightly highlighted persistently (not just the currently-selected one) so scrolling manually still surfaces every hit; brighten/flash the active one on jump.
-
-## Suggested user flow
-
-1. Search → one row per document (`report.txt — 4 matches — top score 0.82`) instead of 4 duplicate rows.
-2. Select a document → viewer pane loads it, auto-scrolled to and highlighting the best-scoring chunk.
-3. TOC strip lists all matches in reading order with short previews; click or prev/next to jump between them.
-4. All matches stay subtly highlighted throughout for free-scroll skimming.
-
-This keeps the change additive and low-risk: no migration, one repository-level signature extension, one new UI panel, and a grouping step — nothing about the existing indexing/embedding pipeline needs to change.
- 
-
-
+p3
+when clicking a document the document's content and chunks are displayed in a separate window. Also chunks myst be sort by score and score displayed.
 
 
 

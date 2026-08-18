@@ -9,7 +9,7 @@
 # /AUR.md at the repo root for the full local-test/publish workflow.
 
 pkgname=my-docker-viewer-git
-pkgver=r53.9e4f04a
+pkgver=r85.c130374
 pkgrel=1
 pkgdesc="Native wxWidgets desktop viewer for Docker containers, images, volumes and networks (shells out to the docker CLI - no Docker SDK/Engine API dependency)"
 arch=('any')

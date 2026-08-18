@@ -8,7 +8,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from .chunking import chunk_text
 from .embeddings import EmbeddingError, get_backend
-from .models import Document, Profile, SearchResult
+from .models import Document, DocumentSearchResult, Profile, SearchResult
 from .text_extract import extract_text, is_supported
 from .vector_codec import serialize_vector
 
@@ -439,7 +439,9 @@ class DocumentRepository:
         for chunk_id, score in scored[:limit]:
             row = self._conn.execute(
                 """
-                SELECT chunks.text AS text, chunks.document_id AS document_id, documents.path AS path
+                SELECT chunks.text AS text, chunks.document_id AS document_id, documents.path AS path,
+                       chunks.chunk_index AS chunk_index, chunks.start_offset AS start_offset,
+                       chunks.end_offset AS end_offset
                 FROM chunks JOIN documents ON documents.id = chunks.document_id
                 WHERE chunks.id = ?
                 """,
@@ -454,6 +456,9 @@ class DocumentRepository:
                     document_path=row["path"],
                     snippet=_snippet(row["text"]),
                     score=score,
+                    chunk_index=row["chunk_index"],
+                    start_offset=row["start_offset"],
+                    end_offset=row["end_offset"],
                     fts_rank=fts_ranks.get(chunk_id),
                     vector_rank=vector_ranks.get(chunk_id),
                     vector_distance=vector_distances.get(chunk_id),
@@ -502,6 +507,36 @@ def _fts_match_expression(query: str) -> str:
         return '""'
     escaped = (token.replace('"', '""') for token in tokens)
     return " OR ".join(f'"{token}"' for token in escaped)
+
+
+def group_by_document(results: List[SearchResult]) -> List[DocumentSearchResult]:
+    """Fold a flat, one-row-per-chunk hybrid_search() result into one row
+    per document, for SearchPage's results list. Each document's `matches`
+    are ordered by position in the document (start_offset) - the reading
+    order a table-of-contents wants - while `best_index` points at the
+    highest-scoring chunk, so a viewer knows which one to open on. Documents
+    are returned ordered by their best chunk's score, matching the overall
+    relevance order hybrid_search() already produced."""
+    by_document: Dict[int, List[SearchResult]] = {}
+    for result in results:
+        by_document.setdefault(result.document_id, []).append(result)
+
+    grouped = []
+    for document_id, matches in by_document.items():
+        matches_by_position = sorted(matches, key=lambda m: m.start_offset)
+        best_score = max(m.score for m in matches)
+        best_index = max(range(len(matches_by_position)), key=lambda i: matches_by_position[i].score)
+        grouped.append(
+            DocumentSearchResult(
+                document_id=document_id,
+                document_path=matches[0].document_path,
+                score=best_score,
+                matches=matches_by_position,
+                best_index=best_index,
+            )
+        )
+    grouped.sort(key=lambda doc: doc.score, reverse=True)
+    return grouped
 
 
 def _snippet(text: str, max_length: int = SNIPPET_MAX_LENGTH) -> str:

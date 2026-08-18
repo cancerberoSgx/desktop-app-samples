@@ -21,7 +21,7 @@ class ProfileDialog(wx.Dialog):
 
     def __init__(self, parent: wx.Window, profile: Optional[Profile] = None) -> None:
         title = "Edit Profile" if profile else "New Profile"
-        super().__init__(parent, title=title, size=(460, 440))
+        super().__init__(parent, title=title, size=(460, 440), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self._profile = profile
         self._result: Optional[Profile] = None
         self._models: List[EmbeddingModelInfo] = []
@@ -81,6 +81,8 @@ class ProfileDialog(wx.Dialog):
 
         outer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 16)
         self.SetSizer(outer)
+        outer.SetSizeHints(self)
+        self.Fit()
 
         self._backend_choice.Bind(wx.EVT_CHOICE, self._on_backend_changed)
         self._model_choice.Bind(wx.EVT_CHOICE, lambda evt: self._update_dim_label())
