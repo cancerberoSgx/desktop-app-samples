@@ -22,10 +22,30 @@ class Profile:
     updated_at: Optional[str] = None
 
 
+# Document.kind values. 'file' (the default) is today's one-document-per-
+# source-file case, unchanged. A structured data import (see
+# app/data_import.py, DocumentRepository.import_data_file) instead produces
+# one 'container' document (the source .csv/.json, no content/chunks of its
+# own) with many 'record' children under it via parent_document_id - one per
+# row/object.
+KIND_FILE = "file"
+KIND_CONTAINER = "container"
+KIND_RECORD = "record"
+
+
 @dataclass
 class Document:
     """One indexed source file (.txt/.md for now - see app/text_extract.py
-    for where future formats would plug in)."""
+    for where future formats would plug in), OR one node of a structured
+    data import - see the KIND_* constants above and app/data_import.py.
+
+    `parent_document_id`/`kind`/`row_key`/`properties` are all None/default
+    for a plain file - they only carry meaning for a container/record pair.
+    `row_key` is the stable per-row identity used to match a record back to
+    its source row across re-imports; `properties` is the parsed
+    properties_json blob (container: import config: format/mapping/row
+    count; record: the row's raw original field values) - display-only,
+    never used by search."""
 
     id: Optional[int]
     profile_id: int
@@ -37,6 +57,10 @@ class Document:
     indexed_at: Optional[str] = None
     embedding_backend: Optional[str] = None
     embedding_model: Optional[str] = None
+    parent_document_id: Optional[int] = None
+    kind: str = KIND_FILE
+    row_key: Optional[str] = None
+    properties: Optional[dict] = None
 
 
 @dataclass

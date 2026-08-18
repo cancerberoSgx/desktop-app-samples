@@ -1,15 +1,13 @@
-from pathlib import Path
 from typing import List, Optional
 
 import wx
 
 from .async_task import AsyncTaskRunner
 from .document_viewer import DocumentViewerFrame
-from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_display_path
+from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_document_label
 from .list_ctrl_utils import bind_hover_path_tooltip
-from .models import DocumentSearchResult
+from .models import KIND_CONTAINER, KIND_RECORD, DocumentSearchResult
 from .repositories import DocumentRepository, ProfileRepository, group_by_document
-from .text_extract import extract_text
 
 MODE_LABELS = [
     ("hybrid", "Hybrid (full-text + vector)"),
@@ -109,7 +107,18 @@ class SearchPage(wx.Panel):
     def set_file_name_display(self, mode: str) -> None:
         self._file_name_display = mode
         for row, doc in enumerate(self._results):
-            self._list.SetItem(row, 1, format_display_path(doc.document_path, self._file_name_display))
+            self._list.SetItem(row, 1, self._label_for(doc.document_id))
+
+    def _label_for(self, document_id: int) -> str:
+        """A record's DocumentSearchResult.document_path is a synthetic
+        string DocumentRepository generates purely to keep it unique (see
+        migration 0006) - never meant to be shown, so results are labeled
+        via the real Document (and, for a record, its container) instead."""
+        document = self._repository.get(document_id)
+        if document is None:
+            return "(removed)"
+        container = self._repository.get(document.parent_document_id) if document.parent_document_id else None
+        return format_document_label(document, container, self._file_name_display)
 
     def _selected_mode(self) -> str:
         return MODE_LABELS[self._mode_radio.GetSelection()][0]
@@ -128,7 +137,7 @@ class SearchPage(wx.Panel):
             self._list.DeleteAllItems()
             for row, doc in enumerate(self._results):
                 self._list.InsertItem(row, f"{doc.score:.4f}")
-                self._list.SetItem(row, 1, format_display_path(doc.document_path, self._file_name_display))
+                self._list.SetItem(row, 1, self._label_for(doc.document_id))
                 self._list.SetItem(row, 2, str(len(doc.matches)))
                 self._list.SetItem(row, 3, doc.best_match.snippet)
             self._status_label.SetLabel(
@@ -166,22 +175,30 @@ class SearchPage(wx.Panel):
         event.Skip()
 
     def _load_and_show(self, doc: DocumentSearchResult) -> None:
+        label = self._label_for(doc.document_id)
+        document = self._repository.get(doc.document_id)
+        properties = document.properties if document and document.kind in (KIND_RECORD, KIND_CONTAINER) else None
+
         viewer = self._get_viewer_frame()
         # Show/Raise before feeding it content - the viewer's splitter can
         # leave stale rendering behind if its split state changes before the
         # top-level window has ever been mapped (a GTK realization quirk).
         viewer.Show()
         viewer.Raise()
-        viewer.show_loading(doc.document_path)
+        viewer.show_loading(label)
 
         def on_success(text: str) -> None:
-            viewer.show_document(doc.document_path, text, doc.matches)
+            viewer.show_document(label, text, doc.matches, properties=properties)
 
         def on_error(exc: Exception) -> None:
-            viewer.show_error(doc.document_path, str(exc))
+            viewer.show_error(label, str(exc))
 
+        # get_content() dispatches on the document's kind - a record's
+        # `document_path` isn't a real file (see migration 0006), so this
+        # must go through the repository rather than reading the path
+        # directly the way plain-file viewing once did.
         self._viewer_async.run(
-            work=lambda: extract_text(Path(doc.document_path)),
+            work=lambda: self._repository.get_content(doc.document_id),
             on_success=on_success,
             on_error=on_error,
         )

@@ -1,15 +1,17 @@
 import hashlib
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from .chunking import chunk_text
+from .data_import import ImportMapping, build_record_text, read_records, resolve_row_key
 from .embeddings import EmbeddingError, get_backend
 from .file_display import FILE_NAME_DISPLAY_DEFAULT, FILE_NAME_DISPLAY_KEYS
-from .models import Document, DocumentSearchResult, Profile, SearchResult
+from .models import KIND_CONTAINER, KIND_FILE, KIND_RECORD, Document, DocumentSearchResult, Profile, SearchResult
 from .text_extract import extract_text, is_supported
 from .vector_codec import serialize_vector
 
@@ -29,15 +31,37 @@ SNIPPET_MAX_LENGTH = 240
 
 SEARCH_MODES = ("hybrid", "fulltext", "vector")
 
+# Batch size for embedding calls made during a structured data import (see
+# DocumentRepository._batch_embed) - this is the *actual* HTTP request size
+# for OpenAIEmbeddingBackend (which does no internal splitting of its own),
+# harmlessly smaller than GeminiEmbeddingBackend's own 100-per-request
+# internal batching, and irrelevant to FastEmbedBackend's local calls. Keeps
+# a single request's payload/timeout/retry blast radius bounded even for a
+# multi-thousand-row import.
+EMBED_BATCH_SIZE = 64
+
+# _delete_vec_rows chunks its DELETE statements at this size - some SQLite
+# builds cap bound parameters at 999 (SQLITE_LIMIT_VARIABLE_NUMBER's older
+# default), which a several-thousand-record container's chunk_ids would
+# otherwise blow past in one statement.
+VEC_DELETE_BATCH_SIZE = 500
+
 
 @dataclass
 class IndexRunSummary:
-    """Result of one DocumentRepository.index_paths() call, for the
-    Documents page to report back to the user."""
+    """Result of one DocumentRepository.index_paths() or .import_data_file()
+    call, for the Documents page to report back to the user. The
+    records_*/embedded fields only apply to import_data_file - they stay at
+    their defaults (0) for a plain index_paths() run."""
 
     indexed: int = 0
     skipped: int = 0
     errors: List[str] = field(default_factory=list)
+    records_created: int = 0
+    records_updated: int = 0
+    records_skipped: int = 0
+    records_removed: int = 0
+    embedded_count: int = 0
 
 
 class ProfileRepository:
@@ -197,9 +221,19 @@ class DocumentRepository:
     # ------------------------------------------------------------------
     # Documents CRUD
     # ------------------------------------------------------------------
-    def list(self, profile_id: int) -> List[Document]:
+    def list_top_level(self, profile_id: int) -> List[Document]:
+        """Plain files and containers (not their record children) - what
+        DocumentsPage's tree root is populated from. See list_children for
+        a container's records, fetched lazily on expand."""
         rows = self._conn.execute(
-            "SELECT * FROM documents WHERE profile_id = ? ORDER BY path", (profile_id,)
+            "SELECT * FROM documents WHERE profile_id = ? AND parent_document_id IS NULL ORDER BY path",
+            (profile_id,),
+        ).fetchall()
+        return [self._row_to_document(row) for row in rows]
+
+    def list_children(self, container_id: int) -> List[Document]:
+        rows = self._conn.execute(
+            "SELECT * FROM documents WHERE parent_document_id = ? ORDER BY row_key", (container_id,)
         ).fetchall()
         return [self._row_to_document(row) for row in rows]
 
@@ -208,15 +242,28 @@ class DocumentRepository:
         return self._row_to_document(row) if row else None
 
     def remove(self, document_id: int) -> None:
+        """Removes a document - for a container, its whole subtree of
+        record children too. `chunks`/`chunks_fts` cascade away
+        structurally (container -> records via parent_document_id's own ON
+        DELETE CASCADE -> each record's chunks via chunks.document_id's
+        existing FK -> chunks_fts via the chunks_ad trigger - verified this
+        chain fires correctly even at several-thousand-record scale). Only
+        vec0 rows need manual cleanup here, since virtual tables aren't
+        covered by SQL FK cascades - gathered in one query across the whole
+        subtree, not a per-child loop."""
         document = self.get(document_id)
         if document is None:
             return
         chunk_ids = [
             row["id"]
-            for row in self._conn.execute("SELECT id FROM chunks WHERE document_id = ?", (document_id,))
+            for row in self._conn.execute(
+                """
+                SELECT id FROM chunks
+                WHERE document_id IN (SELECT id FROM documents WHERE id = ? OR parent_document_id = ?)
+                """,
+                (document_id, document_id),
+            )
         ]
-        # Cascades to `chunks` (ON DELETE CASCADE), which in turn removes
-        # the matching chunks_fts rows via the chunks_ad trigger.
         self._conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
         self._conn.commit()
 
@@ -225,9 +272,11 @@ class DocumentRepository:
 
     def _delete_vec_rows(self, profile_id: int, chunk_ids: List[int]) -> None:
         table = self._vec_table(profile_id)
-        placeholders = ",".join("?" for _ in chunk_ids)
         try:
-            self._conn.execute(f"DELETE FROM {table} WHERE rowid IN ({placeholders})", chunk_ids)
+            for start in range(0, len(chunk_ids), VEC_DELETE_BATCH_SIZE):
+                batch = chunk_ids[start : start + VEC_DELETE_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in batch)
+                self._conn.execute(f"DELETE FROM {table} WHERE rowid IN ({placeholders})", batch)
             self._conn.commit()
         except sqlite3.OperationalError:
             pass  # this profile's vec table was never created - nothing to clean up
@@ -245,6 +294,10 @@ class DocumentRepository:
             indexed_at=row["indexed_at"],
             embedding_backend=row["embedding_backend"],
             embedding_model=row["embedding_model"],
+            parent_document_id=row["parent_document_id"],
+            kind=row["kind"],
+            row_key=row["row_key"],
+            properties=json.loads(row["properties_json"]) if row["properties_json"] else None,
         )
 
     # ------------------------------------------------------------------
@@ -393,6 +446,305 @@ class DocumentRepository:
             self._conn.commit()
 
         summary.indexed += 1
+
+    # ------------------------------------------------------------------
+    # Structured data import (CSV/JSON -> container + record documents) -
+    # see app/data_import.py for parsing/mapping. Same "blocking, run
+    # through AsyncTaskRunner" rule as index_paths above.
+    # ------------------------------------------------------------------
+    def get_content(self, document_id: int) -> str:
+        """Content for the viewer's "open on activate" flow - dispatches on
+        `kind` so DocumentsPage/SearchPage can call this uniformly instead
+        of assuming every document is a real file on disk (a record's
+        `path` is a display artifact, not a file - see migration 0006)."""
+        document = self.get(document_id)
+        if document is None:
+            raise ValueError(f"No such document: {document_id}")
+
+        if document.kind == KIND_CONTAINER:
+            row_count = (document.properties or {}).get("row_count", 0)
+            return f"This is a container document with {row_count} record(s) - expand it in the Documents tree to browse them."
+
+        if document.kind == KIND_RECORD:
+            rows = self._conn.execute(
+                "SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index", (document_id,)
+            ).fetchall()
+            return "\n\n".join(row["text"] for row in rows)
+
+        return extract_text(Path(document.path))
+
+    def import_data_file(
+        self,
+        profile: Profile,
+        path: Path,
+        mapping: ImportMapping,
+        embed: bool = False,
+        on_progress: Optional[Callable[[int, int, str], None]] = None,
+        force: bool = False,
+    ) -> IndexRunSummary:
+        """Import a CSV/JSON file as one 'container' document with one
+        'record' child per row/object - the structured-data counterpart to
+        index_paths(). FTS is available the moment this returns (chunks are
+        inserted for every new/changed record regardless of `embed`);
+        vector embedding only runs when `embed=True`, batched (see
+        _batch_embed) rather than one call per row - see CLAUDE.md's
+        "Structured data import" section for why that's opt-in for
+        API-backed profiles.
+
+        Row identity/change-detection is keyed by row_key (see
+        data_import.resolve_row_key), not by path - a row missing from this
+        run that existed on a previous import is removed (see "stale
+        cleanup" below), so a shrinking source file doesn't accumulate
+        permanent orphans.
+        """
+        summary = IndexRunSummary()
+        path_str = str(path.resolve())
+        file_bytes = path.read_bytes()
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+
+        existing_container = self._conn.execute(
+            "SELECT * FROM documents WHERE profile_id = ? AND path = ? AND parent_document_id IS NULL",
+            (profile.id, path_str),
+        ).fetchone()
+
+        unchanged = (
+            existing_container is not None
+            and existing_container["kind"] == KIND_CONTAINER
+            and existing_container["content_hash"] == file_hash
+        )
+        if unchanged and not force:
+            summary.skipped += 1
+            return summary
+
+        records = read_records(path)
+        container_properties = {
+            "format": path.suffix.lower().lstrip("."),
+            "content_columns": mapping.content_columns,
+            "id_column": mapping.id_column,
+            "title_column": mapping.title_column,
+            "row_count": len(records),
+        }
+
+        if existing_container is not None:
+            container_id = existing_container["id"]
+            self._conn.execute(
+                """
+                UPDATE documents
+                SET content_hash = ?, size_bytes = ?, indexed_at = datetime('now'),
+                    kind = ?, properties_json = ?
+                WHERE id = ?
+                """,
+                (file_hash, len(file_bytes), KIND_CONTAINER, json.dumps(container_properties), container_id),
+            )
+        else:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO documents
+                    (profile_id, path, content_hash, size_bytes, mtime, chunk_count,
+                     indexed_at, kind, parent_document_id, properties_json)
+                VALUES (?, ?, ?, ?, NULL, 0, datetime('now'), ?, NULL, ?)
+                """,
+                (profile.id, path_str, file_hash, len(file_bytes), KIND_CONTAINER, json.dumps(container_properties)),
+            )
+            container_id = cursor.lastrowid
+        self._conn.commit()
+
+        # Vector embedding needs an actual vec0 table to write into -
+        # silently degrade to FTS-only if this build/profile can't have one,
+        # same fallback DocumentRepository already applies everywhere else.
+        embed = embed and self._vector_enabled
+        vec_table = self._ensure_vec_table(profile) if embed else None
+        backend = get_backend(profile) if embed else None
+
+        existing_records = {
+            row["row_key"]: row
+            for row in self._conn.execute("SELECT * FROM documents WHERE parent_document_id = ?", (container_id,))
+        }
+        seen_row_keys: Set[str] = set()
+        # (record_id, chunk_id, text) awaiting an embedding call - collected
+        # across every record before a single batched embedding pass below,
+        # rather than one embed() call per row.
+        pending_chunks: List[Tuple[int, int, str]] = []
+
+        total = len(records)
+        for position, record in enumerate(records, start=1):
+            if on_progress:
+                on_progress(position, total, path.name)
+
+            row_key = resolve_row_key(record, mapping)
+            seen_row_keys.add(row_key)
+            content_text = build_record_text(record, mapping)
+            content_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+            properties_json = json.dumps(record, default=str)
+
+            existing_record = existing_records.get(row_key)
+            content_changed = existing_record is None or existing_record["content_hash"] != content_hash
+
+            if not content_changed:
+                summary.records_skipped += 1
+                # Content is unchanged, but it may still need (re)embedding -
+                # e.g. it was imported with embed=False, or the profile's
+                # embedding backend/model has changed since it was embedded.
+                if embed and (
+                    existing_record["embedding_backend"] != profile.embedding_backend
+                    or existing_record["embedding_model"] != profile.embedding_model
+                ):
+                    for chunk_row in self._conn.execute(
+                        "SELECT id, text FROM chunks WHERE document_id = ?", (existing_record["id"],)
+                    ):
+                        pending_chunks.append((existing_record["id"], chunk_row["id"], chunk_row["text"]))
+                continue
+
+            text_chunks = chunk_text(content_text, chunk_size=profile.chunk_size)
+
+            if existing_record is not None:
+                record_id = existing_record["id"]
+                old_chunk_ids = [
+                    row["id"] for row in self._conn.execute("SELECT id FROM chunks WHERE document_id = ?", (record_id,))
+                ]
+                self._conn.execute("DELETE FROM chunks WHERE document_id = ?", (record_id,))
+                if old_chunk_ids:
+                    self._delete_vec_rows(profile.id, old_chunk_ids)
+                self._conn.execute(
+                    """
+                    UPDATE documents
+                    SET content_hash = ?, chunk_count = ?, indexed_at = datetime('now'),
+                        embedding_backend = NULL, embedding_model = NULL, properties_json = ?
+                    WHERE id = ?
+                    """,
+                    (content_hash, len(text_chunks), properties_json, record_id),
+                )
+                summary.records_updated += 1
+            else:
+                cursor = self._conn.execute(
+                    """
+                    INSERT INTO documents
+                        (profile_id, path, content_hash, size_bytes, mtime, chunk_count,
+                         indexed_at, kind, parent_document_id, row_key, properties_json)
+                    VALUES (?, '', ?, 0, NULL, ?, datetime('now'), ?, ?, ?, ?)
+                    """,
+                    (profile.id, content_hash, len(text_chunks), KIND_RECORD, container_id, row_key, properties_json),
+                )
+                record_id = cursor.lastrowid
+                # `path` only needs to be unique/non-null for the
+                # UNIQUE(profile_id, path) constraint - the record's own
+                # newly-assigned id guarantees that by construction, unlike
+                # row_key (user data - could collide or contain odd
+                # characters). Never parsed back apart; see migration 0006.
+                self._conn.execute(
+                    "UPDATE documents SET path = ? WHERE id = ?",
+                    (f"{path_str}::{row_key}#{record_id}", record_id),
+                )
+                summary.records_created += 1
+            self._conn.commit()
+
+            chunk_ids = []
+            for chunk in text_chunks:
+                cursor = self._conn.execute(
+                    """
+                    INSERT INTO chunks (document_id, profile_id, chunk_index, text, start_offset, end_offset)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (record_id, profile.id, chunk.index, chunk.text, chunk.start_offset, chunk.end_offset),
+                )
+                chunk_ids.append(cursor.lastrowid)
+            self._conn.commit()
+
+            if embed:
+                pending_chunks.extend(
+                    (record_id, chunk_id, chunk.text) for chunk_id, chunk in zip(chunk_ids, text_chunks)
+                )
+
+        # Stale cleanup: a row_key that existed before this import but isn't
+        # in the new file anymore (edited out, or the id column's value
+        # changed) - without this, a shrinking source file would accumulate
+        # permanent orphans.
+        for row_key, stale_row in existing_records.items():
+            if row_key not in seen_row_keys:
+                self.remove(stale_row["id"])
+                summary.records_removed += 1
+
+        if embed and pending_chunks:
+            summary.embedded_count = self._batch_embed(profile, backend, vec_table, pending_chunks, on_progress)
+
+        summary.indexed += 1
+        return summary
+
+    def embed_records(
+        self,
+        profile: Profile,
+        container_id: int,
+        on_progress: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
+        """Catch-up pass for a "Generate Embeddings" action: embeds every
+        record under `container_id` whose stored embedding_backend/model
+        don't match the profile's *current* config - covers both records
+        imported with embed=False and records embedded under a
+        since-changed profile config. Mirrors the same staleness check
+        index_paths already relies on for plain files - no extra flag
+        needed."""
+        if not self._vector_enabled:
+            return 0
+        vec_table = self._ensure_vec_table(profile)
+        backend = get_backend(profile)
+
+        stale_records = self._conn.execute(
+            """
+            SELECT id FROM documents
+            WHERE parent_document_id = ? AND kind = ?
+              AND (embedding_backend IS NOT ? OR embedding_model IS NOT ?)
+            """,
+            (container_id, KIND_RECORD, profile.embedding_backend, profile.embedding_model),
+        ).fetchall()
+
+        pending_chunks: List[Tuple[int, int, str]] = []
+        for row in stale_records:
+            for chunk_row in self._conn.execute("SELECT id, text FROM chunks WHERE document_id = ?", (row["id"],)):
+                pending_chunks.append((row["id"], chunk_row["id"], chunk_row["text"]))
+
+        if not pending_chunks:
+            return 0
+        return self._batch_embed(profile, backend, vec_table, pending_chunks, on_progress)
+
+    def _batch_embed(
+        self,
+        profile: Profile,
+        backend,
+        vec_table: str,
+        pending_chunks: List[Tuple[int, int, str]],
+        on_progress: Optional[Callable[[int, int, str], None]],
+    ) -> int:
+        """Embed (record_id, chunk_id, text) tuples in fixed-size batches
+        (EMBED_BATCH_SIZE) rather than one call per chunk/row, and stamp
+        embedding_backend/embedding_model on every touched record once its
+        chunks are embedded - that stamp is what lets embed_records() later
+        tell which records still need it, without a dedicated flag column.
+        `on_progress` fires once per batch (not per row), since this is the
+        one place a multi-minute paid-API embed run needs a real progress
+        signal rather than a single static status string."""
+        total = len(pending_chunks)
+        embedded_record_ids: Set[int] = set()
+        for start in range(0, total, EMBED_BATCH_SIZE):
+            batch = pending_chunks[start : start + EMBED_BATCH_SIZE]
+            vectors = backend.embed([text for _record_id, _chunk_id, text in batch])
+            for (record_id, chunk_id, _text), vector in zip(batch, vectors):
+                self._conn.execute(
+                    f"INSERT INTO {vec_table} (rowid, embedding) VALUES (?, ?)",
+                    (chunk_id, serialize_vector(vector)),
+                )
+                embedded_record_ids.add(record_id)
+            self._conn.commit()
+            if on_progress:
+                on_progress(min(start + EMBED_BATCH_SIZE, total), total, "embedding")
+
+        if embedded_record_ids:
+            placeholders = ",".join("?" for _ in embedded_record_ids)
+            self._conn.execute(
+                f"UPDATE documents SET embedding_backend = ?, embedding_model = ? WHERE id IN ({placeholders})",
+                (profile.embedding_backend, profile.embedding_model, *embedded_record_ids),
+            )
+            self._conn.commit()
+        return len(embedded_record_ids)
 
     # ------------------------------------------------------------------
     # Hybrid search

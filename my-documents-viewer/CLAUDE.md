@@ -12,6 +12,11 @@ an embedding backend (`fastembed` by default - local, no API key; `openai`/`gemi
 as optional API-key-based alternatives) and model, which determines the vector
 dimension used for that profile's search index.
 
+Alongside plain files, a profile can also **import a structured data file**
+(CSV or JSON array-of-objects) as one *container* document with one *record*
+child document per row/object - e.g. a product catalog searchable by SKU. See
+"Structured data import" below.
+
 This project was templated from the sibling `my-redis-viewer` app - same overall
 composition-root/repository-pattern/migrations/profiles-scope-everything
 architecture, sidebar, and `AsyncTaskRunner` pattern, but with Redis connections
@@ -76,7 +81,10 @@ meantime; the user is told to run "Reindex All" to restore vector/hybrid search.
 `my-redis-viewer`'s. `DocumentRepository` (`app/repositories.py`) is the one with
 real logic:
 
-- **CRUD**: `list`/`get`/`remove` for documents, scoped by `profile_id`.
+- **CRUD**: `list_top_level`/`list_children`/`get`/`remove` for documents, scoped by
+  `profile_id`. `list_top_level` returns plain files and containers (not their
+  record children - see "Structured data import" below); `remove` on a container
+  removes its whole subtree.
 - **Indexing** (`index_paths`): reads a file, hashes its content, chunks it
   (`app/chunking.py`), stores chunks (which sync into the shared `chunks_fts` FTS5
   table via triggers - see migration `0003_create_chunks.sql`), embeds each chunk
@@ -93,6 +101,54 @@ real logic:
   see the docstring on `hybrid_search` for the exact rules, especially how
   `"hybrid"` mode silently falls back to full-text-only if the embedding call
   fails (e.g. bad API key), while `"vector"` mode raises instead.
+
+### Structured data import (CSV/JSON -> container + record documents)
+
+`Document.kind` (migration `0006_add_document_hierarchy.sql`) is `'file'` (the
+default - today's one-document-per-source-file case, unchanged), `'container'`
+(a CSV/JSON source file, no content/chunks of its own), or `'record'` (one row/
+object under a container, via `parent_document_id`). `app/data_import.py` parses
+CSV (`csv.DictReader`) and JSON (top-level array of objects only) into plain
+dicts; `app/data_import_dialog.py::ImportMappingDialog` lets the user choose
+which columns become searchable content vs. display-only metadata, and which
+column (if any) stably identifies a row across re-imports (falls back to a
+content hash, never a positional index - see `data_import.resolve_row_key`'s
+docstring for why). `DocumentRepository.import_data_file` does the actual
+upsert/diff/stale-cleanup (a row_key missing from a re-import is removed, not
+left orphaned) and is the structured-data counterpart to `index_paths` - same
+"always invoke through `AsyncTaskRunner`" rule applies.
+
+**Embedding every row is opt-in, not automatic.** FTS indexing happens
+immediately and unconditionally on import (chunks sync into `chunks_fts` the
+same way any other chunk does); vector embedding is a separate, batched stage
+(`EMBED_BATCH_SIZE` rows per `embed()` call, not one call per row) that only
+runs when the caller passes `embed=True`. `DocumentsPage` auto-embeds for a
+`fastembed` profile (local/free - only a time cost, shown via a progress
+gauge) but always asks first for `openai`/`gemini` profiles (a 3-way dialog:
+generate now / full-text-only for now / cancel) - importing a large catalog
+against a paid API must never fire one HTTP call per row as a surprise side
+effect of clicking "Import". A record left un-embedded (or embedded under a
+since-changed profile config) can be caught up later via `embed_records()`
+("Generate Embeddings" on a container) - it's found by comparing the record's
+stored `embedding_backend`/`embedding_model` against the profile's *current*
+config, the same staleness check `index_paths` already relies on for plain
+files, so no extra flag column was needed.
+
+A record's `path` column is a display/storage artifact only (made unique by
+appending the record's own row id), never parsed back apart - identity for
+diffing/lookup goes through the dedicated `idx_documents_row_key` index
+(`profile_id, parent_document_id, row_key`) instead. `DocumentsPage` shows the
+hierarchy as a `wx.dataview.TreeListCtrl` (not `wx.ListCtrl` - it can't show a
+tree), lazily populating a container's records on first expand via the same
+dummy-placeholder-child pattern `my-redis-viewer`'s `KeyTreeView` uses.
+`DocumentRepository.get_content(document_id)` is what both `DocumentsPage` and
+`SearchPage` use to open a document in the viewer - it dispatches on `kind`
+(`extract_text` for a file, concatenated chunks for a record, a summary
+placeholder for a container) - **never call `extract_text` directly on a
+document's `path`** the way both pages once did, since a record's path isn't a
+real file. `app/file_display.py::format_document_label` is the matching
+display-label helper (`container › row`), used everywhere a document's `path`
+would otherwise leak into UI text (viewer titles, search results, the tree).
 
 ### Per-profile sqlite-vec tables (not a static migration)
 
@@ -140,14 +196,20 @@ so callers only ever need to catch one exception type.
 
 Unchanged from `my-redis-viewer` - see that project's CLAUDE.md for the full
 rationale (thread + `wx.CallAfter`, not asyncio/wxasync). Here, the blocking calls
-are `DocumentRepository.index_paths` (file I/O + embedding, called from
-`DocumentsPage`) and `DocumentRepository.hybrid_search` (an embedding call for the
-query, called from `SearchPage`) - both run through `self._async.run(...)`, never
-directly from a button handler. `index_paths` additionally takes an
-`on_progress(done, total, path)` callback invoked *from the worker thread* -
-callers must hop back to the UI thread themselves (`wx.CallAfter(...)`) inside
-that callback, same as any other cross-thread wx update; see
-`DocumentsPage._start_indexing` for the reference usage.
+are `DocumentRepository.index_paths`/`import_data_file`/`embed_records` (file I/O
++ embedding, called from `DocumentsPage`) and `DocumentRepository.hybrid_search`
+(an embedding call for the query, called from `SearchPage`) - all run through
+`self._async.run(...)`, never directly from a button handler. Each of the three
+`DocumentsPage`-side calls takes an `on_progress(done, total, label)` callback
+invoked *from the worker thread* - callers must hop back to the UI thread
+themselves (`wx.CallAfter(...)`) inside that callback, same as any other
+cross-thread wx update; see `DocumentsPage._start_indexing`/`_start_import` for
+the reference usage. Because `AsyncTaskRunner` silently ignores an overlapping
+`.run()` call rather than queueing it (see its docstring), `DocumentsPage`
+chains multiple sequential runs (e.g. "Reindex All" across a mix of plain files
+and containers, each container needing its own embedding-consent decision) via
+an explicit `on_done_extra` callback rather than firing them back to back - see
+`_run_steps`.
 
 ### Migrations (`app/db/migrations/*.sql`)
 
@@ -164,11 +226,17 @@ tables are *not* part of this migration system at all (see above).
 
 Left `Sidebar` (`app/sidebar.py`) drives a `wx.Simplebook` in `MainFrame` -
 `SIDEBAR_ITEMS` order must match page order: Profiles (0), Documents (1), Search
-(2), About (3). `profiles_page.py`/`profiles_dialog.py`,
-`documents_page.py`, `search_page.py` follow the same
-list+toolbar-on-`wx.ListCtrl` / modal-dialog-for-create-edit pattern as
+(2), About (3). `profiles_page.py`/`profiles_dialog.py`, `search_page.py` follow
+the same list+toolbar-on-`wx.ListCtrl` / modal-dialog-for-create-edit pattern as
 `my-redis-viewer`'s pages - see that project's CLAUDE.md for the pattern to
-follow when adding a new concept's screen.
+follow when adding a new concept's screen. `documents_page.py` is the one
+exception: it's a `wx.dataview.TreeListCtrl`, not a flat `wx.ListCtrl`, since it
+needs to show a container's records nested under it (see "Structured data
+import" above) - `SetItemData`/`GetItemData` round-trip plain `Document` objects
+directly in this wxPython version (Phoenix 4.3.1+; no `ClientData` wrapping
+needed), and lazy-loading a container's children on first expand uses the same
+dummy-placeholder-child trick as `my-redis-viewer`'s `KeyTreeView`
+(`app/data_explorer_page.py`).
 
 ### PyInstaller packaging gotchas
 

@@ -40,9 +40,11 @@ class DocumentViewerFrame(wx.Frame):
         self.SetTitle(f"Loading - {document_path}")
         self.panel.show_loading(document_path)
 
-    def show_document(self, document_path: str, text: str, matches: List[SearchResult]) -> None:
+    def show_document(
+        self, document_path: str, text: str, matches: List[SearchResult], properties: Optional[dict] = None
+    ) -> None:
         self.SetTitle(document_path)
-        self.panel.show_document(document_path, text, matches)
+        self.panel.show_document(document_path, text, matches, properties=properties)
 
     def show_error(self, document_path: str, message: str) -> None:
         self.SetTitle(document_path)
@@ -93,6 +95,15 @@ class DocumentViewerPanel(wx.Panel):
         self._toc.InsertColumn(0, "Score", width=70)
         self._toc.InsertColumn(1, "Match", width=170)
         self._toc.InsertColumn(2, "Source", width=70)
+
+        # A separate control from _toc (not a repurposed one) - _on_toc_select
+        # assumes every selection means "scroll the STC to this offset",
+        # which doesn't apply to a property row, and this widget's splitter
+        # state already has some delicate edges (see _set_left_pane).
+        self._properties_list = wx.ListCtrl(self._splitter, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
+        self._properties_list.InsertColumn(0, "Key", width=140)
+        self._properties_list.InsertColumn(1, "Value", width=180)
+        self._properties_list.Hide()
 
         self._stc = stc.StyledTextCtrl(self._splitter, style=wx.BORDER_SUNKEN)
         self._configure_stc()
@@ -148,7 +159,8 @@ class DocumentViewerPanel(wx.Panel):
         self._match_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
-        self._set_matches_mode(False)
+        self._properties_list.DeleteAllItems()
+        self._set_left_pane(None)
         self._set_text("")
         self._enable_nav(False)
 
@@ -159,7 +171,8 @@ class DocumentViewerPanel(wx.Panel):
         self._match_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
-        self._set_matches_mode(False)
+        self._properties_list.DeleteAllItems()
+        self._set_left_pane(None)
         self._set_text("")
         self._enable_nav(False)
 
@@ -170,26 +183,40 @@ class DocumentViewerPanel(wx.Panel):
         self._match_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
-        self._set_matches_mode(False)
+        self._properties_list.DeleteAllItems()
+        self._set_left_pane(None)
         self._set_text(f"Could not open this document:\n\n{message}")
         self._enable_nav(False)
 
-    def show_document(self, document_path: str, text: str, matches: List[SearchResult]) -> None:
+    def show_document(
+        self,
+        document_path: str,
+        text: str,
+        matches: List[SearchResult],
+        properties: Optional[dict] = None,
+    ) -> None:
         """`matches` should already be sorted by score descending (see
         DocumentSearchResult.matches) - the order the table of contents and
         prev/next navigation use, so the best-scoring chunk opens first.
 
         An empty `matches` list means "plain content view" (e.g. opened from
-        the Documents page rather than a search result) - the table of
-        contents and match navigation are hidden entirely rather than shown
-        empty, since they'd never have anything to show."""
+        the Documents page rather than a search result); if `properties` is
+        also given (a record/container's raw field values - see
+        DocumentRepository.get_content's callers), a read-only Properties
+        list takes the table of contents' place in the left pane instead of
+        it being hidden outright."""
         self._matches = matches
         self._path_label.SetLabel(document_path)
-        # Resize the STC (splitting/unsplitting the TOC) before loading the
-        # text into it, not after - word wrap recalculates on resize, and
-        # doing it the other way round briefly wraps the full text at the
-        # old (narrower or wider) width first.
-        self._set_matches_mode(bool(matches))
+        # Resize the STC (splitting/unsplitting the left pane) before loading
+        # the text into it, not after - word wrap recalculates on resize,
+        # and doing it the other way round briefly wraps the full text at
+        # the old (narrower or wider) width first.
+        if matches:
+            self._set_left_pane(self._toc)
+        elif properties:
+            self._set_left_pane(self._properties_list)
+        else:
+            self._set_left_pane(None)
         self._set_text(text)
 
         clamped = any(match.end_offset > len(text) for match in matches)
@@ -206,6 +233,11 @@ class DocumentViewerPanel(wx.Panel):
             self._toc.InsertItem(row, f"{match.score:.4f}")
             self._toc.SetItem(row, 1, preview)
             self._toc.SetItem(row, 2, _source_label(match))
+
+        self._properties_list.DeleteAllItems()
+        for row, (key, value) in enumerate((properties or {}).items()):
+            self._properties_list.InsertItem(row, str(key))
+            self._properties_list.SetItem(row, 1, str(value))
 
         self._paint_indicators(text, matches)
         self._enable_nav(bool(matches))
@@ -229,19 +261,26 @@ class DocumentViewerPanel(wx.Panel):
             self._warning_label.Hide()
         self.Layout()
 
-    def _set_matches_mode(self, has_matches: bool) -> None:
-        """Show/hide the table of contents and match nav controls - there's
-        nothing useful in them for a plain content view (no matches), so
-        they're hidden outright rather than shown empty/disabled."""
-        self._match_label.Show(has_matches)
-        self._prev_btn.Show(has_matches)
-        self._next_btn.Show(has_matches)
+    def _set_left_pane(self, widget: Optional[wx.Window]) -> None:
+        """Show/hide the splitter's left pane - the table of contents when
+        there are search matches, a read-only Properties list when viewing a
+        record/container with none, or nothing at all (a plain file view -
+        there's nothing useful to show, so it's unsplit entirely rather than
+        shown empty). `widget` is `self._toc`, `self._properties_list`, or
+        None."""
+        self._match_label.Show(widget is self._toc)
+        self._prev_btn.Show(widget is self._toc)
+        self._next_btn.Show(widget is self._toc)
 
-        if has_matches and not self._splitter.IsSplit():
-            self._splitter.SplitVertically(self._toc, self._stc, self._last_sash)
-        elif not has_matches and self._splitter.IsSplit():
+        if self._splitter.IsSplit():
             self._last_sash = self._splitter.GetSashPosition()
-            self._splitter.Unsplit(self._toc)
+            self._splitter.Unsplit(self._splitter.GetWindow1())
+        self._toc.Hide()
+        self._properties_list.Hide()
+
+        if widget is not None:
+            widget.Show()
+            self._splitter.SplitVertically(widget, self._stc, self._last_sash)
 
         self.Layout()
         # Unsplit()/SplitVertically() can leave stale pixels behind where the
