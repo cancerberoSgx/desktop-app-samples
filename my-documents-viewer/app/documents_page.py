@@ -575,7 +575,6 @@ class DocumentsPage(wx.Panel):
             return
         container = self._selected_container() if document.kind == KIND_RECORD else None
         label = format_document_label(document, container, self._file_name_display)
-        properties = document.properties if document.kind in (KIND_RECORD, KIND_CONTAINER) else None
 
         viewer = self._get_viewer_frame()
         # Show/Raise before feeding it content - the viewer's splitter can
@@ -585,11 +584,26 @@ class DocumentsPage(wx.Panel):
         viewer.Raise()
         viewer.show_loading(label)
 
-        def on_success(text: str) -> None:
-            viewer.show_document(label, text, [], properties=properties)
-
         def on_error(exc: Exception) -> None:
             viewer.show_error(label, str(exc))
+
+        if document.kind == KIND_CONTAINER:
+            # A container has no content of its own - list its records as a
+            # data grid instead (see DocumentViewerPanel.show_records).
+            def on_records(records: List[Document]) -> None:
+                viewer.show_records(label, document.properties, records)
+
+            self._viewer_async.run(
+                work=lambda: self._repository.list_children(document.id),
+                on_success=on_records,
+                on_error=on_error,
+            )
+            return
+
+        properties = document.properties if document.kind == KIND_RECORD else None
+
+        def on_success(text: str) -> None:
+            viewer.show_document(label, text, [], properties=properties)
 
         self._viewer_async.run(
             work=lambda: self._repository.get_content(document.id),

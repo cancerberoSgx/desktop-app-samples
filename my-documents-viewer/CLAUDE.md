@@ -143,12 +143,21 @@ tree), lazily populating a container's records on first expand via the same
 dummy-placeholder-child pattern `my-redis-viewer`'s `KeyTreeView` uses.
 `DocumentRepository.get_content(document_id)` is what both `DocumentsPage` and
 `SearchPage` use to open a document in the viewer - it dispatches on `kind`
-(`extract_text` for a file, concatenated chunks for a record, a summary
-placeholder for a container) - **never call `extract_text` directly on a
-document's `path`** the way both pages once did, since a record's path isn't a
-real file. `app/file_display.py::format_document_label` is the matching
-display-label helper (`container › row`), used everywhere a document's `path`
-would otherwise leak into UI text (viewer titles, search results, the tree).
+(`extract_text` for a file, concatenated chunks for a record) - **never call
+`extract_text` directly on a document's `path`** the way both pages once did,
+since a record's path isn't a real file. It has no `kind == 'container'` case
+though - a container has no content/chunks of its own, so `DocumentsPage`
+double-clicking one doesn't call `get_content` at all; it calls
+`list_children` and hands the records straight to
+`DocumentViewerPanel.show_records`, which lists them as a flat data grid
+(columns = the union of keys across every record's raw `properties`, in
+first-seen order - i.e. the source file's own column order) rather than
+showing a placeholder in the text view. `app/file_display.py::format_document_label`
+is the display-label helper (`container › row`) used everywhere a document's
+`path` would otherwise leak into UI text (viewer titles, search results, the
+tree); `format_record_short_label` is the same thing minus the container
+prefix, for contexts (SearchPage's results tree) where the record is already
+shown visually nested under its container.
 
 ### Per-profile sqlite-vec tables (not a static migration)
 
@@ -247,6 +256,30 @@ count, and best snippet aggregated from its best-scoring child, same
 "ordered by best chunk's score" rule `repositories.group_by_document` already
 applies at the single-document level) rather than listing records as
 unrelated flat rows the way the pre-hierarchy version did.
+
+### Find-in-text (`DocumentViewerPanel`)
+
+Separate from the chunk-match Prev/Next nav (which jumps between *recorded*
+search-hit offsets): a find bar, toggled by the header's magnifying-glass
+button or Ctrl+F (F3/Shift+F3 for next/prev), searches the raw Scintilla text
+itself via `StyledTextCtrl.FindText` - case-insensitive substring, no regex
+(`flags=0`). Since `DocumentViewerFrame` is the one class both `DocumentsPage`
+and `SearchPage` construct their viewer from, this - like everything else in
+`document_viewer.py` - is automatically available from both. The one thing to
+preserve if touching `_run_find`: it always searches from the *current*
+selection/caret position, not from the top of the document, so repeated
+Next/Prev continues in the direction the user's already reading rather than
+fighting their scroll position - `FindText`'s positions are already
+Scintilla's native byte offsets (confirmed empirically: it returns a
+`(start, end)` tuple directly usable with `SetSelection`/`ScrollRange`, no
+`_char_to_byte` conversion needed the way chunk-highlighting requires, since
+the query string and the buffer are both being measured in the same units by
+Scintilla itself here). Ctrl+F is wired via an `AcceleratorTable` on
+`DocumentViewerFrame` (not a plain key binding on one widget), since it needs
+to fire regardless of which child control currently has focus. Find is
+unavailable (button disabled, bar force-hidden) while
+`DocumentViewerPanel.show_records` is showing a container's record grid
+instead of text - see `_set_content_mode`.
 
 ### PyInstaller packaging gotchas
 

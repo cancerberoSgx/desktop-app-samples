@@ -1,9 +1,10 @@
 from typing import List, Optional
 
 import wx
+import wx.dataview as dv
 import wx.stc as stc
 
-from .models import SearchResult
+from .models import Document, SearchResult
 
 # Indicators (Scintilla's mechanism for painting extra highlighting under/
 # over text without touching the document's actual styling) - one per match
@@ -36,6 +37,25 @@ class DocumentViewerFrame(wx.Frame):
         # and this frame is constructed just before that happens.
         wx.CallAfter(self.CentreOnParent)
 
+        # Ctrl+F/F3/Shift+F3 work regardless of which child control has
+        # focus (an accelerator table dispatches at the frame level, unlike
+        # a plain EVT_KEY_DOWN binding on one widget) - this is the one
+        # DocumentViewerFrame instance both DocumentsPage and SearchPage
+        # reuse, so find-in-text is available from either.
+        find_id, next_id, prev_id = wx.NewIdRef(), wx.NewIdRef(), wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, lambda evt: self.panel.toggle_find_bar(), id=find_id)
+        self.Bind(wx.EVT_MENU, lambda evt: self.panel.find_next(), id=next_id)
+        self.Bind(wx.EVT_MENU, lambda evt: self.panel.find_prev(), id=prev_id)
+        self.SetAcceleratorTable(
+            wx.AcceleratorTable(
+                [
+                    (wx.ACCEL_CTRL, ord("F"), find_id),
+                    (wx.ACCEL_NORMAL, wx.WXK_F3, next_id),
+                    (wx.ACCEL_SHIFT, wx.WXK_F3, prev_id),
+                ]
+            )
+        )
+
     def show_loading(self, document_path: str) -> None:
         self.SetTitle(f"Loading - {document_path}")
         self.panel.show_loading(document_path)
@@ -45,6 +65,10 @@ class DocumentViewerFrame(wx.Frame):
     ) -> None:
         self.SetTitle(document_path)
         self.panel.show_document(document_path, text, matches, properties=properties)
+
+    def show_records(self, container_label: str, container_properties: Optional[dict], records: List[Document]) -> None:
+        self.SetTitle(container_label)
+        self.panel.show_records(container_label, container_properties, records)
 
     def show_error(self, document_path: str, message: str) -> None:
         self.SetTitle(document_path)
@@ -68,6 +92,7 @@ class DocumentViewerPanel(wx.Panel):
         super().__init__(parent)
         self._matches: List[SearchResult] = []
         self._active_index: int = -1
+        self._showing_records_grid: bool = False
 
         outer = wx.BoxSizer(wx.VERTICAL)
 
@@ -79,13 +104,39 @@ class DocumentViewerPanel(wx.Panel):
         self._prev_btn = wx.Button(self, label="◀ Prev", style=wx.BU_EXACTFIT)
         self._next_btn = wx.Button(self, label="Next ▶", style=wx.BU_EXACTFIT)
         header.Add(self._prev_btn, 0, wx.RIGHT, 4)
-        header.Add(self._next_btn, 0)
+        header.Add(self._next_btn, 0, wx.RIGHT, 8)
+        self._find_toggle_btn = wx.BitmapButton(self, bitmap=wx.ArtProvider.GetBitmap(wx.ART_FIND, wx.ART_BUTTON, (16, 16)))
+        self._find_toggle_btn.SetToolTip("Find in text (Ctrl+F)")
+        header.Add(self._find_toggle_btn, 0)
         outer.Add(header, 0, wx.EXPAND | wx.ALL, 8)
 
         self._warning_label = wx.StaticText(self, label="")
         self._warning_label.SetForegroundColour(wx.Colour(170, 100, 0))
         outer.Add(self._warning_label, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         self._warning_label.Hide()
+
+        # Find bar - hidden until toggled (button above, or Ctrl+F/F3/
+        # Shift+F3 via DocumentViewerFrame's accelerator table). Deliberately
+        # not tied to the chunk-match Prev/Next above: this searches the raw
+        # text itself and always continues from wherever the view currently
+        # is (see _run_find), rather than resetting to the top of the
+        # document - i.e. it respects the current scroll position instead of
+        # fighting it.
+        self._find_bar = wx.Panel(self)
+        find_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self._find_ctrl = wx.TextCtrl(self._find_bar, style=wx.TE_PROCESS_ENTER)
+        find_sizer.Add(self._find_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self._find_prev_btn = wx.Button(self._find_bar, label="◀", style=wx.BU_EXACTFIT)
+        self._find_next_btn = wx.Button(self._find_bar, label="▶", style=wx.BU_EXACTFIT)
+        find_sizer.Add(self._find_prev_btn, 0, wx.RIGHT, 2)
+        find_sizer.Add(self._find_next_btn, 0, wx.RIGHT, 8)
+        self._find_status_label = wx.StaticText(self._find_bar, label="", size=(90, -1))
+        find_sizer.Add(self._find_status_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self._find_close_btn = wx.Button(self._find_bar, label="✕", style=wx.BU_EXACTFIT)
+        find_sizer.Add(self._find_close_btn, 0)
+        self._find_bar.SetSizer(find_sizer)
+        outer.Add(self._find_bar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self._find_bar.Hide()
 
         self._splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
         self._splitter.SetMinimumPaneSize(150)
@@ -111,11 +162,25 @@ class DocumentViewerPanel(wx.Panel):
         self._splitter.SplitVertically(self._toc, self._stc, self._last_sash)
         outer.Add(self._splitter, 1, wx.EXPAND)
 
+        # A container has no content/chunks of its own (see
+        # DocumentRepository.get_content) - show_records() lists its child
+        # records here instead, as a flat data grid, full-width in the same
+        # spot the splitter above otherwise occupies (see _set_content_mode).
+        self._records_grid = dv.TreeListCtrl(self, style=dv.TL_DEFAULT_STYLE | wx.BORDER_SUNKEN)
+        outer.Add(self._records_grid, 1, wx.EXPAND)
+        self._records_grid.Hide()
+
         self.SetSizer(outer)
 
         self._toc.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_toc_select)
         self._prev_btn.Bind(wx.EVT_BUTTON, lambda evt: self._activate(self._active_index - 1))
         self._next_btn.Bind(wx.EVT_BUTTON, lambda evt: self._activate(self._active_index + 1))
+        self._find_toggle_btn.Bind(wx.EVT_BUTTON, lambda evt: self.toggle_find_bar())
+        self._find_close_btn.Bind(wx.EVT_BUTTON, lambda evt: self._show_find_bar(False))
+        self._find_ctrl.Bind(wx.EVT_TEXT_ENTER, lambda evt: self.find_next())
+        self._find_ctrl.Bind(wx.EVT_KEY_DOWN, self._on_find_key_down)
+        self._find_prev_btn.Bind(wx.EVT_BUTTON, lambda evt: self.find_prev())
+        self._find_next_btn.Bind(wx.EVT_BUTTON, lambda evt: self.find_next())
 
         self.clear()
 
@@ -160,6 +225,7 @@ class DocumentViewerPanel(wx.Panel):
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
+        self._set_content_mode("text")
         self._set_left_pane(None)
         self._set_text("")
         self._enable_nav(False)
@@ -172,6 +238,7 @@ class DocumentViewerPanel(wx.Panel):
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
+        self._set_content_mode("text")
         self._set_left_pane(None)
         self._set_text("")
         self._enable_nav(False)
@@ -184,6 +251,7 @@ class DocumentViewerPanel(wx.Panel):
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
+        self._set_content_mode("text")
         self._set_left_pane(None)
         self._set_text(f"Could not open this document:\n\n{message}")
         self._enable_nav(False)
@@ -206,6 +274,7 @@ class DocumentViewerPanel(wx.Panel):
         list takes the table of contents' place in the left pane instead of
         it being hidden outright."""
         self._matches = matches
+        self._set_content_mode("text")
         self._path_label.SetLabel(document_path)
         # Resize the STC (splitting/unsplitting the left pane) before loading
         # the text into it, not after - word wrap recalculates on resize,
@@ -244,6 +313,49 @@ class DocumentViewerPanel(wx.Panel):
         if matches:
             self._activate(0)
 
+    def show_records(
+        self, container_label: str, container_properties: Optional[dict], records: List[Document]
+    ) -> None:
+        """Container double-click view (DocumentsPage) - a container has no
+        content/chunks of its own (see DocumentRepository.get_content), so
+        rather than an empty/placeholder text view, show its child records
+        as a flat data grid: one row per record, one column per original
+        field. Columns are the union of keys across every record's raw
+        `properties` (see data_import.py/DocumentRepository.import_data_file
+        for where those are captured on import), in the order first seen -
+        i.e. the same column order the source CSV/JSON had."""
+        self._matches = []
+        self._active_index = -1
+        self._path_label.SetLabel(container_label)
+        self._match_label.SetLabel("")
+        self._set_warning(None)
+        self._enable_nav(False)
+
+        self._records_grid.DeleteAllItems()
+        self._records_grid.ClearColumns()
+
+        columns: List[str] = []
+        seen = set()
+        for record in records:
+            for key in (record.properties or {}).keys():
+                if key not in seen:
+                    seen.add(key)
+                    columns.append(key)
+
+        self._records_grid.AppendColumn("#", width=50)
+        for column in columns:
+            self._records_grid.AppendColumn(column, width=150)
+
+        root = self._records_grid.GetRootItem()
+        for row, record in enumerate(records, start=1):
+            item = self._records_grid.AppendItem(root, "")
+            self._records_grid.SetItemText(item, 0, str(row))
+            properties = record.properties or {}
+            for col_index, column in enumerate(columns, start=1):
+                self._records_grid.SetItemText(item, col_index, str(properties.get(column, "")))
+
+        self._set_content_mode("records")
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -259,6 +371,22 @@ class DocumentViewerPanel(wx.Panel):
             self._warning_label.Show()
         else:
             self._warning_label.Hide()
+        self.Layout()
+
+    def _set_content_mode(self, mode: str) -> None:
+        """Switch the panel's main content area between the text viewer
+        (Scintilla + its left pane, mode="text") and show_records()'s flat
+        data grid (mode="records") - the two are mutually exclusive
+        full-width uses of the same space, toggled with Show()/Hide()
+        rather than re-parenting anything. Find-in-text only makes sense
+        against real text, so the find bar/button are unavailable in
+        "records" mode."""
+        self._showing_records_grid = mode == "records"
+        self._splitter.Show(mode == "text")
+        self._records_grid.Show(mode == "records")
+        self._find_toggle_btn.Enable(mode == "text")
+        if self._showing_records_grid:
+            self._show_find_bar(False)
         self.Layout()
 
     def _set_left_pane(self, widget: Optional[wx.Window]) -> None:
@@ -342,6 +470,91 @@ class DocumentViewerPanel(wx.Panel):
 
     def _on_toc_select(self, event: wx.ListEvent) -> None:
         self._activate(event.GetIndex())
+
+    # ------------------------------------------------------------------
+    # Find in text - Ctrl+F/the toolbar button toggle the bar, F3/Shift+F3
+    # (wired at the frame level, see DocumentViewerFrame) or its Prev/Next
+    # buttons step through occurrences. Unlike the chunk-match Prev/Next
+    # above (which always jumps to a specific recorded chunk offset), this
+    # always searches from wherever the view is currently positioned/
+    # scrolled to (see _run_find) rather than resetting to the top of the
+    # document on every search.
+    # ------------------------------------------------------------------
+    def toggle_find_bar(self) -> None:
+        if self._showing_records_grid:
+            return
+        if self._find_bar.IsShown():
+            # Already open - Ctrl+F again just refocuses/reselects the
+            # search box, the way most editors treat a repeated shortcut,
+            # rather than closing it.
+            self._find_ctrl.SetFocus()
+            self._find_ctrl.SelectAll()
+        else:
+            self._show_find_bar(True)
+
+    def find_next(self) -> None:
+        self._find_or_open(forward=True)
+
+    def find_prev(self) -> None:
+        self._find_or_open(forward=False)
+
+    def _find_or_open(self, forward: bool) -> None:
+        if self._showing_records_grid:
+            return
+        if not self._find_bar.IsShown():
+            self._show_find_bar(True)
+            return
+        self._run_find(forward)
+
+    def _show_find_bar(self, show: bool) -> None:
+        self._find_bar.Show(show)
+        self.Layout()
+        if show:
+            self._find_ctrl.SetFocus()
+            self._find_ctrl.SelectAll()
+        else:
+            self._find_status_label.SetLabel("")
+
+    def _on_find_key_down(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self._show_find_bar(False)
+            return
+        event.Skip()
+
+    def _run_find(self, forward: bool) -> None:
+        """Search from the current selection/caret position - NOT from the
+        top of the document - so repeated Next/Prev presses continue in the
+        direction the user is already reading, and the view only ever
+        scrolls as far as the next match actually requires. Wraps around
+        (forward past the end -> restart from the top; backward past the
+        start -> restart from the end) rather than dead-ending."""
+        query = self._find_ctrl.GetValue()
+        if not query:
+            self._find_status_label.SetLabel("")
+            return
+
+        length = self._stc.GetTextLength()
+        sel_start, sel_end = self._stc.GetSelection()
+
+        if forward:
+            anchor = sel_end if sel_end > sel_start else self._stc.GetCurrentPos()
+            start, end = self._stc.FindText(anchor, length, query, 0)
+            if start == -1 and anchor > 0:
+                start, end = self._stc.FindText(0, anchor, query, 0)
+        else:
+            anchor = sel_start if sel_end > sel_start else self._stc.GetCurrentPos()
+            start, end = self._stc.FindText(anchor, 0, query, 0)
+            if start == -1 and anchor < length:
+                start, end = self._stc.FindText(length, anchor, query, 0)
+
+        if start == -1:
+            self._find_status_label.SetLabel("Not found")
+            return
+
+        self._find_status_label.SetLabel("")
+        self._stc.SetSelection(start, end)
+        self._stc.ScrollRange(start, end)
+        self._stc.EnsureCaretVisible()
 
 
 def _char_to_byte(text: str, char_offset: int) -> int:

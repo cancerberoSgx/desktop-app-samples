@@ -128,9 +128,15 @@ p5
 in search results table, only parent documents are displayed and user can expand a parent document to see its child documents that matched the search, in a tree-like view, each with their score as currently is implemented for the "documents" view
 
 p7
-in documents, when double clicking a parent document it says "This is a container document with 41 record(s) - expand it in the Documents tree to browse them." instead list there the children documents in a data-view
-p6
-the text editor allows to search for a string with a search icon button or ctrl-f. The search can be next or prev occurrence and it must respect the current vertical scroll 
+ * in documents, when double clicking a parent document it says "This is a container document with 41 record(s) - expand it in the Documents tree to browse them." instead list there the children documents in a data-view
+
+ * the text editor allows to search for a string with a search icon button or ctrl-f. The search can be next or prev occurrence and it must respect the current vertical scroll . This apply both when double clicking a document in documents and search results views.
+
+p8
+In document view (double click document in documents or search tab) I also see document full path, indexed date, and other relevant document details.
+
+
+
 
 ---
 
