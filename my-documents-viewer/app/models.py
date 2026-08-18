@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from .chunking import CHUNK_SIZE
+
 
 @dataclass
 class Profile:
@@ -15,6 +17,7 @@ class Profile:
     embedding_dim: int = 384
     openai_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
+    chunk_size: int = CHUNK_SIZE
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

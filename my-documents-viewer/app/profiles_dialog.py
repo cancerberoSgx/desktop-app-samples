@@ -2,7 +2,14 @@ from typing import List, Optional
 
 import wx
 
-from .embeddings.registry import BACKEND_LABELS, DEFAULT_MODEL, EmbeddingModelInfo, models_for_backend
+from .chunking import CHUNK_SIZE
+from .embeddings.registry import (
+    BACKEND_LABELS,
+    DEFAULT_MODEL,
+    EmbeddingModelInfo,
+    max_chars_for,
+    models_for_backend,
+)
 from .models import Profile
 
 
@@ -48,6 +55,12 @@ class ProfileDialog(wx.Dialog):
         )
         grid.Add(self._gemini_key_ctrl, 1, wx.EXPAND)
 
+        grid.Add(wx.StaticText(self, label="Chunk size (chars):"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._chunk_size_ctrl = wx.SpinCtrl(
+            self, min=100, max=50000, initial=(profile.chunk_size if profile else CHUNK_SIZE)
+        )
+        grid.Add(self._chunk_size_ctrl, 1, wx.EXPAND)
+
         outer.Add(grid, 0, wx.EXPAND | wx.ALL, 16)
 
         self._dim_label = wx.StaticText(self, label="")
@@ -59,7 +72,8 @@ class ProfileDialog(wx.Dialog):
                 "Changing the embedding backend/model changes the vector\n"
                 "dimension - existing documents stay full-text searchable, but\n"
                 "need \"Reindex All\" (Documents screen) before vector/hybrid\n"
-                "search includes them again."
+                "search includes them again. Changing the chunk size only\n"
+                "affects documents indexed/reindexed after this change."
             ),
         )
         note.SetForegroundColour(wx.Colour(120, 120, 120))
@@ -112,7 +126,14 @@ class ProfileDialog(wx.Dialog):
 
     def _update_dim_label(self) -> None:
         model = self._selected_model()
-        self._dim_label.SetLabel(f"Vector dimension: {model.dimension}" if model else "")
+        if model is None:
+            self._dim_label.SetLabel("")
+            return
+        self._dim_label.SetLabel(
+            f"Vector dimension: {model.dimension}  |  "
+            f"Max chunk size for this model: ~{max_chars_for(model)} chars "
+            f"(~{model.max_input_tokens} tokens)"
+        )
 
     def _selected_model(self) -> Optional[EmbeddingModelInfo]:
         index = self._model_choice.GetSelection()
@@ -140,6 +161,19 @@ class ProfileDialog(wx.Dialog):
             wx.MessageBox("This model needs a Gemini API key.", "Validation error", wx.OK | wx.ICON_WARNING, self)
             return
 
+        chunk_size = self._chunk_size_ctrl.GetValue()
+        max_chars = max_chars_for(model)
+        if chunk_size > max_chars:
+            wx.MessageBox(
+                f"Chunk size {chunk_size} chars is too large for {model.display_name} "
+                f"(max ~{max_chars} chars / {model.max_input_tokens} tokens). "
+                "Choose a smaller chunk size.",
+                "Validation error",
+                wx.OK | wx.ICON_WARNING,
+                self,
+            )
+            return
+
         self._result = Profile(
             id=self._profile.id if self._profile else None,
             name=name,
@@ -148,6 +182,7 @@ class ProfileDialog(wx.Dialog):
             embedding_dim=model.dimension,
             openai_api_key=openai_key,
             gemini_api_key=gemini_key,
+            chunk_size=chunk_size,
             created_at=self._profile.created_at if self._profile else None,
             updated_at=self._profile.updated_at if self._profile else None,
         )

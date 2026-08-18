@@ -66,7 +66,7 @@ class ProfileRepository:
             """
             UPDATE profiles
             SET name = ?, embedding_backend = ?, embedding_model = ?, embedding_dim = ?,
-                openai_api_key = ?, gemini_api_key = ?, updated_at = datetime('now')
+                openai_api_key = ?, gemini_api_key = ?, chunk_size = ?, updated_at = datetime('now')
             WHERE id = ?
             """,
             (
@@ -76,6 +76,7 @@ class ProfileRepository:
                 profile.embedding_dim,
                 profile.openai_api_key,
                 profile.gemini_api_key,
+                profile.chunk_size,
                 profile.id,
             ),
         )
@@ -96,6 +97,7 @@ class ProfileRepository:
             embedding_dim=row["embedding_dim"],
             openai_api_key=row["openai_api_key"],
             gemini_api_key=row["gemini_api_key"],
+            chunk_size=row["chunk_size"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -321,7 +323,7 @@ class DocumentRepository:
             summary.skipped += 1
             return
 
-        chunks = chunk_text(text)
+        chunks = chunk_text(text, chunk_size=profile.chunk_size)
         stat = file_path.stat()
         mtime = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
 

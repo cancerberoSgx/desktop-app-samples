@@ -4,7 +4,10 @@ from typing import List, NamedTuple
 # prompts.md's "my-documents view" section) - measuring in characters here
 # rather than tokens to avoid a tokenizer dependency; ~4 chars/token puts
 # CHUNK_SIZE at roughly 200 tokens, comfortably in range for short paragraphs
-# in personal notes/contracts/etc.
+# in personal notes/contracts/etc. This is only the fallback/default now -
+# each profile carries its own chunk_size (Profile.chunk_size, editable in
+# ProfileDialog), validated there against the profile's embedding model's
+# max input token length (see embeddings.registry.max_chars_for).
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150
 
