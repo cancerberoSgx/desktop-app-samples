@@ -99,10 +99,20 @@ Everywhere a file name is displayed (in documents or search views) this will be 
 The default value for this setting is "file name"
 
 # child documents and import data files
-User is able to import data files such as csv, json (object arrays), jsond, etc
+Currently user is able to index "text documents" which text is indexed as one big document
+Now, user is able to import "data files" such as csv, json (object arrays), jsond, etc which will define multiple "child documents" associated with a "parent document"
 When this import happens, the system creates a parent document "foo.csv" without contents, and then many children documents (one per each csv row or json object)
 Normal documents like current .md or .txt files are created as "parent documents"
 In the documents view, by default it display only parent documents but user can expand a parent document to see its child documents in a tree-like view.
+The use case is to create multiple documents from a csv containing for example "products" and user to be able to perform a fulltext search by sku
+What do you think about this feature ? makes sense ? should be another product ? something missing like for example, how text is extracted or if we should also store properties metadata somewhere ? 
+(just analyze and answer, don't write code)
+
+p2
+explain me more about:
+Today one document = one file, so indexing N files means N sets of chunk embeddings, bounded by however many files a user reasonably has. A CSV import turns "one file" into potentially tens of thousands of child documents, each triggering its own embed call in index_paths. For local fastembed that's just slower; for openai/gemini backends it's real cost and rate-limit exposure the app has never had to think about. I'd make vectorizing row-imports opt-in (FTS-only by default for data-file imports, embeddings on request) rather than assuming every child document gets the same treatment as a hand-picked .md file.
+My objective is users to be able to find one or more child documents both using FTS or semantic - if you don't create a separate embedding for each row, how woudl you accomplish this ? 
+
 
 ---
 
