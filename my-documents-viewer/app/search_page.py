@@ -1,10 +1,10 @@
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import wx
 
 from .async_task import AsyncTaskRunner
-from .document_viewer import DocumentViewerPanel
+from .document_viewer import DocumentViewerFrame
 from .models import DocumentSearchResult
 from .repositories import DocumentRepository, ProfileRepository, group_by_document
 from .text_extract import extract_text
@@ -22,10 +22,11 @@ class SearchPage(wx.Panel):
     vector-only.
 
     Results are grouped one row per document (see repositories.
-    group_by_document) rather than one row per matching chunk - selecting a
-    document loads its full text into the right-hand DocumentViewerPanel,
-    which highlights every matching chunk and offers a table of contents to
-    jump between them."""
+    group_by_document) rather than one row per matching chunk - double-
+    clicking (or pressing Enter on) a result opens its full text in a
+    separate DocumentViewerFrame window, which highlights every matching
+    chunk and offers a table of contents, sorted by score, to jump between
+    them."""
 
     def __init__(
         self,
@@ -44,6 +45,10 @@ class SearchPage(wx.Panel):
         # can happen while a search itself might still be settling, and
         # AsyncTaskRunner only runs one job at a time per instance.
         self._viewer_async = AsyncTaskRunner(self)
+        # Lazily created, reused across documents; cleared (see
+        # _on_viewer_closed) if the user closes the window, so the next
+        # activation opens a fresh one.
+        self._viewer_frame: Optional[DocumentViewerFrame] = None
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Search"), 0, wx.ALL, 12)
@@ -67,19 +72,12 @@ class SearchPage(wx.Panel):
         if not self._repository.vector_enabled:
             self._mode_radio.EnableItem(2, False)  # "Vector only" (index per MODE_LABELS: hybrid=0, fulltext=1, vector=2)
 
-        results_splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
-        results_splitter.SetMinimumPaneSize(200)
-
-        self._list = wx.ListCtrl(results_splitter, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
-        self._list.InsertColumn(0, "Score", width=70)
-        self._list.InsertColumn(1, "Document", width=260)
-        self._list.InsertColumn(2, "Matches", width=60)
-        self._list.InsertColumn(3, "Best snippet", width=300)
-
-        self._viewer = DocumentViewerPanel(results_splitter)
-
-        results_splitter.SplitVertically(self._list, self._viewer, 500)
-        outer.Add(results_splitter, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
+        self._list.InsertColumn(0, "Score", width=80)
+        self._list.InsertColumn(1, "Document", width=340)
+        self._list.InsertColumn(2, "Matches", width=70)
+        self._list.InsertColumn(3, "Best snippet", width=380)
+        outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self._status_label = wx.StaticText(self, label=self._initial_status())
         outer.Add(self._status_label, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
@@ -88,7 +86,7 @@ class SearchPage(wx.Panel):
 
         self._search_btn.Bind(wx.EVT_BUTTON, self._on_search)
         self._query_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
-        self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_result_selected)
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_result_activated)
 
     def _initial_status(self) -> str:
         if self._repository.vector_enabled:
@@ -99,7 +97,6 @@ class SearchPage(wx.Panel):
         self._profile_id = profile_id
         self._list.DeleteAllItems()
         self._results = []
-        self._viewer.clear()
         self._status_label.SetLabel(self._initial_status())
 
     def _selected_mode(self) -> str:
@@ -116,7 +113,6 @@ class SearchPage(wx.Panel):
 
         def on_success(results) -> None:
             self._results = group_by_document(results)
-            self._viewer.clear()
             self._list.DeleteAllItems()
             for row, doc in enumerate(self._results):
                 self._list.InsertItem(row, f"{doc.score:.4f}")
@@ -141,20 +137,33 @@ class SearchPage(wx.Panel):
             disable=[self._search_btn],
         )
 
-    def _on_result_selected(self, event: wx.ListEvent) -> None:
+    def _on_result_activated(self, event: wx.ListEvent) -> None:
         index = event.GetIndex()
         if index < 0 or index >= len(self._results):
             return
         self._load_and_show(self._results[index])
 
+    def _get_viewer_frame(self) -> DocumentViewerFrame:
+        if self._viewer_frame is None:
+            self._viewer_frame = DocumentViewerFrame(self)
+            self._viewer_frame.Bind(wx.EVT_CLOSE, self._on_viewer_closed)
+        return self._viewer_frame
+
+    def _on_viewer_closed(self, event: wx.CloseEvent) -> None:
+        self._viewer_frame = None
+        event.Skip()
+
     def _load_and_show(self, doc: DocumentSearchResult) -> None:
-        self._viewer.show_loading(doc.document_path)
+        viewer = self._get_viewer_frame()
+        viewer.show_loading(doc.document_path)
+        viewer.Show()
+        viewer.Raise()
 
         def on_success(text: str) -> None:
-            self._viewer.show_document(doc.document_path, text, doc.matches, initial_index=doc.best_index)
+            viewer.show_document(doc.document_path, text, doc.matches)
 
         def on_error(exc: Exception) -> None:
-            self._viewer.show_error(doc.document_path, str(exc))
+            viewer.show_error(doc.document_path, str(exc))
 
         self._viewer_async.run(
             work=lambda: extract_text(Path(doc.document_path)),

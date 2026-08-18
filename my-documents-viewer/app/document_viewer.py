@@ -15,10 +15,41 @@ INDICATOR_VECTOR_ONLY = 1
 TOC_PREVIEW_LENGTH = 70
 
 
+class DocumentViewerFrame(wx.Frame):
+    """A separate top-level window that previews one document's full text
+    with its matching chunks highlighted - opened by SearchPage when a
+    result is double-clicked/activated. SearchPage reuses one instance
+    across documents (recreating it if the user closes it) rather than
+    piling up a new window per result clicked."""
+
+    def __init__(self, parent: wx.Window) -> None:
+        super().__init__(parent, title="Document Viewer", size=(960, 720))
+        self.panel = DocumentViewerPanel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.panel, 1, wx.EXPAND)
+        self.SetSizer(sizer)
+        # Deferred: centering only works once the window is actually shown,
+        # and this frame is constructed just before that happens.
+        wx.CallAfter(self.CentreOnParent)
+
+    def show_loading(self, document_path: str) -> None:
+        self.SetTitle(f"Loading - {document_path}")
+        self.panel.show_loading(document_path)
+
+    def show_document(self, document_path: str, text: str, matches: List[SearchResult]) -> None:
+        self.SetTitle(document_path)
+        self.panel.show_document(document_path, text, matches)
+
+    def show_error(self, document_path: str, message: str) -> None:
+        self.SetTitle(document_path)
+        self.panel.show_error(document_path, message)
+
+
 class DocumentViewerPanel(wx.Panel):
-    """Right-hand pane of the Search page: the full text of one matched
-    document, with every matching chunk highlighted and a virtual table of
-    contents (one entry per chunk, in reading order) to jump between them.
+    """A document's full text, with every matching chunk highlighted and a
+    virtual table of contents (one entry per chunk, sorted by score - the
+    best match first) to jump between them. Hosted inside
+    DocumentViewerFrame, a separate window opened from the Search page.
 
     Chunk spans come from SearchResult.start_offset/end_offset - character
     offsets into the document's extracted text, recorded at index time (see
@@ -54,13 +85,14 @@ class DocumentViewerPanel(wx.Panel):
         splitter.SetMinimumPaneSize(150)
 
         self._toc = wx.ListCtrl(splitter, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
-        self._toc.InsertColumn(0, "Match", width=180)
-        self._toc.InsertColumn(1, "Source", width=80)
+        self._toc.InsertColumn(0, "Score", width=70)
+        self._toc.InsertColumn(1, "Match", width=170)
+        self._toc.InsertColumn(2, "Source", width=70)
 
         self._stc = stc.StyledTextCtrl(splitter, style=wx.BORDER_SUNKEN)
         self._configure_stc()
 
-        splitter.SplitVertically(self._toc, self._stc, 260)
+        splitter.SplitVertically(self._toc, self._stc, 320)
         outer.Add(splitter, 1, wx.EXPAND)
 
         self.SetSizer(outer)
@@ -129,17 +161,10 @@ class DocumentViewerPanel(wx.Panel):
         self._set_text(f"Could not open this document:\n\n{message}")
         self._enable_nav(False)
 
-    def show_document(
-        self,
-        document_path: str,
-        text: str,
-        matches: List[SearchResult],
-        initial_index: int = 0,
-    ) -> None:
-        """`matches` should already be sorted by start_offset (see
-        DocumentSearchResult.matches) - reading order for the table of
-        contents. `initial_index` is which entry to jump to first (the
-        overall best-scoring match)."""
+    def show_document(self, document_path: str, text: str, matches: List[SearchResult]) -> None:
+        """`matches` should already be sorted by score descending (see
+        DocumentSearchResult.matches) - the order the table of contents and
+        prev/next navigation use, so the best-scoring chunk opens first."""
         self._matches = matches
         self._path_label.SetLabel(document_path)
         self._set_text(text)
@@ -155,13 +180,14 @@ class DocumentViewerPanel(wx.Panel):
         self._toc.DeleteAllItems()
         for row, match in enumerate(matches):
             preview = " ".join(match.snippet.split())[:TOC_PREVIEW_LENGTH]
-            self._toc.InsertItem(row, preview)
-            self._toc.SetItem(row, 1, _source_label(match))
+            self._toc.InsertItem(row, f"{match.score:.4f}")
+            self._toc.SetItem(row, 1, preview)
+            self._toc.SetItem(row, 2, _source_label(match))
 
         self._paint_indicators(text, matches)
         self._enable_nav(bool(matches))
         if matches:
-            self._activate(initial_index)
+            self._activate(0)
 
     # ------------------------------------------------------------------
     # Internals

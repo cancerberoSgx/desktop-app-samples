@@ -76,16 +76,15 @@ class DocumentSearchResult:
     """One document's search hits, grouped from a flat SearchResult list
     (see repositories.group_by_document) so the Search page can show one row
     per document instead of one per matching chunk. `matches` is sorted by
-    position in the document (start_offset) - the natural reading order for
-    a table of contents - while `best_index` points at whichever entry has
-    the highest score, for the viewer to jump to first."""
+    score descending - the same order the table of contents and prev/next
+    navigation in DocumentViewerPanel use - so the best-matching chunk is
+    always first."""
 
     document_id: int
     document_path: str
     score: float
     matches: List[SearchResult] = field(default_factory=list)
-    best_index: int = 0
 
     @property
     def best_match(self) -> SearchResult:
-        return self.matches[self.best_index]
+        return self.matches[0]

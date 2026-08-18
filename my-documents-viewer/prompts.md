@@ -70,7 +70,7 @@ ok, move the chunk size value to the profiles table. In the edit/create profile 
 
 # search documents
 currently when I search something, several snippets of the same document are displayed. Our users need to see only one document and optionally the relevant chunks.
-Question, assuming the documents will be 100% text files, is it possible to display the entire content in an internal text viewer and make a virtual table of content that points and hightlight matched relevant chunks ? (don't write code, just plan and explain how would you imlpement this in a user friendly manner)
+Question, assuming the documents will be 100% text files, is it possible to display the entire content in an internal text viewer and make a virtual table of content that points and hightlight matched relevant chunks ? (don't write code, just plan and explain how would you implement this in a user friendly manner)
 
 p2
 in new profile and edit profile dialog I cannot see the "save" buttons, enlarge it 
@@ -78,7 +78,8 @@ in new profile and edit profile dialog I cannot see the "save" buttons, enlarge 
 p3
 when clicking a document the document's content and chunks are displayed in a separate window. Also chunks myst be sort by score and score displayed.
 
-
+p3
+in the documents view chunk highlight color is OK, but remove the highlight color of the non-chunk text, shouldn't be highlighted at all (currently bluish)
 
 # FUTURE
 

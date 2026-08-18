@@ -512,27 +512,24 @@ def _fts_match_expression(query: str) -> str:
 def group_by_document(results: List[SearchResult]) -> List[DocumentSearchResult]:
     """Fold a flat, one-row-per-chunk hybrid_search() result into one row
     per document, for SearchPage's results list. Each document's `matches`
-    are ordered by position in the document (start_offset) - the reading
-    order a table-of-contents wants - while `best_index` points at the
-    highest-scoring chunk, so a viewer knows which one to open on. Documents
-    are returned ordered by their best chunk's score, matching the overall
-    relevance order hybrid_search() already produced."""
+    are ordered by score descending, so its best-matching chunk is always
+    first - both for the results list's "best snippet" column and for the
+    table of contents/navigation in DocumentViewerPanel. Documents
+    themselves are also ordered by their best chunk's score, matching the
+    overall relevance order hybrid_search() already produced."""
     by_document: Dict[int, List[SearchResult]] = {}
     for result in results:
         by_document.setdefault(result.document_id, []).append(result)
 
     grouped = []
     for document_id, matches in by_document.items():
-        matches_by_position = sorted(matches, key=lambda m: m.start_offset)
-        best_score = max(m.score for m in matches)
-        best_index = max(range(len(matches_by_position)), key=lambda i: matches_by_position[i].score)
+        matches_by_score = sorted(matches, key=lambda m: m.score, reverse=True)
         grouped.append(
             DocumentSearchResult(
                 document_id=document_id,
                 document_path=matches[0].document_path,
-                score=best_score,
-                matches=matches_by_position,
-                best_index=best_index,
+                score=matches_by_score[0].score,
+                matches=matches_by_score,
             )
         )
     grouped.sort(key=lambda doc: doc.score, reverse=True)
