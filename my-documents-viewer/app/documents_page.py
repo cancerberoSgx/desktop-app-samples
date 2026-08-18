@@ -591,7 +591,7 @@ class DocumentsPage(wx.Panel):
             # A container has no content of its own - list its records as a
             # data grid instead (see DocumentViewerPanel.show_records).
             def on_records(records: List[Document]) -> None:
-                viewer.show_records(label, document.properties, records)
+                viewer.show_records(label, document, records)
 
             self._viewer_async.run(
                 work=lambda: self._repository.list_children(document.id),
@@ -600,10 +600,8 @@ class DocumentsPage(wx.Panel):
             )
             return
 
-        properties = document.properties if document.kind == KIND_RECORD else None
-
         def on_success(text: str) -> None:
-            viewer.show_document(label, text, [], properties=properties)
+            viewer.show_document(label, document, text, [], container=container)
 
         self._viewer_async.run(
             work=lambda: self._repository.get_content(document.id),

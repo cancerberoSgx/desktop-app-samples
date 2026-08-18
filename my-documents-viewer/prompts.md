@@ -133,7 +133,11 @@ p7
  * the text editor allows to search for a string with a search icon button or ctrl-f. The search can be next or prev occurrence and it must respect the current vertical scroll . This apply both when double clicking a document in documents and search results views.
 
 p8
-In document view (double click document in documents or search tab) I also see document full path, indexed date, and other relevant document details.
+In document view (double click document in documents or search tab) I also see document full path, indexed date, and other relevant document details. For child documents, display parent metadata and child key
+
+
+# open ai 
+for openai or gemini models, when indexing, batch embeddings calls in 100 strings in a single call. If necesary install openai and gemini python sdks
 
 
 
@@ -142,6 +146,7 @@ In document view (double click document in documents or search tab) I also see d
 
 # FUTURE
 
+# search embeddings should be cached (diskcache?)
 
 # doc tags
 

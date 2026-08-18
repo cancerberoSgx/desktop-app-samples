@@ -7,7 +7,7 @@ import wx.dataview as dv
 from .async_task import AsyncTaskRunner
 from .document_viewer import DocumentViewerFrame
 from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_document_label, format_record_short_label
-from .models import KIND_CONTAINER, KIND_RECORD, Document, DocumentSearchResult
+from .models import KIND_RECORD, Document, DocumentSearchResult
 from .repositories import DocumentRepository, ProfileRepository, group_by_document
 
 MODE_LABELS = [
@@ -255,24 +255,17 @@ class SearchPage(wx.Panel):
         self._viewer_frame = None
         event.Skip()
 
-    def _label_for(self, document_id: int) -> str:
-        """A record's DocumentSearchResult.document_path is a synthetic
-        string DocumentRepository generates purely to keep it unique (see
-        migration 0006) - never meant to be shown, so the viewer title is
-        built from the real Document (and, for a record, its container)
-        instead. Used here rather than reusing the tree row's label so this
-        still works when _load_and_show is reached some other way than
-        clicking a currently-populated row."""
-        document = self._repository.get(document_id)
-        if document is None:
-            return "(removed)"
-        container = self._repository.get(document.parent_document_id) if document.parent_document_id else None
-        return format_document_label(document, container, self._file_name_display)
-
     def _load_and_show(self, doc: DocumentSearchResult) -> None:
-        label = self._label_for(doc.document_id)
+        # A record's DocumentSearchResult.document_path is a synthetic
+        # string DocumentRepository generates purely to keep it unique (see
+        # migration 0006) - never meant to be shown, so the viewer's title
+        # and details are built from the real Document (and, for a record,
+        # its container) instead.
         document = self._repository.get(doc.document_id)
-        properties = document.properties if document and document.kind in (KIND_RECORD, KIND_CONTAINER) else None
+        if document is None:
+            return  # removed since the search ran
+        container = self._repository.get(document.parent_document_id) if document.parent_document_id else None
+        label = format_document_label(document, container, self._file_name_display)
 
         viewer = self._get_viewer_frame()
         # Show/Raise before feeding it content - the viewer's splitter can
@@ -283,7 +276,7 @@ class SearchPage(wx.Panel):
         viewer.show_loading(label)
 
         def on_success(text: str) -> None:
-            viewer.show_document(label, text, doc.matches, properties=properties)
+            viewer.show_document(label, document, text, doc.matches, container=container)
 
         def on_error(exc: Exception) -> None:
             viewer.show_error(label, str(exc))

@@ -4,7 +4,8 @@ import wx
 import wx.dataview as dv
 import wx.stc as stc
 
-from .models import Document, SearchResult
+from .file_display import format_embedding_status, format_size
+from .models import KIND_CONTAINER, KIND_RECORD, Document, SearchResult
 
 # Indicators (Scintilla's mechanism for painting extra highlighting under/
 # over text without touching the document's actual styling) - one per match
@@ -56,23 +57,28 @@ class DocumentViewerFrame(wx.Frame):
             )
         )
 
-    def show_loading(self, document_path: str) -> None:
-        self.SetTitle(f"Loading - {document_path}")
-        self.panel.show_loading(document_path)
+    def show_loading(self, label: str) -> None:
+        self.SetTitle(f"Loading - {label}")
+        self.panel.show_loading(label)
 
     def show_document(
-        self, document_path: str, text: str, matches: List[SearchResult], properties: Optional[dict] = None
+        self,
+        label: str,
+        document: Document,
+        text: str,
+        matches: List[SearchResult],
+        container: Optional[Document] = None,
     ) -> None:
-        self.SetTitle(document_path)
-        self.panel.show_document(document_path, text, matches, properties=properties)
+        self.SetTitle(label)
+        self.panel.show_document(label, document, text, matches, container=container)
 
-    def show_records(self, container_label: str, container_properties: Optional[dict], records: List[Document]) -> None:
-        self.SetTitle(container_label)
-        self.panel.show_records(container_label, container_properties, records)
+    def show_records(self, label: str, container: Document, records: List[Document]) -> None:
+        self.SetTitle(label)
+        self.panel.show_records(label, container, records)
 
-    def show_error(self, document_path: str, message: str) -> None:
-        self.SetTitle(document_path)
-        self.panel.show_error(document_path, message)
+    def show_error(self, label: str, message: str) -> None:
+        self.SetTitle(label)
+        self.panel.show_error(label, message)
 
 
 class DocumentViewerPanel(wx.Panel):
@@ -109,6 +115,16 @@ class DocumentViewerPanel(wx.Panel):
         self._find_toggle_btn.SetToolTip("Find in text (Ctrl+F)")
         header.Add(self._find_toggle_btn, 0)
         outer.Add(header, 0, wx.EXPAND | wx.ALL, 8)
+
+        # Always visible regardless of mode (plain file / record / matches
+        # from search / records grid) - see _build_details_text. Separate
+        # from _properties_list below, which holds the document's *own*
+        # imported fields (or is absent entirely for a plain file); this is
+        # DocumentRepository-tracked metadata (path, indexed_at, chunk
+        # count, embedding status) that every document has.
+        self._details_label = wx.StaticText(self, label="")
+        self._details_label.SetForegroundColour(wx.Colour(110, 110, 110))
+        outer.Add(self._details_label, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self._warning_label = wx.StaticText(self, label="")
         self._warning_label.SetForegroundColour(wx.Colour(170, 100, 0))
@@ -222,6 +238,7 @@ class DocumentViewerPanel(wx.Panel):
         self._active_index = -1
         self._path_label.SetLabel("Select a search result to preview it here.")
         self._match_label.SetLabel("")
+        self._details_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
@@ -230,11 +247,12 @@ class DocumentViewerPanel(wx.Panel):
         self._set_text("")
         self._enable_nav(False)
 
-    def show_loading(self, document_path: str) -> None:
+    def show_loading(self, label: str) -> None:
         self._matches = []
         self._active_index = -1
-        self._path_label.SetLabel(f"Loading {document_path}...")
+        self._path_label.SetLabel(f"Loading {label}...")
         self._match_label.SetLabel("")
+        self._details_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
@@ -243,11 +261,12 @@ class DocumentViewerPanel(wx.Panel):
         self._set_text("")
         self._enable_nav(False)
 
-    def show_error(self, document_path: str, message: str) -> None:
+    def show_error(self, label: str, message: str) -> None:
         self._matches = []
         self._active_index = -1
-        self._path_label.SetLabel(document_path)
+        self._path_label.SetLabel(label)
         self._match_label.SetLabel("")
+        self._details_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
@@ -258,24 +277,29 @@ class DocumentViewerPanel(wx.Panel):
 
     def show_document(
         self,
-        document_path: str,
+        label: str,
+        document: Document,
         text: str,
         matches: List[SearchResult],
-        properties: Optional[dict] = None,
+        container: Optional[Document] = None,
     ) -> None:
         """`matches` should already be sorted by score descending (see
         DocumentSearchResult.matches) - the order the table of contents and
         prev/next navigation use, so the best-scoring chunk opens first.
 
         An empty `matches` list means "plain content view" (e.g. opened from
-        the Documents page rather than a search result); if `properties` is
-        also given (a record/container's raw field values - see
-        DocumentRepository.get_content's callers), a read-only Properties
-        list takes the table of contents' place in the left pane instead of
-        it being hidden outright."""
+        the Documents page rather than a search result). `document` (and,
+        for a record, its parent `container`) drive both the always-visible
+        details line (see _build_details_text) and, for a record, the
+        read-only Properties list of its raw imported fields - which takes
+        the table of contents' place in the left pane when there are no
+        matches to show there instead."""
+        properties = document.properties if document.kind == KIND_RECORD else None
+
         self._matches = matches
         self._set_content_mode("text")
-        self._path_label.SetLabel(document_path)
+        self._path_label.SetLabel(label)
+        self._details_label.SetLabel(self._build_details_text(document, container))
         # Resize the STC (splitting/unsplitting the left pane) before loading
         # the text into it, not after - word wrap recalculates on resize,
         # and doing it the other way round briefly wraps the full text at
@@ -313,9 +337,7 @@ class DocumentViewerPanel(wx.Panel):
         if matches:
             self._activate(0)
 
-    def show_records(
-        self, container_label: str, container_properties: Optional[dict], records: List[Document]
-    ) -> None:
+    def show_records(self, label: str, container: Document, records: List[Document]) -> None:
         """Container double-click view (DocumentsPage) - a container has no
         content/chunks of its own (see DocumentRepository.get_content), so
         rather than an empty/placeholder text view, show its child records
@@ -326,8 +348,9 @@ class DocumentViewerPanel(wx.Panel):
         i.e. the same column order the source CSV/JSON had."""
         self._matches = []
         self._active_index = -1
-        self._path_label.SetLabel(container_label)
+        self._path_label.SetLabel(label)
         self._match_label.SetLabel("")
+        self._details_label.SetLabel(self._build_details_text(container, None))
         self._set_warning(None)
         self._enable_nav(False)
 
@@ -372,6 +395,44 @@ class DocumentViewerPanel(wx.Panel):
         else:
             self._warning_label.Hide()
         self.Layout()
+
+    @staticmethod
+    def _build_details_text(document: Document, container: Optional[Document]) -> str:
+        """Always-visible metadata line(s) under the title - full path,
+        indexed date, and other DocumentRepository-tracked details, for
+        both show_document (file/record) and show_records (container).
+
+        A record's own `path` is a synthetic string never meant to be shown
+        (see migration 0006) - so for a record this shows the *parent*
+        container's real path/indexed date instead, plus the record's own
+        row_key (its "child key" within that container) and its own
+        indexed-at/chunk/embedding status, which are specific to the record
+        itself rather than inherited from the container."""
+        if document.kind == KIND_RECORD and container is not None:
+            return (
+                f"Parent: {container.path}  (imported {container.indexed_at or 'never'})\n"
+                f"Child key: {document.row_key or f'record {document.id}'}    "
+                f"Indexed: {document.indexed_at or 'never'}    "
+                f"Chunks: {document.chunk_count}    "
+                f"Embedding: {format_embedding_status(document)}"
+            )
+
+        if document.kind == KIND_CONTAINER:
+            properties = document.properties or {}
+            return (
+                f"Path: {document.path}\n"
+                f"Indexed: {document.indexed_at or 'never'}    "
+                f"Format: {properties.get('format', '?')}    "
+                f"Records: {properties.get('row_count', 0)}"
+            )
+
+        return (
+            f"Path: {document.path}\n"
+            f"Indexed: {document.indexed_at or 'never'}    "
+            f"Size: {format_size(document.size_bytes)}    "
+            f"Chunks: {document.chunk_count}    "
+            f"Embedding: {format_embedding_status(document)}"
+        )
 
     def _set_content_mode(self, mode: str) -> None:
         """Switch the panel's main content area between the text viewer

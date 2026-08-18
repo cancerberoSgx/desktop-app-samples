@@ -257,6 +257,27 @@ count, and best snippet aggregated from its best-scoring child, same
 applies at the single-document level) rather than listing records as
 unrelated flat rows the way the pre-hierarchy version did.
 
+### Document details block (`DocumentViewerPanel`)
+
+An always-visible line (or two) under the title, regardless of mode (plain
+file / record / container's records grid / search matches) -
+`_build_details_text` dispatches on `document.kind`: a plain file shows its
+real path, indexed date, size, chunk count, and embedding status; a
+container (above `show_records`' grid) shows its path, indexed date, import
+format, and record count; a **record** shows its *parent* container's path
+and indexed date (its own `path` is a synthetic string never meant to be
+shown - see migration 0006) plus its own `row_key` as "Child key", and its
+own indexed date/chunk count/embedding status (those genuinely are the
+record's own, not inherited). This is why `show_document`/`show_records` take
+the actual `Document` (and, for a record, its parent) rather than a bare
+label string the way they used to - `DocumentsPage`/`SearchPage` still
+compute the short display *label* themselves (`format_document_label`,
+mode-dependent), but the details block always shows the *full*, unabbreviated
+path independent of the "File name display" setting. `format_embedding_status`/
+`format_size` (`app/file_display.py`) are the small formatting helpers this
+pulls from what `DocumentsPage`'s tree columns already show, kept in one
+place rather than duplicated.
+
 ### Find-in-text (`DocumentViewerPanel`)
 
 Separate from the chunk-match Prev/Next nav (which jumps between *recorded*

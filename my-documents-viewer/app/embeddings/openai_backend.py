@@ -7,6 +7,10 @@ from .base import EmbeddingBackend, EmbeddingError
 
 API_URL = "https://api.openai.com/v1/embeddings"
 REQUEST_TIMEOUT_SECONDS = 60
+# OpenAI's embeddings endpoint accepts multiple inputs per call but caps the
+# array size - keep each request to a fixed, well-under-the-limit batch
+# regardless of how many chunks a document produced.
+BATCH_SIZE = 100
 
 
 class OpenAIEmbeddingBackend(EmbeddingBackend):
@@ -31,9 +35,15 @@ class OpenAIEmbeddingBackend(EmbeddingBackend):
         if not texts:
             return []
 
+        vectors: List[List[float]] = []
+        for start in range(0, len(texts), BATCH_SIZE):
+            vectors.extend(self._embed_batch(texts[start:start + BATCH_SIZE]))
+        return vectors
+
+    def _embed_batch(self, batch: List[str]) -> List[List[float]]:
         request = urllib.request.Request(
             API_URL,
-            data=json.dumps({"model": self._model_name, "input": texts}).encode("utf-8"),
+            data=json.dumps({"model": self._model_name, "input": batch}).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",

@@ -66,3 +66,25 @@ def format_document_label(document: "Document", container: Optional["Document"],
 
     container_label = format_display_path(container.path, mode)
     return f"{container_label} › {format_record_short_label(document, container)}"
+
+
+def format_embedding_status(document: "Document") -> str:
+    """The same "backend / model, or (full-text only)" string DocumentsPage
+    shows in its Embedding column - factored out here so DocumentViewerPanel
+    can show the same thing in its details block without duplicating the
+    logic."""
+    if document.embedding_backend:
+        return f"{document.embedding_backend} / {document.embedding_model}"
+    return "(full-text only)"
+
+
+def format_size(num_bytes: int) -> str:
+    """Human-readable file size for the viewer's details block - e.g.
+    "2.3 KB". Not used for anything precision-sensitive, so plain
+    1024-based units are fine."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{num_bytes} B"
