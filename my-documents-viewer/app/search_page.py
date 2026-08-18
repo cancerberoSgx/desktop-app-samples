@@ -155,9 +155,12 @@ class SearchPage(wx.Panel):
 
     def _load_and_show(self, doc: DocumentSearchResult) -> None:
         viewer = self._get_viewer_frame()
-        viewer.show_loading(doc.document_path)
+        # Show/Raise before feeding it content - the viewer's splitter can
+        # leave stale rendering behind if its split state changes before the
+        # top-level window has ever been mapped (a GTK realization quirk).
         viewer.Show()
         viewer.Raise()
+        viewer.show_loading(doc.document_path)
 
         def on_success(text: str) -> None:
             viewer.show_document(doc.document_path, text, doc.matches)

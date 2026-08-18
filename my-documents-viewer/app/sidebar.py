@@ -7,7 +7,6 @@ SIDEBAR_ITEMS = [
     ("Profiles", wx.ART_HELP_SETTINGS),
     ("Documents", wx.ART_FILE_OPEN),
     ("Search", wx.ART_FIND),
-    ("About", wx.ART_INFORMATION),
 ]
 
 
@@ -67,15 +66,12 @@ class Sidebar(wx.Panel):
 
         sizer.AddStretchSpacer()
 
-        self._exit_btn = self._make_button("Exit", wx.ART_QUIT, None)
-        sizer.Add(self._exit_btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
-
         self.SetSizer(sizer)
         self.SetMinSize((self.EXPANDED_WIDTH, -1))
 
         self.select(0)
 
-    def _make_button(self, label: str, art_id: str, page_index: Optional[int]) -> wx.ToggleButton:
+    def _make_button(self, label: str, art_id: str, page_index: int) -> wx.ToggleButton:
         bitmap = wx.ArtProvider.GetBitmap(art_id, wx.ART_BUTTON, (20, 20))
         btn = wx.ToggleButton(self, label=f"  {label}")
         btn.SetBitmap(bitmap)
@@ -83,16 +79,8 @@ class Sidebar(wx.Panel):
         btn.SetBackgroundColour(self.GetBackgroundColour())
         btn.SetForegroundColour(wx.Colour(230, 230, 230))
         btn.SetToolTip(label)
-
-        if page_index is None:
-            btn.Bind(wx.EVT_TOGGLEBUTTON, self._on_exit_clicked)
-        else:
-            btn.Bind(wx.EVT_TOGGLEBUTTON, lambda evt, i=page_index: self._on_button_clicked(i))
-
+        btn.Bind(wx.EVT_TOGGLEBUTTON, lambda evt, i=page_index: self._on_button_clicked(i))
         return btn
-
-    def _on_exit_clicked(self, event: wx.CommandEvent) -> None:
-        self.GetTopLevelParent().Close()
 
     def _on_button_clicked(self, index: int) -> None:
         self.select(index)
@@ -120,7 +108,6 @@ class Sidebar(wx.Panel):
 
         for label, btn in zip(self._labels, self._buttons):
             btn.SetLabel("" if collapsed else f"  {label}")
-        self._exit_btn.SetLabel("" if collapsed else "  Exit")
 
         self.SetMinSize((self.COLLAPSED_WIDTH if collapsed else self.EXPANDED_WIDTH, -1))
         # self.GetParent() is root_panel, whose sizer (root_sizer) owns both

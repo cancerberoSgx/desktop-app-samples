@@ -1,10 +1,10 @@
 import wx
 
+from .about_dialog import AboutDialog
 from .db.connection import get_connection, vector_search_available
 from .db.migrator import run_migrations
 from .db.paths import migrations_dir
 from .documents_page import DocumentsPage
-from .pages import AboutPage
 from .profiles_page import ProfilesPage
 from .repositories import DocumentRepository, ProfileRepository, SettingsRepository
 from .search_page import SearchPage
@@ -20,6 +20,7 @@ class MainFrame(wx.Frame):
         conn = get_connection()
         run_migrations(conn, migrations_dir())
         vector_enabled = vector_search_available(conn)
+        self._vector_enabled = vector_enabled
 
         self.profile_repository = ProfileRepository(conn)
         self.settings_repository = SettingsRepository(conn)
@@ -70,7 +71,6 @@ class MainFrame(wx.Frame):
         self.book.AddPage(self.profiles_page, "Profiles")
         self.book.AddPage(self.documents_page, "Documents")
         self.book.AddPage(self.search_page, "Search")
-        self.book.AddPage(AboutPage(self.book, vector_enabled), "About")
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
 
@@ -159,11 +159,6 @@ class MainFrame(wx.Frame):
         self.Destroy()
 
     def _on_about(self, event: wx.CommandEvent) -> None:
-        wx.MessageBox(
-            "My Documents Viewer\n\n"
-            "Index local text files (.txt, .md) for full-text and vector "
-            "similarity search, grouped by profile.",
-            "About My Documents Viewer",
-            wx.OK | wx.ICON_INFORMATION,
-            self,
-        )
+        dlg = AboutDialog(self, self._vector_enabled)
+        dlg.ShowModal()
+        dlg.Destroy()

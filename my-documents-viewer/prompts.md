@@ -81,6 +81,26 @@ when clicking a document the document's content and chunks are displayed in a se
 p3
 in the documents view chunk highlight color is OK, but remove the highlight color of the non-chunk text, shouldn't be highlighted at all (currently bluish)
 
+p4
+in the documents list, if I double click a document the document opens using the same text view as in search result double click (without chunks)
+
+p5
+remove exit and about options from sidebar
+In menu help->about, complete with more information displaying the home page https://github.com/cancerberoSgx/desktop-app-samples and info about indexing and semantic search, fulltext, hybrid, chat with your docs, and other features
+
+p6
+when a document is opened from the "documents" list, only the document's content should be displayed, not the chunks part since they are always empty for simple document content view (only make sense for search results)
+
+
+# file name setting
+there's a new setting "file name display" which could have these values: full path, file name, file and parent folder (parentFolder/fileName)
+implement a menu File->Settings.. which display the settings dialog which contains the new setting "file name display"  which is a select box with mentioned values
+Everywhere a file name is displayed (in documents or search views) this will be respected but on hover the full path is displayed.
+The default value for this setting is "file name"
+
+
+---
+
 # FUTURE
 
 # fts5 fulltext

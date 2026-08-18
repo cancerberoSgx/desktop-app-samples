@@ -8,9 +8,13 @@ from .models import SearchResult
 # Indicators (Scintilla's mechanism for painting extra highlighting under/
 # over text without touching the document's actual styling) - one per match
 # "source", so a user can tell a full-text hit from a vector-only one at a
-# glance, plus how many total.
+# glance, plus a third one to mark whichever match is currently active.
+# Indicators only ever paint over actual characters, never spill onto blank
+# lines/whitespace the way a native text selection would - see _activate(),
+# which deliberately avoids SetSelection() for exactly that reason.
 INDICATOR_FULLTEXT = 0
 INDICATOR_VECTOR_ONLY = 1
+INDICATOR_ACTIVE = 2
 
 TOC_PREVIEW_LENGTH = 70
 
@@ -81,19 +85,20 @@ class DocumentViewerPanel(wx.Panel):
         outer.Add(self._warning_label, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         self._warning_label.Hide()
 
-        splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
-        splitter.SetMinimumPaneSize(150)
+        self._splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
+        self._splitter.SetMinimumPaneSize(150)
+        self._last_sash = 320
 
-        self._toc = wx.ListCtrl(splitter, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
+        self._toc = wx.ListCtrl(self._splitter, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
         self._toc.InsertColumn(0, "Score", width=70)
         self._toc.InsertColumn(1, "Match", width=170)
         self._toc.InsertColumn(2, "Source", width=70)
 
-        self._stc = stc.StyledTextCtrl(splitter, style=wx.BORDER_SUNKEN)
+        self._stc = stc.StyledTextCtrl(self._splitter, style=wx.BORDER_SUNKEN)
         self._configure_stc()
 
-        splitter.SplitVertically(self._toc, self._stc, 320)
-        outer.Add(splitter, 1, wx.EXPAND)
+        self._splitter.SplitVertically(self._toc, self._stc, self._last_sash)
+        outer.Add(self._splitter, 1, wx.EXPAND)
 
         self.SetSizer(outer)
 
@@ -128,6 +133,11 @@ class DocumentViewerPanel(wx.Panel):
         self._stc.IndicatorSetAlpha(INDICATOR_VECTOR_ONLY, 90)
         self._stc.IndicatorSetUnder(INDICATOR_VECTOR_ONLY, True)
 
+        # Outline only (no fill) - the active match already has a fill from
+        # one of the two indicators above; this just marks which one.
+        self._stc.IndicatorSetStyle(INDICATOR_ACTIVE, stc.STC_INDIC_BOX)
+        self._stc.IndicatorSetForeground(INDICATOR_ACTIVE, wx.Colour(230, 90, 0))
+
     # ------------------------------------------------------------------
     # Public API - see SearchPage._load_and_show for the caller side
     # ------------------------------------------------------------------
@@ -138,6 +148,7 @@ class DocumentViewerPanel(wx.Panel):
         self._match_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
+        self._set_matches_mode(False)
         self._set_text("")
         self._enable_nav(False)
 
@@ -148,6 +159,7 @@ class DocumentViewerPanel(wx.Panel):
         self._match_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
+        self._set_matches_mode(False)
         self._set_text("")
         self._enable_nav(False)
 
@@ -158,15 +170,26 @@ class DocumentViewerPanel(wx.Panel):
         self._match_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
+        self._set_matches_mode(False)
         self._set_text(f"Could not open this document:\n\n{message}")
         self._enable_nav(False)
 
     def show_document(self, document_path: str, text: str, matches: List[SearchResult]) -> None:
         """`matches` should already be sorted by score descending (see
         DocumentSearchResult.matches) - the order the table of contents and
-        prev/next navigation use, so the best-scoring chunk opens first."""
+        prev/next navigation use, so the best-scoring chunk opens first.
+
+        An empty `matches` list means "plain content view" (e.g. opened from
+        the Documents page rather than a search result) - the table of
+        contents and match navigation are hidden entirely rather than shown
+        empty, since they'd never have anything to show."""
         self._matches = matches
         self._path_label.SetLabel(document_path)
+        # Resize the STC (splitting/unsplitting the TOC) before loading the
+        # text into it, not after - word wrap recalculates on resize, and
+        # doing it the other way round briefly wraps the full text at the
+        # old (narrower or wider) width first.
+        self._set_matches_mode(bool(matches))
         self._set_text(text)
 
         clamped = any(match.end_offset > len(text) for match in matches)
@@ -206,13 +229,34 @@ class DocumentViewerPanel(wx.Panel):
             self._warning_label.Hide()
         self.Layout()
 
+    def _set_matches_mode(self, has_matches: bool) -> None:
+        """Show/hide the table of contents and match nav controls - there's
+        nothing useful in them for a plain content view (no matches), so
+        they're hidden outright rather than shown empty/disabled."""
+        self._match_label.Show(has_matches)
+        self._prev_btn.Show(has_matches)
+        self._next_btn.Show(has_matches)
+
+        if has_matches and not self._splitter.IsSplit():
+            self._splitter.SplitVertically(self._toc, self._stc, self._last_sash)
+        elif not has_matches and self._splitter.IsSplit():
+            self._last_sash = self._splitter.GetSashPosition()
+            self._splitter.Unsplit(self._toc)
+
+        self.Layout()
+        # Unsplit()/SplitVertically() can leave stale pixels behind where the
+        # sash/other pane used to be until the next natural repaint - force
+        # one so the switch is clean immediately.
+        self._splitter.Refresh()
+        self._stc.Refresh()
+
     def _enable_nav(self, has_matches: bool) -> None:
         self._prev_btn.Enable(has_matches and self._active_index > 0)
         self._next_btn.Enable(has_matches and self._active_index < len(self._matches) - 1)
 
     def _paint_indicators(self, text: str, matches: List[SearchResult]) -> None:
         length = self._stc.GetTextLength()
-        for indicator in (INDICATOR_FULLTEXT, INDICATOR_VECTOR_ONLY):
+        for indicator in (INDICATOR_FULLTEXT, INDICATOR_VECTOR_ONLY, INDICATOR_ACTIVE):
             self._stc.SetIndicatorCurrent(indicator)
             self._stc.IndicatorClearRange(0, length)
 
@@ -242,7 +286,18 @@ class DocumentViewerPanel(wx.Panel):
         text = self._stc.GetText()
         start = _char_to_byte(text, min(match.start_offset, len(text)))
         end = _char_to_byte(text, min(match.end_offset, len(text)))
-        self._stc.SetSelection(start, end)
+
+        # Deliberately not a native text selection (SetSelection) - that
+        # paints a solid bar across whatever falls in [start, end), including
+        # blank lines with no chunk text on them, which reads as unrelated
+        # text being highlighted. An indicator only ever paints under actual
+        # characters, so it can't bleed onto blank space that way.
+        self._stc.SetIndicatorCurrent(INDICATOR_ACTIVE)
+        self._stc.IndicatorClearRange(0, self._stc.GetTextLength())
+        if end > start:
+            self._stc.IndicatorFillRange(start, end - start)
+
+        self._stc.GotoPos(start)
         self._stc.ScrollRange(start, end)
         self._stc.EnsureCaretVisible()
 

@@ -4,8 +4,10 @@ from typing import Callable, List, Optional
 import wx
 
 from .async_task import AsyncTaskRunner
+from .document_viewer import DocumentViewerFrame
 from .models import Document
 from .repositories import DocumentRepository, IndexRunSummary, ProfileRepository
+from .text_extract import extract_text
 
 FILE_DIALOG_WILDCARD = "Text/Markdown files (*.txt;*.md)|*.txt;*.md|All files (*.*)|*.*"
 
@@ -30,6 +32,13 @@ class DocumentsPage(wx.Panel):
         self._documents: List[Document] = []
         self._on_status = on_status or (lambda text: None)
         self._async = AsyncTaskRunner(self)
+        # Separate from `_async`: opening the content viewer shouldn't be
+        # blocked by (or block) an indexing run in flight on this page.
+        self._viewer_async = AsyncTaskRunner(self)
+        # Lazily created, reused across documents; cleared (see
+        # _on_viewer_closed) if the user closes the window, so the next
+        # double-click opens a fresh one.
+        self._viewer_frame: Optional[DocumentViewerFrame] = None
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Documents"), 0, wx.ALL, 12)
@@ -69,6 +78,7 @@ class DocumentsPage(wx.Panel):
         self._remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
+        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_view_document)
 
         self.reload()
 
@@ -175,6 +185,46 @@ class DocumentsPage(wx.Panel):
             on_success=on_success,
             on_error=on_error,
             disable=buttons,
+        )
+
+    # ------------------------------------------------------------------
+    # View content - same Scintilla-based DocumentViewerFrame the Search
+    # page opens on a result, just with no matches to highlight/list.
+    # ------------------------------------------------------------------
+    def _get_viewer_frame(self) -> DocumentViewerFrame:
+        if self._viewer_frame is None:
+            self._viewer_frame = DocumentViewerFrame(self)
+            self._viewer_frame.Bind(wx.EVT_CLOSE, self._on_viewer_closed)
+        return self._viewer_frame
+
+    def _on_viewer_closed(self, event: wx.CloseEvent) -> None:
+        self._viewer_frame = None
+        event.Skip()
+
+    def _on_view_document(self, event: wx.ListEvent) -> None:
+        index = event.GetIndex()
+        if index < 0 or index >= len(self._documents):
+            return
+        document = self._documents[index]
+
+        viewer = self._get_viewer_frame()
+        # Show/Raise before feeding it content - the viewer's splitter can
+        # leave stale rendering behind if its split state changes before the
+        # top-level window has ever been mapped (a GTK realization quirk).
+        viewer.Show()
+        viewer.Raise()
+        viewer.show_loading(document.path)
+
+        def on_success(text: str) -> None:
+            viewer.show_document(document.path, text, [])
+
+        def on_error(exc: Exception) -> None:
+            viewer.show_error(document.path, str(exc))
+
+        self._viewer_async.run(
+            work=lambda: extract_text(Path(document.path)),
+            on_success=on_success,
+            on_error=on_error,
         )
 
     # ------------------------------------------------------------------
