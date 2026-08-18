@@ -10,6 +10,7 @@ RIGHT_SIDEBAR_COLLAPSED_SETTING_KEY = "right_sidebar_collapsed"
 SHOW_HIDDEN_FILES_SETTING_KEY = "show_hidden_files"
 CONFIRM_DELETE_SETTING_KEY = "confirm_delete"
 SHOW_FILE_EXTENSIONS_SETTING_KEY = "show_file_extensions"
+GLOB_PATTERN_SETTING_KEY = "glob_pattern"
 
 
 class FavoriteRepository:
@@ -140,3 +141,13 @@ class SettingsRepository:
 
     def set_show_file_extensions(self, show: bool) -> None:
         self.set(SHOW_FILE_EXTENSIONS_SETTING_KEY, "1" if show else "0")
+
+    def get_glob_pattern(self) -> Optional[str]:
+        """The right sidebar's Patterns filter, if one is applied - `None`
+        when never set (no pattern applied) or explicitly cleared, same
+        arbitrary-string convention as get_last_folder_path, not the
+        boolean flags above."""
+        return self.get(GLOB_PATTERN_SETTING_KEY)
+
+    def set_glob_pattern(self, pattern: Optional[str]) -> None:
+        self.set(GLOB_PATTERN_SETTING_KEY, pattern)

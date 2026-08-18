@@ -48,6 +48,7 @@ class FolderExplorerPage(wx.Panel):
         show_hidden: bool = False,
         confirm_delete: bool = True,
         show_extensions: bool = True,
+        glob_pattern: Optional[str] = None,
         on_selection_changed: Optional[Callable[[int], None]] = None,
         on_item_count_changed: Optional[Callable[[str], None]] = None,
     ) -> None:
@@ -65,6 +66,12 @@ class FolderExplorerPage(wx.Panel):
         self._show_hidden = show_hidden
         self._confirm_delete = confirm_delete
         self._show_extensions = show_extensions
+        # The right sidebar's Patterns filter - see set_glob_pattern and
+        # FolderTreeCtrl's Glob pattern filter section. Unlike the other
+        # settings above, this one is seeded straight into _list's own
+        # constructor below rather than applied via a later call, since
+        # there's nothing to "apply" yet before the first folder loads.
+        self._glob_pattern = glob_pattern
         # Set by open_folder(..., select_path=...) - the entry (a pasted/typed
         # file path's parent folder was just opened) to select once that
         # folder's listing lands; see _on_folder_loaded.
@@ -149,6 +156,7 @@ class FolderExplorerPage(wx.Panel):
             show_extensions=self._show_extensions,
             on_search_started=self._on_tree_search_started,
             on_quick_search_requested=self.enter_quick_search_mode,
+            glob_pattern=self._glob_pattern,
         )
         outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
@@ -633,10 +641,10 @@ class FolderExplorerPage(wx.Panel):
             return  # the user navigated elsewhere before this landed
         if listing.error is not None:
             self._set_error(listing.error)
-            self._list.set_root_entries([])
+            self._list.set_root_entries([], path)
             return
         self._set_error(None)
-        self._list.set_root_entries(listing.entries)
+        self._list.set_root_entries(listing.entries, path)
         if self._pending_select_path is not None:
             self._list.select_path(self._pending_select_path)
             self._pending_select_path = None
@@ -645,7 +653,7 @@ class FolderExplorerPage(wx.Panel):
 
     def _on_folder_load_error(self, message: str) -> None:
         self._set_error(message)
-        self._list.set_root_entries([])
+        self._list.set_root_entries([], self._current_path or "")
 
     def _on_expand_folder(self, path: str, on_loaded: Callable[[FolderListing], None]) -> None:
         """FolderTreeCtrl's callback for "the user expanded this row, and it
@@ -686,6 +694,20 @@ class FolderExplorerPage(wx.Panel):
         current scroll position are both left untouched."""
         self._show_extensions = show_extensions
         self._list.set_show_extensions(show_extensions)
+
+    def set_glob_pattern(self, pattern: Optional[str]) -> None:
+        """Applies (non-empty `pattern`) or clears (`None`/empty) the right
+        sidebar's Patterns filter (MainFrame._on_apply_pattern) - unlike
+        set_show_hidden, this never reloads the folder: like quick search,
+        it only changes which already-fetched rows FolderTreeCtrl displays,
+        never what's fetched from FileSystemService, so it's cheap to
+        apply on every keystroke's worth of navigation this session (and,
+        since the pattern is persisted, on every future one too). No-op if
+        the value didn't actually change."""
+        if pattern == self._glob_pattern:
+            return
+        self._glob_pattern = pattern
+        self._list.set_glob_pattern(pattern)
 
     # ------------------------------------------------------------------
     # Favorites

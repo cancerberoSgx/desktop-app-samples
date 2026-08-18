@@ -94,13 +94,14 @@ there was nothing else worth a whole screen for it.
 
 A second, independent sidebar on the right of `explorer_page` in
 `MainFrame.root_sizer` - collapsible the same way, and persisted the same
-way, as the left `FavoritesSidebar`, but with no content of its own yet:
-it's the shell future features get added to as their own sections, one at
-a time, the same way `FavoritesSidebar`'s section label/favorites
-list/empty-state are today. A separate class rather than a second mode of
-`FavoritesSidebar`, since whatever eventually lives here has nothing to do
-with favorites - two independent sidebars, not one sidebar wearing two
-hats.
+way, as the left `FavoritesSidebar`. Its first real section, Patterns (a
+glob filter over the folder tree - see the Glob pattern filter section
+below), lives here the same way `FavoritesSidebar`'s favorites
+list/empty-state are one section among several; future features get added
+the same way, one section at a time. A separate class rather than a
+second mode of `FavoritesSidebar`, since whatever lives here has nothing
+to do with favorites - two independent sidebars, not one sidebar wearing
+two hats.
 
 - **Its own setting, independent of the left sidebar's**
   (`SettingsRepository.get_right_sidebar_collapsed`/
@@ -119,6 +120,114 @@ hats.
   "«"/"»", since collapsing/expanding happens towards the opposite screen
   edge. The toggle button itself is aligned left in its row (bordering the
   main content on this side), not right like `FavoritesSidebar`'s.
+
+- **Patterns section**: a `wx.TextCtrl` (`RightSidebar._pattern_input`)
+  plus Apply/Clear buttons - Enter in the box (`wx.TE_PROCESS_ENTER` +
+  `EVT_TEXT_ENTER`) does the same thing Apply does. `RightSidebar` itself
+  never decides what a pattern means or which rows match it - same
+  "report intent, let the caller render/apply" split as
+  `FavoritesSidebar`'s `on_select`/`on_remove`: `on_apply_pattern(text)`
+  fires with the box's current text on Apply/Enter *and* on Clear (an
+  empty string, rather than a separate callback shape) -
+  `MainFrame._on_apply_pattern` is the one place that actually persists it
+  and tells `FolderExplorerPage` to filter with it. `set_pattern` prefills
+  the box (called once at startup with whatever was persisted) via
+  `ChangeValue`, not `SetValue` - there's no `EVT_TEXT` binding here to
+  worry about either way (Apply is always an explicit action, never a
+  live-as-you-type filter the way quick search's box is), but `ChangeValue`
+  is the right one to reach for whenever firing the event would be purely
+  incidental.
+
+### Glob pattern filter (right sidebar's Patterns section, `app/glob_match.py`, `FolderTreeCtrl.set_glob_pattern`)
+
+A second, independent filter over the folder tree - filter by a glob
+pattern (`*.py`, `src/**/*.py`, `node_modules/**/*`) instead of (or
+alongside) quick search's by-name substring filter. Applying a pattern
+(Apply button, or Enter in the Patterns box) re-filters the currently open
+folder's already-loaded top-level listing - no new `FileSystemService`
+call, same "the pattern only changes which already-fetched rows are
+displayed" principle as quick search. **A subfolder's contents are only
+ever matched against the pattern once that subfolder is actually
+expanded** (the human spec's explicit requirement) - `FolderTreeCtrl`'s
+existing lazy-expand machinery already gives this for free, since
+`_filtered_sorted` (see below) is what every row-building call site
+(`_rebuild_all`, `_build_node`, `_on_children_loaded`) goes through
+regardless of *why* it's building a given level.
+
+- **Matched against a path *relative to the currently open folder*, not
+  the whole filesystem** (`FolderTreeCtrl._rel_segments`,
+  `os.path.relpath(entry.path, self._root_path)`) - "src" in a typed
+  pattern always means the top-level `src` folder of whatever's currently
+  open, never an absolute path. `_root_path` is updated on every
+  `set_root_entries` (so "relative to what" stays correct after
+  navigating), but - unlike quick search's words, which reset on every
+  navigation - **the pattern itself deliberately survives navigating to a
+  different folder**: it's a persistent viewing mode the user turns
+  on/off from the sidebar, not a transient search session, so
+  `set_root_entries` never clears `_glob_pattern_segments`. It also
+  survives an app restart: `SettingsRepository.get_glob_pattern`/
+  `set_glob_pattern` (key `glob_pattern`, `None` when never set/cleared -
+  same free-text convention as `get_last_folder_path`, not the boolean
+  flags elsewhere in this class) persist it, and `MainFrame.__init__`
+  seeds it straight into `FolderExplorerPage`'s constructor (which passes
+  it on into `FolderTreeCtrl`'s own constructor - there's nothing to
+  "apply" yet before the first folder even loads) as well as into
+  `RightSidebar.set_pattern`, so both the view and the sidebar's own box
+  come back exactly as they were left.
+
+- **Matching rules live in `app/glob_match.py`, not `FileSystemService`** -
+  pure text/logic with no filesystem I/O of its own, the same reasoning
+  that already keeps `formatting.py` a separate module rather than a
+  `FileSystemService` method. `normalize_pattern` splits a pattern into
+  `"/"`-separated segments, with two rules layered on top of ordinary
+  per-segment globbing (`*`/`?`/`[seq]`, via `fnmatch`, case-insensitively
+  - same convention as quick search): `**` matches zero or more *whole*
+  segments (`full_match`/`could_match_descendant`'s recursive "skip it, or
+  consume one segment and stay on it" pattern - the same semantics as
+  Python's own `glob.glob(pattern, recursive=True)`), and a pattern with
+  no `"/"` at all is implicitly anchored with a leading `"**/"`, so
+  `*.py`/`*foo*` match a name at *any* depth rather than only at the top
+  level - the same convention `.gitignore`/`ripgrep --glob` use for a
+  bare, unslashed pattern.
+
+- **A folder can be kept open as a navigable ancestor from the pattern
+  text alone, with no need for it to have ever been expanded**
+  (`FolderTreeCtrl._glob_reachable` / `glob_match.could_match_descendant`)
+  - this is what lets `src/**/*.py` show `src` itself, still collapsed,
+  the moment the pattern is applied, rather than only ever revealing it
+  once something has already been expanded into visibility by hand (which
+  would make the pattern useless for finding anything not already
+  visible). This is a real, structural difference from quick search's own
+  "keep as ancestor" rule, which can only ever look at children it's
+  already fetched - a glob pattern's reachability needs no loaded content
+  at all, since it's a pure function of the pattern text and the folder's
+  own path.
+
+  - **Only files, not folders, ever get this leniency withheld** -
+    `FolderTreeCtrl._is_kept` (the one combined "should this row be
+    built" predicate both filters funnel through) always requires an
+    actual file to satisfy *every* active filter directly
+    (`_row_self_matches`, a file has no descendants to explore further),
+    but for a *folder*, a glob pattern's own reachability proof decides
+    its fate on its own whenever one is active - even if quick search is
+    *also* active and hasn't (and, being unexpanded, can't yet have)
+    confirmed a name match inside it. The alternative - requiring *both*
+    filters to already have loaded proof before keeping a folder open -
+    would make a folder permanently unreachable the instant a glob
+    pattern is layered on top of quick search, since quick search alone
+    never speculatively opens an unloaded folder to go looking (by
+    original design) - nothing would ever supply that missing proof.
+    Only when *no* glob pattern is active does quick search's own,
+    stricter "loaded and expanded children, recursively" rule apply -
+    the exact same rule as before this feature existed, so quick search
+    used on its own is completely unaffected.
+
+- **No highlighting for glob matches** - unlike quick search's ‹bracketed›
+  substrings, a glob-matched row's Name column is left exactly as-is.
+  Nothing in the spec asked for it, and a glob match is about the whole
+  relative *path*, not a substring of the displayed name, so there's no
+  single obviously-correct span to bracket the way there is for quick
+  search's per-word name matching.
 
 ### Repository pattern
 
@@ -605,26 +714,39 @@ listing.
     node starts each rebuild pass with no wx item until `_build_node`
     actually gives it a fresh one.
 
-  - **Going from a filtered view back to the full listing scrolls the
-    selection back into view** (`set_quick_search`'s `was_active and not
-    words` branch, calling the new `_ensure_selection_visible`) - ending
-    quick search (Escape, or clicking a filtered row, which ends it as a
-    side effect of the click stealing keyboard focus from the search box)
-    always goes through the same `_rebuild_all()` as any other filter
-    change, which always starts drawing from the top same as every other
-    `_rebuild_all` call. Without this, a row that was selected and visible
-    in the short, filtered view - still selected afterward, since
-    `_rebuild_all`'s own `_reselect` already preserves that - could end up
-    scrolled off-screen in the much longer, now-unfiltered listing instead
-    of staying in view, which is exactly what it looked like from a user's
-    side: "the file is still selected but I lost the scroll." Narrower than
+  - **Every `set_quick_search`/`set_glob_pattern` call restores roughly
+    the same scroll position afterward** (`_capture_scroll_anchor`/
+    `_restore_scroll_anchor`) - applying a pattern, narrowing or widening
+    a live quick-search query, and clearing either filter all go through
+    the same `_rebuild_all()`, which always starts drawing from the top
+    same as every other `_rebuild_all` call; without this, a row the user
+    was looking at could end up scrolled off past the top or bottom of a
+    much longer or shorter listing after every single change, which is
+    exactly what it looked like from a user's side: "apply/clear resets
+    the scroll and sends me to the top." Narrower than
     `apply_rename`/`remove_paths`'s own scroll-preservation (which avoid
     `_rebuild_all()`/`DeleteAllItems()` entirely): a full rebuild is
     unavoidable here (see above), so this only re-establishes the scroll
-    position afterward rather than never losing it in the first place -
-    and deliberately only on this one transition (filter cleared while a
-    selection exists), not on every `_rebuild_all()` call (an ordinary
-    re-sort's scroll reset is unchanged, existing behavior).
+    position afterward rather than never losing it in the first place.
+
+    - **The selection is the primary anchor, a snapshot of what was
+      *visible* is the fallback** - `_restore_scroll_anchor` prefers
+      `GetSelections()` (still valid post-rebuild via `_rebuild_all`'s own
+      `_reselect`, if the selected row(s) still match) since a real prior
+      selection is a far more reliable "what was the user looking at"
+      signal than raw position; when nothing was selected at all (e.g.
+      applying a pattern from the sidebar without having clicked
+      anything), it falls back to `_capture_scroll_anchor`'s
+      pre-rebuild snapshot of every then-visible row's path, top-to-
+      bottom, and scrolls to whichever of those is still visible now.
+      This exists at all because `TreeListCtrl` exposes no way to ask
+      "what's at/near the top of the viewport" directly - confirmed by
+      hand-testing: `GetScrollPos`/`GetScrollRange` raise a hard
+      `wxAssertionError` ("this window is not scrollable") on this
+      control, since the underlying native GTK widget's own scrolling
+      isn't wired through wx's generic `wx.Window` scrollbar API at all -
+      so an ordered list of previously-visible paths is the best
+      available substitute, not a pixel-exact one.
 
 - **Highlighting is plain-text bracketing, not color/bold, because this wx
   build's Name column genuinely can't do the latter** - confirmed directly:
@@ -1191,6 +1313,63 @@ unaffected; and a second `MainFrame` built against that same underlying
 connection restores the collapsed state on startup, same as the left
 sidebar already does.
 
+The glob pattern filter's matching rules (`app/glob_match.py`) were
+verified as plain unit tests, no wx needed: `full_match` against
+`src/**/*.py` correctly matches a `.py` file directly inside `src` *and*
+one several folders deeper (`**` consuming zero segments as well as
+several), and correctly rejects both `docs/readme.py` (wrong leading
+literal segment) and `src` itself (the pattern requires something *after*
+`src/`); `node_modules/**/*` matches everything directly inside
+`node_modules` as well as deeper, but not `node_modules` itself; a
+bare, unslashed `*foo*`/`*.py` matches at any depth via the implicit
+leading `**/`. `could_match_descendant` was verified separately:
+`True` for `src` and `src/utils` against `src/**/*.py` (both legitimate,
+still-extendable prefixes), `False` for `docs` (a dead end - the pattern's
+first literal segment can never be satisfied), `True` for `node_modules`
+against `node_modules/**/*`.
+
+End to end, against a real `wx.App`, real temp folders, and a real
+`FolderExplorerPage`/`FolderTreeCtrl`/`RightSidebar`: applying
+`src/**/*.py` left only `src` visible at the top level of a tree also
+containing `node_modules` and `docs`; expanding `src` (via a direct
+`_on_children_loaded` call, the real lazy-expand path) showed only its
+`.py` file and its `utils` subfolder (kept as a navigable ancestor,
+`notes.txt` excluded), and expanding `utils` in turn showed only its own
+matching file - confirming a pattern is only ever calculated for a
+subfolder once it's actually expanded, never eagerly. Applying
+`node_modules/**/*` similarly left only `node_modules` visible at the top
+level, with everything directly inside it (files and folders alike)
+shown once expanded. Applying a bare `*foo*` confirmed the necessary
+trade-off documented above: every top-level folder stayed visible as an
+unconfirmed placeholder (there being no way to rule any of them out
+without looking inside, which the lazy-expand requirement forbids doing
+eagerly), while the one non-matching top-level *file* was correctly
+excluded outright. Clearing the pattern (`None`) restored every row.
+Both filters active together was verified directly against `_is_kept`:
+a file matching quick search's word but not the glob pattern (or vice
+versa) was confirmed excluded (a true AND for leaf results), while the
+folder leading to the one file matching *both* stayed visible and
+expandable purely off the glob pattern's own reachability proof, even
+before quick search had anything loaded to confirm on its own -
+confirming the asymmetric-composition design decision documented above,
+and that it didn't silently make an intended-reachable folder
+unreachable the way requiring loaded proof from *both* filters would
+have (the actual bug this test caught and the redesign fixed).
+
+Through the real `MainFrame`/`RightSidebar` widgets specifically (same
+shared-in-memory-connection, two-`MainFrame`-instances technique as the
+collapse-state verification above): typing a pattern into
+`RightSidebar._pattern_input` and firing a real `EVT_TEXT_ENTER` (Enter)
+applied it and updated the visible tree; the Clear button emptied the box
+and cleared the filter in one step; `MainFrame.settings_repository`
+correctly persisted the applied pattern (and `None` after Clear); and a
+second, freshly-constructed `MainFrame` against that same connection
+restored the pattern into *both* `FolderExplorerPage`'s active filter
+*and* `RightSidebar`'s own input box, matching what was left applied
+before - confirming the "persists across navigation and restarts"
+behavior chosen for this feature (as opposed to quick search's
+transient-session one).
+
 Quick search was verified against a real `wx.App` and real temp folders,
 combining direct calls to `FolderTreeCtrl.set_quick_search`/
 `_visible_nodes_in_order` (a multi-level tree with one subfolder pre-expanded,
@@ -1231,23 +1410,32 @@ The scroll-restoration fix was verified against a real `wx.App` and a real
 alphabetical order, so the full listing's scroll position is meaningful),
 spying on `FolderTreeCtrl.EnsureVisible` itself rather than trying to query
 on-screen visibility directly (`TreeListCtrl` exposes no per-item "is this
-actually visible" call). Confirmed for both reported scenarios: pressing
+actually visible" call, and its generic `wx.Window` scrollbar API - see
+above - is unusable on this control). Confirmed with a row selected: pressing
 Escape with a filtered row selected calls `EnsureVisible` for that row once
 the filter clears and the full listing is rebuilt; and selecting a row while
 filtered, then triggering the same kill-focus path a real click on that row
 takes (stealing focus from the search box), leaves that row both selected
 *and* the target of an `EnsureVisible` call - not just scrolled to the top
-of the now much-longer unfiltered listing. Also confirmed this is scoped to
-exactly the filter-clearing transition: entering a filter (typing narrows
-the list) doesn't call it.
+of the now much-longer unfiltered listing. Confirmed the fallback with
+*nothing* selected at all (`UnselectAll()` before applying/clearing): both
+`set_glob_pattern("*.py")` and clearing it back to `None` call `EnsureVisible`
+for one of the rows that was already visible immediately beforehand, rather
+than always landing on the very first row of whatever's now displayed - and
+that a real prior selection still takes priority over that fallback whenever
+one exists. This behavior was also confirmed to now apply on *every* such
+call, not only the one that clears a filter back to nothing (the gap the
+original, narrower fix left behind) - `set_glob_pattern`/`set_quick_search`
+both restore an anchor on every call that actually changes something.
 
 ## What's next (not built yet)
 
-- The right sidebar (`RightSidebar`) has no actual content yet - just the
-  collapsible shell, per the initial ask ("for now just add it"). Future
-  features go here as their own sections.
-- A file-type column and complex glob-based selection (mentioned in the initial
-  spec as planned future columns/features).
+- The right sidebar (`RightSidebar`) now has its first real section
+  (Patterns, see below) - future features keep going in the same way, one
+  section at a time.
+- A file-type column (mentioned in the initial spec as a planned future
+  column) - the glob-based selection half of that same original ask is now
+  built (see the Glob pattern filter section below).
 - Recursive folder size is now available on demand (Properties dialog), but
   the folder contents tree's own Size column still always reads "-" for a
   folder - showing it there for every visible folder row would mean an

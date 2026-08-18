@@ -80,10 +80,6 @@ remove button "remove from favorites" - leave only as a context menu option as n
 
 
 
-# globs
-we want user to be able to view their files by using a "glob" matching pattern, for example, *.py or node_modules/**/* 
-
-
 
 
 # ctrl-p - easy file filtering
@@ -97,3 +93,25 @@ p2
 it's working fine but sometimes it's ctrl-p is not triggering quick search, for example, if I select a file and then press ctrl-p. From the menu it always works
 
 after I close "quick search" or "keys" mode with esc or Y click one of the filtered files the file list resets and I lost the scroll. The file appear to be still selelected by I lost the vertical scroll
+
+
+
+# FUTURE
+
+
+# globs
+we want user to be able to view their files by using a "glob" matching pattern, for example, *.py or node_modules/**/* 
+in the right sidebar there's a new "patterns" section. 
+user can enter new glob patterns like src/**/*.py, node_modules/**/*, *foo*.  and there's an apply button (or ENTER key on the input)
+When user has a pattern applied the current folder will be refreshed the first time and make sure only files applying to the pattern are displayed. 
+For sub folders tree view, only calculate the subfolder pattern when it's expanded
+
+p2
+apply and clear patterns buttons reset the scroll view and send me to the top, if possible it should still show me more or less the same scroll or files I was seeing if they match the pattern
+p2
+what about cache, calculate all and expand all.
+
+Also in the patterns section there's a "calculate" button. It will recursively get all descendant files of current folder matching the glob pattern. 
+In the bottom bar with "Items" and "selected" there's a new label "pattern match" which display the total number of files matched by pattern in current folder recursively
+Before implementing this, analyze the intention and suggest alternative UX for users to be able to explore a file pattern in a folder.
+

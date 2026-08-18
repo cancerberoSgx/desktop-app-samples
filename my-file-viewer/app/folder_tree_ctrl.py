@@ -5,6 +5,7 @@ from typing import Callable, Iterable, List, Optional
 import wx
 import wx.dataview as dv
 
+from . import glob_match
 from .formatting import format_bytes, format_timestamp
 from .models import FileEntry, FolderListing
 
@@ -133,15 +134,16 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     whitespace-separated word of `query` (case-insensitive), OR - so a
     match stays reachable - if it's a folder that's currently loaded and
     expanded and at least one of its kept children is itself kept
-    (`_quick_search_keep`, recursive). Like type-ahead find, this only
-    ever looks at already-loaded, already-*visible* content (an unexpanded
-    folder's not-yet-fetched children are never searched into) - the same
-    "never touch FileSystemService just to search" rule the rest of this
-    control follows. Filtering happens through the same `_rebuild_all()`
-    every other structural change (a folder reload, a re-sort) already
-    uses, since hiding a row on a `TreeListCtrl` has no cheaper primitive
-    than not building it in the first place - there's no partial-hide call
-    to make instead, unlike `apply_rename`/`remove_paths`'s surgical single-
+    (`_is_kept`, recursive - shared with the glob pattern filter below).
+    Like type-ahead find, this only ever looks at already-loaded,
+    already-*visible* content (an unexpanded folder's not-yet-fetched
+    children are never searched into) - the same "never touch
+    FileSystemService just to search" rule the rest of this control
+    follows. Filtering happens through the same `_rebuild_all()` every
+    other structural change (a folder reload, a re-sort) already uses,
+    since hiding a row on a `TreeListCtrl` has no cheaper primitive than
+    not building it in the first place - there's no partial-hide call to
+    make instead, unlike `apply_rename`/`remove_paths`'s surgical single-
     row edits.
 
     A matched row's Name column brackets every matched substring in
@@ -151,7 +153,33 @@ class FolderTreeCtrl(dv.TreeListCtrl):
     unlike the plain `DataViewTextRenderer` the other columns use, and
     `TreeListCtrl` itself exposes no per-item font/colour/attr call at
     all) - plain-text bracketing is what's actually achievable here
-    without replacing this control's rendering entirely.
+    without replacing this control's rendering entirely. Only quick search
+    highlights this way - the glob pattern filter below doesn't.
+
+    Glob pattern filter (the right sidebar's Patterns section,
+    `set_glob_pattern`): a second, independent filter over the exact same
+    rows, matched against each entry's path *relative to the currently
+    open folder* (`_rel_segments`) rather than just its name - see
+    `app/glob_match.py` for the actual `**`/`*`/`?` matching rules. Unlike
+    quick search, this one *survives navigating to a different folder*
+    (it's a persistent viewing mode the user turns on/off from the
+    sidebar, not a transient search session - `set_root_entries`
+    deliberately never resets it, only `_root_path`) and can prove a
+    folder's worth keeping open as a navigable ancestor from the pattern
+    text alone, with no need for it to have ever been expanded
+    (`_glob_reachable` / `glob_match.could_match_descendant`) - which is
+    what lets a pattern like `src/**/*.py` show `src` itself, still
+    collapsed, right after being applied, rather than only revealing it
+    once something has already been expanded into visibility by hand.
+    Both filters funnel through the same `_is_kept`, so having both active
+    at once composes - but not perfectly symmetrically: an actual *file*
+    (a leaf, nothing to explore further) always has to satisfy both to be
+    shown, but a *folder* being kept open as a navigable ancestor defers
+    entirely to the glob pattern's own reachability proof whenever one is
+    active, even if quick search hasn't (and, being unexpanded, can't yet
+    have) found anything inside it - see `_is_kept`'s own docstring for
+    why the alternative (requiring both filters to already have loaded
+    proof) would make such a folder permanently unreachable instead.
 
     Multi-selection (`TL_MULTIPLE`): Up/Down/PageUp/PageDown/Home/End move a
     single selection same as before; holding Shift with any of them extends
@@ -189,6 +217,7 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         show_extensions: bool = True,
         on_search_started: Optional[Callable[[str], None]] = None,
         on_quick_search_requested: Optional[Callable[[], None]] = None,
+        glob_pattern: Optional[str] = None,
     ) -> None:
         super().__init__(parent, style=dv.TL_DEFAULT_STYLE | dv.TL_MULTIPLE)
         # Required for a sortable column to accept header clicks at all - see
@@ -211,6 +240,18 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         # means "no filter active". See set_quick_search/_quick_search_keep
         # and the class docstring's Quick search section.
         self._quick_search_words: List[str] = []
+        # Right sidebar's Patterns filter, already split into segments by
+        # normalize_pattern - empty means "no filter active". Unlike
+        # quick search, this survives set_root_entries (see there) - it's
+        # a persistent viewing mode the user turns on/off explicitly, not
+        # a transient per-search session. See set_glob_pattern and the
+        # class docstring's Glob pattern filter section.
+        self._glob_pattern_segments: List[str] = glob_match.normalize_pattern(glob_pattern) if glob_pattern else []
+        # The currently open folder's absolute path - every glob match is
+        # against a path *relative to this*, recomputed fresh on every
+        # set_root_entries (navigating elsewhere changes what "relative"
+        # means even though the pattern itself doesn't reset).
+        self._root_path: Optional[str] = None
         self._on_activate_entry = on_activate_entry
         self._on_expand_folder = on_expand_folder
         self._on_selection_changed = on_selection_changed or (lambda count: None)
@@ -229,17 +270,24 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         self.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
         self.Bind(wx.EVT_CHAR, self._on_char)
 
-    def set_root_entries(self, entries: List[FileEntry]) -> None:
+    def set_root_entries(self, entries: List[FileEntry], root_path: str) -> None:
         """Replace the tree with a fresh top-level listing - called whenever
         the *currently open folder itself* changes (navigating up, opening a
-        different folder, ...), as opposed to expanding a row in place."""
+        different folder, ...), as opposed to expanding a row in place.
+        `root_path` is that folder's own absolute path - every glob match
+        is computed relative to it (see _rel_segments), so it has to be
+        updated here even though (unlike quick search) the pattern itself
+        isn't cleared by a navigation."""
         self.clear_search()
         # Defensive, same spirit as clear_search() above: normally
         # FolderExplorerPage._hide_search_box already clears an active
         # quick search before any navigation reaches here (open_folder
         # calls it unconditionally) - this just guarantees a stale filter
         # from a previous folder can never silently apply to a new one.
+        # The glob pattern is deliberately NOT reset here - see
+        # set_glob_pattern's docstring for why it outlives a navigation.
         self._quick_search_words = []
+        self._root_path = root_path
         self._roots = [_Node(e) for e in entries]
         self._rebuild_all()
 
@@ -317,13 +365,16 @@ class FolderTreeCtrl(dv.TreeListCtrl):
                 self._relabel_names(node.children)
 
     # ------------------------------------------------------------------
-    # Quick search (Ctrl+P / File > Quick Search) - see the class
-    # docstring's Quick search section for the overall design. Unlike
-    # type-ahead find (which only ever selects/scrolls), this filters what
-    # _rebuild_all actually builds - _filtered_sorted is the one place
-    # every row-building call site (_rebuild_all, _build_node,
+    # Quick search and the Patterns glob filter - see the class
+    # docstring's Quick search / Glob pattern filter sections for the
+    # overall design of each. Both filter what _rebuild_all actually
+    # builds rather than jumping to a match - _filtered_sorted is the one
+    # place every row-building call site (_rebuild_all, _build_node,
     # _on_children_loaded) and _visible_nodes_in_order now go through
-    # instead of the bare _sorted they used before this feature existed.
+    # instead of the bare _sorted they used before either feature existed,
+    # and _is_kept is the one combined predicate both funnel through, so
+    # having both active at once composes (AND) rather than one silently
+    # overriding the other.
     # ------------------------------------------------------------------
     def set_quick_search(self, query: Optional[str]) -> None:
         """Applies (non-empty `query`) or clears (`None`/blank) the quick
@@ -332,61 +383,172 @@ class FolderTreeCtrl(dv.TreeListCtrl):
         once, and there's no cheaper partial-hide call on a TreeListCtrl
         than simply not building a row in the first place. No-op if the
         effective word list didn't actually change (typing a second space
-        in a row, for instance).
-
-        Going from an active filter back to none - Escape, or clicking a
-        filtered row (which ends quick search as a side effect of the
-        click stealing keyboard focus from the search box, see
-        FolderExplorerPage._on_search_box_kill_focus) - is a rebuild from a
-        short, filtered list back to the full one, which always starts
-        drawing from the top same as any other _rebuild_all call; without
-        _ensure_selection_visible below, whatever row the user was just
-        looking at (still selected - _rebuild_all's own _reselect already
-        preserves that) could end up scrolled off-screen instead of
-        staying in view."""
+        in a row, for instance). See _capture_scroll_anchor/
+        _restore_scroll_anchor for why every call - not just the one that
+        clears the filter entirely - needs a bit more than just the
+        rebuild to avoid jumping back to the top of the list."""
         words = query.lower().split() if query else []
         if words == self._quick_search_words:
             return
-        was_active = bool(self._quick_search_words)
+        anchor = self._capture_scroll_anchor()
         self._quick_search_words = words
         self._rebuild_all()
-        if was_active and not words:
-            self._ensure_selection_visible()
+        self._restore_scroll_anchor(anchor)
 
-    def _ensure_selection_visible(self) -> None:
+    def set_glob_pattern(self, pattern: Optional[str]) -> None:
+        """Applies (non-empty `pattern`) or clears (`None`/blank) the right
+        sidebar's Patterns filter - see the class docstring's Glob pattern
+        filter section. Same _rebuild_all()-based mechanism as
+        set_quick_search (no cheaper partial-hide primitive exists here
+        either), and the same no-op guard when normalize_pattern's output
+        didn't actually change. Deliberately reuses whatever's already
+        cached rather than re-querying FileSystemService - the pattern
+        only changes which already-fetched rows are displayed, same as
+        every other filter in this control."""
+        segments = glob_match.normalize_pattern(pattern) if pattern else []
+        if segments == self._glob_pattern_segments:
+            return
+        anchor = self._capture_scroll_anchor()
+        self._glob_pattern_segments = segments
+        self._rebuild_all()
+        self._restore_scroll_anchor(anchor)
+
+    def _is_filtering_active(self) -> bool:
+        return bool(self._quick_search_words) or bool(self._glob_pattern_segments)
+
+    def _capture_scroll_anchor(self) -> List[str]:
+        """Snapshots the currently-visible rows' paths, top-to-bottom,
+        right before a filter change tears down and rebuilds the tree -
+        the fallback anchor _restore_scroll_anchor uses when nothing is
+        selected. (The primary anchor, the selection itself, needs no
+        snapshot here: _rebuild_all's own _reselect already carries a
+        still-matching selection across the rebuild on its own, so a live
+        GetSelections() call afterward is enough - see
+        _restore_scroll_anchor.)
+
+        This exists at all because TreeListCtrl exposes no way to ask
+        "what's at/near the top of the visible viewport" directly -
+        confirmed by hand-testing: GetScrollPos/GetScrollRange raise a
+        hard `wxAssertionError` ("this window is not scrollable") on this
+        control, since the underlying native GTK widget's own scrolling
+        isn't wired through wx's generic wx.Window scrollbar API at all.
+        An ordered list of previously-visible paths is the best available
+        substitute - not pixel-exact, but enough to land back on
+        approximately the same rows rather than always snapping to the
+        top of a much longer (or shorter) list after every filter
+        change."""
+        return [node.entry.path for node in self._visible_nodes_in_order()]
+
+    def _restore_scroll_anchor(self, previously_visible_paths: List[str]) -> None:
+        """Scrolls back to roughly where `previously_visible_paths`
+        (captured by _capture_scroll_anchor just before the rebuild) was -
+        a best-effort approximation, not an exact restoration (see that
+        method's docstring for why an exact one isn't achievable here).
+        Prefers the current selection when there is one - a real prior
+        selection is a far more reliable "what was the user looking at"
+        signal than position alone, and _rebuild_all's own _reselect
+        already keeps a still-matching selection selected across the
+        rebuild for exactly this to build on. Falls back to the first
+        previously-visible row (top-to-bottom) that's still visible now,
+        for when nothing was selected at all - e.g. applying or clearing
+        a Patterns filter without having clicked anything first."""
         selections = self.GetSelections()
         if selections:
             self.EnsureVisible(selections[0])
+            return
+        node_by_path = {node.entry.path: node for node in self._visible_nodes_in_order()}
+        for path in previously_visible_paths:
+            node = node_by_path.get(path)
+            if node is not None and node.wx_item is not None:
+                self.EnsureVisible(node.wx_item)
+                return
+
+    def _rel_segments(self, node: "_Node") -> List[str]:
+        """`node`'s path relative to the currently open folder
+        (`_root_path`), split into glob segments - "/" throughout
+        regardless of platform, since a pattern is always typed with "/"
+        (the same convention .gitignore uses on every OS)."""
+        rel = os.path.relpath(node.entry.path, self._root_path)
+        return rel.replace(os.sep, "/").split("/")
 
     def _name_matches_quick_search(self, entry: FileEntry) -> bool:
         lname = entry.name.lower()
         return any(word in lname for word in self._quick_search_words)
 
-    def _quick_search_keep(self, node: "_Node") -> bool:
-        """Only ever called while a quick search is active (see
-        _filtered_sorted) - True if `node` itself matches, or (for an
-        already-loaded, already-expanded folder only - never descending
-        into unloaded/collapsed content any more than type-ahead find's
-        own _visible_nodes_in_order does) at least one of its children is
-        itself kept. A folder kept only because of a descendant match is
-        never forced open: it's only reachable this way if it was already
-        expanded, since an unexpanded folder's children are never
-        considered in the first place."""
-        if self._name_matches_quick_search(node.entry):
+    def _row_self_matches(self, node: "_Node") -> bool:
+        """Whether `node` itself (not by way of some descendant) satisfies
+        every currently-active filter - both must agree when both are
+        active, same AND as the rest of this app's multi-criteria checks."""
+        if self._quick_search_words and not self._name_matches_quick_search(node.entry):
+            return False
+        if self._glob_pattern_segments:
+            rel_segments = self._rel_segments(node)
+            if not glob_match.full_match(rel_segments, self._glob_pattern_segments):
+                return False
+        return True
+
+    def _glob_reachable(self, node: "_Node") -> bool:
+        """True unconditionally when no pattern is active. Otherwise, pure
+        text: whether `node`'s own path could still be a prefix of
+        something the pattern matches, needing no loaded children at all
+        - see glob_match.could_match_descendant's docstring for why."""
+        if not self._glob_pattern_segments:
             return True
-        if node.entry.is_dir and node.loaded and not node.load_error and node.expanded:
-            return any(self._quick_search_keep(child) for child in node.children)
-        return False
+        return glob_match.could_match_descendant(self._rel_segments(node), self._glob_pattern_segments)
+
+    def _is_kept(self, node: "_Node") -> bool:
+        """The one combined "should this row be built" predicate every
+        row-building call site goes through (via _filtered_sorted) - True
+        if `node` itself matches every active filter (_row_self_matches),
+        or (for a folder only) it's still worth keeping open as a
+        navigable ancestor of a match that could be lower down.
+
+        The two filters' ancestor rules differ, and deliberately don't
+        combine symmetrically: a glob pattern's reachability is a pure
+        function of the pattern text and the folder's own path (see
+        _glob_reachable), strong enough on its own to keep a folder open
+        and navigable with no loaded content at all - so whenever a glob
+        pattern is active, that alone decides a folder's fate, *even if*
+        quick search is also active and hasn't (and can't yet have)
+        confirmed a name match inside it. The alternative - requiring
+        *both* filters to already have loaded proof - would make a
+        folder that only quick search's own name doesn't match
+        permanently unreachable the moment a glob pattern is layered on
+        top, since there'd be no way to ever expand into it to look:
+        quick search alone never speculatively opens an unloaded folder
+        (see below), so nothing would ever supply that proof. Only
+        without any glob pattern does quick search's own, stricter
+        "loaded and expanded children, recursively" rule apply - the
+        exact same rule as before the glob filter existed, so having only
+        quick search active is completely unaffected by any of this.
+
+        Either way, a *file* (no descendants to explore) is never granted
+        this leniency - _row_self_matches alone decides it, so the actual
+        leaf results a user sees are still a true match-both-filters AND,
+        even though the folders leading to them may be shown a little
+        more liberally than that to keep them reachable at all."""
+        if not self._is_filtering_active():
+            return True
+        if self._row_self_matches(node):
+            return True
+        if not node.entry.is_dir:
+            return False
+        if self._glob_pattern_segments:
+            return self._glob_reachable(node)
+        if not (node.loaded and not node.load_error and node.expanded):
+            return False  # quick search needs loaded content to confirm a match with
+        return any(self._is_kept(child) for child in node.children)
 
     def _filtered_sorted(self, nodes: List[_Node]) -> List[_Node]:
-        """_sorted(), further dropping whatever the active quick search
-        filter excludes - a plain pass-through to _sorted when no quick
-        search is active, so switching a row-building call site from
-        _sorted to this one never changes behavior outside quick search."""
+        """_sorted(), further dropping whatever the active filter(s)
+        exclude - a plain pass-through to _sorted when neither quick
+        search nor a glob pattern is active, so switching a row-building
+        call site from _sorted to this one never changes behavior outside
+        either feature."""
         rows = self._sorted(nodes)
-        if not self._quick_search_words:
+        if not self._is_filtering_active():
             return rows
-        return [node for node in rows if self._quick_search_keep(node)]
+        return [node for node in rows if self._is_kept(node)]
 
     def _highlighted_name(self, name: str) -> str:
         """Brackets every substring of `name` matching one of

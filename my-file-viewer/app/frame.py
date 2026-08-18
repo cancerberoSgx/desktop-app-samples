@@ -76,6 +76,7 @@ class MainFrame(wx.Frame):
             show_hidden=self.settings_repository.get_show_hidden_files(),
             confirm_delete=self.settings_repository.get_confirm_delete(),
             show_extensions=self.settings_repository.get_show_file_extensions(),
+            glob_pattern=self.settings_repository.get_glob_pattern(),
             on_selection_changed=self._on_selection_changed,
             on_item_count_changed=self._on_item_count_changed,
         )
@@ -83,6 +84,7 @@ class MainFrame(wx.Frame):
 
         self.right_sidebar = RightSidebar(
             root_panel,
+            on_apply_pattern=self._on_apply_pattern,
             on_toggle_collapsed=self._on_right_sidebar_toggle_collapsed,
         )
         root_sizer.Add(self.right_sidebar, 0, wx.EXPAND)
@@ -94,6 +96,7 @@ class MainFrame(wx.Frame):
             self.sidebar.set_collapsed(True)
         if self.settings_repository.get_right_sidebar_collapsed():
             self.right_sidebar.set_collapsed(True)
+        self.right_sidebar.set_pattern(self.settings_repository.get_glob_pattern() or "")
 
         self.Centre()
         self.Bind(wx.EVT_CLOSE, self._on_close)
@@ -199,6 +202,16 @@ class MainFrame(wx.Frame):
 
     def _on_right_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
         self.settings_repository.set_right_sidebar_collapsed(collapsed)
+
+    def _on_apply_pattern(self, pattern: str) -> None:
+        """RightSidebar's Patterns section - Apply/Enter or Clear, both
+        funnel through this one callback (see RightSidebar's docstring).
+        An empty/whitespace-only pattern is stored and applied as `None`
+        ("no pattern"), same "blank means cleared" convention
+        get_last_folder_path already uses for its own free-text setting."""
+        normalized = pattern.strip() or None
+        self.settings_repository.set_glob_pattern(normalized)
+        self.explorer_page.set_glob_pattern(normalized)
 
     def _on_item_count_changed(self, text: str) -> None:
         self.SetStatusText(text, 1)
