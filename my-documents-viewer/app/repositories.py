@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -497,6 +498,7 @@ class DocumentRepository:
         cleanup" below), so a shrinking source file doesn't accumulate
         permanent orphans.
         """
+        print(f"[import_data_file] start: path={path} profile={profile.name!r} embed={embed} force={force}")
         summary = IndexRunSummary()
         path_str = str(path.resolve())
         file_bytes = path.read_bytes()
@@ -513,10 +515,13 @@ class DocumentRepository:
             and existing_container["content_hash"] == file_hash
         )
         if unchanged and not force:
+            print("[import_data_file] container unchanged since last import and force=False - skipping entirely")
             summary.skipped += 1
             return summary
 
+        print("[import_data_file] parsing records...")
         records = read_records(path)
+        print(f"[import_data_file] parsed {len(records)} record(s)")
         container_properties = {
             "format": path.suffix.lower().lstrip("."),
             "content_columns": mapping.content_columns,
@@ -548,13 +553,18 @@ class DocumentRepository:
             )
             container_id = cursor.lastrowid
         self._conn.commit()
+        print(f"[import_data_file] container document id={container_id} ready")
 
         # Vector embedding needs an actual vec0 table to write into -
         # silently degrade to FTS-only if this build/profile can't have one,
         # same fallback DocumentRepository already applies everywhere else.
         embed = embed and self._vector_enabled
+        if embed:
+            print(f"[import_data_file] embedding enabled - resolving backend {profile.embedding_backend!r} / model {profile.embedding_model!r}")
         vec_table = self._ensure_vec_table(profile) if embed else None
         backend = get_backend(profile) if embed else None
+        if embed:
+            print("[import_data_file] embedding backend ready")
 
         existing_records = {
             row["row_key"]: row
@@ -565,6 +575,16 @@ class DocumentRepository:
         # across every record before a single batched embedding pass below,
         # rather than one embed() call per row.
         pending_chunks: List[Tuple[int, int, str]] = []
+        # Which record ids have already had their chunks queued into
+        # pending_chunks this run - a within-file duplicate row_key (see
+        # "duplicates an earlier row" above) resolves to the SAME record on
+        # its second occurrence, which would otherwise queue that record's
+        # chunks a second time (once when the first occurrence created/
+        # updated it, again when the second occurrence's "unchanged, but
+        # needs embedding" check independently decided to queue it) -
+        # producing a duplicate (record_id, chunk_id, ...) entry that made
+        # _batch_embed INSERT the same rowid into vec0 twice.
+        queued_record_ids: Set[int] = set()
 
         total = len(records)
         for position, record in enumerate(records, start=1):
@@ -572,6 +592,19 @@ class DocumentRepository:
                 on_progress(position, total, path.name)
 
             row_key = resolve_row_key(record, mapping)
+            if row_key in seen_row_keys:
+                # Two rows in *this same file* resolved to the same row_key -
+                # either a duplicate id-column value the mapping dialog's
+                # validation somehow didn't catch, or (when no id column was
+                # chosen) two rows that are identical across every column,
+                # since resolve_row_key then hashes the whole row. Without
+                # this check, existing_records (a snapshot taken once before
+                # this loop started) still wouldn't know about the first
+                # occurrence's just-inserted row, and the second occurrence's
+                # INSERT would hit idx_documents_row_key's UNIQUE constraint.
+                # Last occurrence wins, same as a plain dict/CSV would behave.
+                print(f"[import_data_file] row {position}/{total} row_key={row_key!r} duplicates an earlier "
+                      f"row in this same file - the later occurrence wins")
             seen_row_keys.add(row_key)
             content_text = build_record_text(record, mapping)
             content_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
@@ -579,16 +612,26 @@ class DocumentRepository:
 
             existing_record = existing_records.get(row_key)
             content_changed = existing_record is None or existing_record["content_hash"] != content_hash
+            print(f"[import_data_file] row {position}/{total} row_key={row_key!r} "
+                  f"{'new' if existing_record is None else ('changed' if content_changed else 'unchanged')}")
 
             if not content_changed:
                 summary.records_skipped += 1
                 # Content is unchanged, but it may still need (re)embedding -
                 # e.g. it was imported with embed=False, or the profile's
                 # embedding backend/model has changed since it was embedded.
-                if embed and (
-                    existing_record["embedding_backend"] != profile.embedding_backend
-                    or existing_record["embedding_model"] != profile.embedding_model
+                # `existing_record["id"] not in queued_record_ids` guards
+                # against a within-file duplicate row_key queueing the same
+                # record's chunks twice (see queued_record_ids' comment).
+                if (
+                    embed
+                    and existing_record["id"] not in queued_record_ids
+                    and (
+                        existing_record["embedding_backend"] != profile.embedding_backend
+                        or existing_record["embedding_model"] != profile.embedding_model
+                    )
                 ):
+                    queued_record_ids.add(existing_record["id"])
                     for chunk_row in self._conn.execute(
                         "SELECT id, text FROM chunks WHERE document_id = ?", (existing_record["id"],)
                     ):
@@ -596,6 +639,7 @@ class DocumentRepository:
                 continue
 
             text_chunks = chunk_text(content_text, chunk_size=profile.chunk_size)
+            print(f"[import_data_file] row {position}/{total} -> {len(text_chunks)} chunk(s)")
 
             if existing_record is not None:
                 record_id = existing_record["id"]
@@ -638,6 +682,20 @@ class DocumentRepository:
                 summary.records_created += 1
             self._conn.commit()
 
+            # Keep the in-run snapshot in sync with what's now actually in
+            # the database - required for the duplicate-row_key case above
+            # (the second occurrence must see the first's newly-inserted
+            # row as "existing", not re-attempt an INSERT), and harmless
+            # otherwise. embedding_backend/model are cleared here since this
+            # record's chunks were just (re)created and have no embedding
+            # yet - _batch_embed stamps the real values back on afterwards.
+            existing_records[row_key] = {
+                "id": record_id,
+                "content_hash": content_hash,
+                "embedding_backend": None,
+                "embedding_model": None,
+            }
+
             chunk_ids = []
             for chunk in text_chunks:
                 cursor = self._conn.execute(
@@ -651,6 +709,7 @@ class DocumentRepository:
             self._conn.commit()
 
             if embed:
+                queued_record_ids.add(record_id)
                 pending_chunks.extend(
                     (record_id, chunk_id, chunk.text) for chunk_id, chunk in zip(chunk_ids, text_chunks)
                 )
@@ -661,12 +720,17 @@ class DocumentRepository:
         # permanent orphans.
         for row_key, stale_row in existing_records.items():
             if row_key not in seen_row_keys:
+                print(f"[import_data_file] removing stale row_key={row_key!r} (document id={stale_row['id']})")
                 self.remove(stale_row["id"])
                 summary.records_removed += 1
 
         if embed and pending_chunks:
+            print(f"[import_data_file] {len(pending_chunks)} chunk(s) pending embedding - starting batch embed")
             summary.embedded_count = self._batch_embed(profile, backend, vec_table, pending_chunks, on_progress)
+        else:
+            print(f"[import_data_file] no embedding needed this run (embed={embed}, pending_chunks={len(pending_chunks)})")
 
+        print(f"[import_data_file] done: {summary}")
         summary.indexed += 1
         return summary
 
@@ -683,7 +747,9 @@ class DocumentRepository:
         since-changed profile config. Mirrors the same staleness check
         index_paths already relies on for plain files - no extra flag
         needed."""
+        print(f"[embed_records] start: container_id={container_id} profile={profile.name!r}")
         if not self._vector_enabled:
+            print("[embed_records] vector search unavailable on this build - nothing to do")
             return 0
         vec_table = self._ensure_vec_table(profile)
         backend = get_backend(profile)
@@ -696,6 +762,7 @@ class DocumentRepository:
             """,
             (container_id, KIND_RECORD, profile.embedding_backend, profile.embedding_model),
         ).fetchall()
+        print(f"[embed_records] {len(stale_records)} record(s) need (re)embedding")
 
         pending_chunks: List[Tuple[int, int, str]] = []
         for row in stale_records:
@@ -703,6 +770,7 @@ class DocumentRepository:
                 pending_chunks.append((row["id"], chunk_row["id"], chunk_row["text"]))
 
         if not pending_chunks:
+            print("[embed_records] nothing pending - done")
             return 0
         return self._batch_embed(profile, backend, vec_table, pending_chunks, on_progress)
 
@@ -723,10 +791,29 @@ class DocumentRepository:
         one place a multi-minute paid-API embed run needs a real progress
         signal rather than a single static status string."""
         total = len(pending_chunks)
+        num_batches = (total + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
+        print(f"[_batch_embed] {total} chunk(s) to embed in {num_batches} batch(es) of up to {EMBED_BATCH_SIZE}")
         embedded_record_ids: Set[int] = set()
-        for start in range(0, total, EMBED_BATCH_SIZE):
+        for batch_num, start in enumerate(range(0, total, EMBED_BATCH_SIZE), start=1):
             batch = pending_chunks[start : start + EMBED_BATCH_SIZE]
+            print(f"[_batch_embed] batch {batch_num}/{num_batches}: calling backend.embed() on {len(batch)} text(s)...")
+            batch_start = time.monotonic()
+            # First call into a FastEmbedBackend lazy-loads (and, on a
+            # machine without the model cached yet, DOWNLOADS) the ONNX
+            # model - this is the one step in the whole import pipeline
+            # that can legitimately take a long time (or hang/fail if
+            # offline) with no other visible progress; hence the explicit
+            # before/after timing print here.
             vectors = backend.embed([text for _record_id, _chunk_id, text in batch])
+            print(f"[_batch_embed] batch {batch_num}/{num_batches}: backend.embed() returned "
+                  f"{len(vectors)} vector(s) in {time.monotonic() - batch_start:.2f}s")
+            # Defense in depth: a chunk_id already having a vec0 row here
+            # would otherwise crash the whole run with "UNIQUE constraint
+            # failed ... primary key" (vec0 doesn't honor INSERT OR REPLACE -
+            # confirmed it still raises). Callers are expected not to queue
+            # an already-embedded chunk twice in the same run, but deleting
+            # first makes this step idempotent regardless.
+            self._delete_vec_rows(profile.id, [chunk_id for _record_id, chunk_id, _text in batch])
             for (record_id, chunk_id, _text), vector in zip(batch, vectors):
                 self._conn.execute(
                     f"INSERT INTO {vec_table} (rowid, embedding) VALUES (?, ?)",
@@ -744,6 +831,7 @@ class DocumentRepository:
                 (profile.embedding_backend, profile.embedding_model, *embedded_record_ids),
             )
             self._conn.commit()
+        print(f"[_batch_embed] done: {len(embedded_record_ids)} record(s) embedded")
         return len(embedded_record_ids)
 
     # ------------------------------------------------------------------

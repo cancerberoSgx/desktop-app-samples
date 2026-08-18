@@ -214,6 +214,28 @@ class DocumentsPage(wx.Panel):
             self._progress_gauge.SetRange(total)
             self._progress_gauge.SetValue(min(done, total))
 
+    def _run_async(self, **kwargs) -> None:
+        """Defer to the *next* event-loop iteration before calling
+        self._async.run(**kwargs).
+
+        AsyncTaskRunner only clears its busy flag *after* the finished run's
+        on_success/on_done callbacks have returned (see
+        async_task.AsyncTaskRunner._consumer's `finally: self._busy =
+        False`, which runs after on_done()). Several flows here start a new
+        run from *inside* a previous run's on_success/on_done - e.g. the
+        preview parse's on_success opening the mapping dialog and, once
+        confirmed, immediately starting the actual import; or _run_steps
+        advancing to its next queued step from on_done_extra. Calling
+        self._async.run() directly at that point would see _busy still True
+        and be silently dropped (AsyncTaskRunner's documented behavior for
+        an overlapping call) - which looked exactly like "stuck on
+        Importing..." forever, since nothing was left to ever clear that
+        status label. wx.CallAfter here queues the run for the next
+        iteration of the event loop, by which point the previous run's
+        _consumer (including its `finally`) has fully returned."""
+        print(f"[documents_page] scheduling async run (busy={self._async.is_busy()})")
+        wx.CallAfter(self._async.run, **kwargs)
+
     # ------------------------------------------------------------------
     # Add / index plain files
     # ------------------------------------------------------------------
@@ -311,7 +333,7 @@ class DocumentsPage(wx.Panel):
         self._progress_gauge.SetValue(0)
         self._progress_gauge.Show()
         self.Layout()
-        self._async.run(
+        self._run_async(
             work=lambda: self._repository.index_paths(profile, paths, on_progress=on_progress, force=force),
             on_success=on_success,
             on_error=on_error,
@@ -337,21 +359,24 @@ class DocumentsPage(wx.Panel):
             return
         path = Path(dlg.GetPath())
         dlg.Destroy()
+        print(f"[documents_page] _on_import_data_file: chosen path={path}")
 
         self._status_label.SetLabel(f"Reading {path.name}...")
 
         def on_success(file_preview: DataFilePreview) -> None:
+            print(f"[documents_page] preview succeeded: {file_preview.row_count} row(s) - opening mapping dialog")
             self._status_label.SetLabel("")
             self._open_mapping_dialog(profile, path, file_preview)
 
         def on_error(exc: Exception) -> None:
+            print(f"[documents_page] preview FAILED: {exc!r}")
             self._status_label.SetLabel("")
             wx.MessageBox(f"Could not read {path.name}:\n\n{exc}", "Import error", wx.OK | wx.ICON_ERROR, self)
 
         # Parsing (through AsyncTaskRunner, not the UI thread) - row count
         # needs a full parse, which shouldn't stall the UI just to populate
         # the mapping dialog for a large file.
-        self._async.run(
+        self._run_async(
             work=lambda: preview_data_file(path),
             on_success=on_success,
             on_error=on_error,
@@ -360,9 +385,13 @@ class DocumentsPage(wx.Panel):
 
     def _open_mapping_dialog(self, profile, path: Path, file_preview: DataFilePreview) -> None:
         dlg = ImportMappingDialog(self, path, file_preview)
-        if dlg.ShowModal() == wx.ID_OK:
+        result = dlg.ShowModal()
+        print(f"[documents_page] mapping dialog closed with {'OK' if result == wx.ID_OK else 'Cancel'}")
+        if result == wx.ID_OK:
             mapping = dlg.get_mapping()
             dlg.Destroy()
+            print(f"[documents_page] mapping: content_columns={mapping.content_columns} "
+                  f"id_column={mapping.id_column} title_column={mapping.title_column}")
             self._decide_embedding_and_import(profile, path, mapping, file_preview.row_count, force=False)
         else:
             dlg.Destroy()
@@ -377,15 +406,18 @@ class DocumentsPage(wx.Panel):
         on_done_extra: Optional[Callable[[], None]] = None,
     ) -> None:
         if not self._repository.vector_enabled:
+            print("[documents_page] vector search unavailable - importing FTS-only")
             self._start_import(profile, path, mapping, embed=False, force=force, on_done_extra=on_done_extra)
             return
 
         if profile.embedding_backend == "fastembed":
             # Local/free - only a time cost, communicated by the progress
             # bar, so no consent prompt is needed even for a large import.
+            print("[documents_page] fastembed backend - auto-embedding without a consent prompt")
             self._start_import(profile, path, mapping, embed=True, force=force, on_done_extra=on_done_extra)
             return
 
+        print(f"[documents_page] {profile.embedding_backend} backend - asking for embedding consent")
         dlg = wx.MessageDialog(
             self,
             f"This will send {row_count} row(s) to {profile.embedding_backend} for embedding "
@@ -398,6 +430,7 @@ class DocumentsPage(wx.Panel):
         dlg.SetYesNoCancelLabels("Generate embeddings now", "Full-text only for now", "Cancel")
         choice = dlg.ShowModal()
         dlg.Destroy()
+        print(f"[documents_page] consent dialog choice: {choice} (YES={wx.ID_YES} NO={wx.ID_NO} CANCEL={wx.ID_CANCEL})")
 
         if choice == wx.ID_CANCEL:
             if on_done_extra:
@@ -433,11 +466,15 @@ class DocumentsPage(wx.Panel):
         force: bool = False,
         on_done_extra: Optional[Callable[[], None]] = None,
     ) -> None:
+        print(f"[documents_page] _start_import: path={path} embed={embed} force={force}")
+
         def on_progress(done: int, total: int, label: str) -> None:
+            print(f"[documents_page] on_progress: {done}/{total} ({label})")
             text = f"Embedding {done}/{total}..." if label == "embedding" else f"Importing {done}/{total} row(s)..."
             wx.CallAfter(self._update_progress, done, total, text)
 
         def on_success(summary: IndexRunSummary) -> None:
+            print(f"[documents_page] import on_success: {summary}")
             self.reload()
             if summary.skipped and not summary.records_created and not summary.records_updated:
                 message = f'"{path.name}" is unchanged since its last import - skipped.'
@@ -453,10 +490,12 @@ class DocumentsPage(wx.Panel):
             self._on_status(f'Imported "{path.name}" into profile "{profile.name}"')
 
         def on_error(exc: Exception) -> None:
+            print(f"[documents_page] import on_error: {exc!r}")
             self._status_label.SetLabel("Import failed.")
             wx.MessageBox(f"Import failed:\n\n{exc}", "Import error", wx.OK | wx.ICON_ERROR, self)
 
         def on_done() -> None:
+            print("[documents_page] import on_done")
             self._progress_gauge.Hide()
             self.Layout()
             if on_done_extra:
@@ -466,7 +505,7 @@ class DocumentsPage(wx.Panel):
         self._progress_gauge.SetValue(0)
         self._progress_gauge.Show()
         self.Layout()
-        self._async.run(
+        self._run_async(
             work=lambda: self._repository.import_data_file(
                 profile, path, mapping, embed=embed, on_progress=on_progress, force=force
             ),
@@ -508,7 +547,7 @@ class DocumentsPage(wx.Panel):
         self._progress_gauge.SetValue(0)
         self._progress_gauge.Show()
         self.Layout()
-        self._async.run(
+        self._run_async(
             work=lambda: self._repository.embed_records(profile, document.id, on_progress=on_progress),
             on_success=on_success,
             on_error=on_error,

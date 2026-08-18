@@ -1,12 +1,13 @@
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 import wx
+import wx.dataview as dv
 
 from .async_task import AsyncTaskRunner
 from .document_viewer import DocumentViewerFrame
-from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_document_label
-from .list_ctrl_utils import bind_hover_path_tooltip
-from .models import KIND_CONTAINER, KIND_RECORD, DocumentSearchResult
+from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_document_label, format_record_short_label
+from .models import KIND_CONTAINER, KIND_RECORD, Document, DocumentSearchResult
 from .repositories import DocumentRepository, ProfileRepository, group_by_document
 
 MODE_LABELS = [
@@ -16,17 +17,41 @@ MODE_LABELS = [
 ]
 
 
+@dataclass
+class SearchResultGroup:
+    """One top-level row in the results tree - either a plain file that
+    itself matched (`self_result` set, no `children`), or a container that
+    has no content of its own but whose record children matched (`children`
+    populated, `self_result` None). `score`/`match_count`/`best_snippet` are
+    the group's own values for a file, or aggregated from its best-scoring
+    child for a container - same "ordered by best chunk's score" philosophy
+    repositories.group_by_document already uses for individual documents."""
+
+    top_document: Document
+    score: float
+    match_count: int
+    best_snippet: str
+    self_result: Optional[DocumentSearchResult] = None
+    children: List[Tuple[Document, DocumentSearchResult]] = field(default_factory=list)
+
+
 class SearchPage(wx.Panel):
     """Search the active profile's indexed documents: hybrid (full-text +
     vector, blended via Reciprocal Rank Fusion), full-text-only, or
     vector-only.
 
-    Results are grouped one row per document (see repositories.
-    group_by_document) rather than one row per matching chunk - double-
-    clicking (or pressing Enter on) a result opens its full text in a
-    separate DocumentViewerFrame window, which highlights every matching
-    chunk and offers a table of contents, sorted by score, to jump between
-    them."""
+    Results are shown as a tree (wx.dataview.TreeListCtrl), not a flat list:
+    a plain file that matched is its own top-level row; a container whose
+    records matched (see app/data_import.py) instead shows the container as
+    an expandable top-level row, with each matching record nested under it
+    as its own scored row (see SearchResultGroup/_build_result_groups) - the
+    same parent/child shape DocumentsPage's own tree uses for browsing, just
+    built eagerly from the (already small) result set rather than lazily
+    from the database. Double-clicking (or pressing Enter on) a file or
+    record row opens its full text in a separate DocumentViewerFrame window,
+    which highlights every matching chunk and offers a table of contents,
+    sorted by score, to jump between them; a container row has no content of
+    its own to open - double-clicking it just expands/collapses it."""
 
     def __init__(
         self,
@@ -41,7 +66,7 @@ class SearchPage(wx.Panel):
         self._profile_repository = profile_repository
         self._profile_id = profile_id
         self._file_name_display = file_name_display
-        self._results: List[DocumentSearchResult] = []
+        self._results: List[SearchResultGroup] = []
         self._async = AsyncTaskRunner(self)
         # Separate from `_async`: loading a document's full text for preview
         # can happen while a search itself might still be settling, and
@@ -74,12 +99,16 @@ class SearchPage(wx.Panel):
         if not self._repository.vector_enabled:
             self._mode_radio.EnableItem(2, False)  # "Vector only" (index per MODE_LABELS: hybrid=0, fulltext=1, vector=2)
 
-        self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
-        self._list.InsertColumn(0, "Score", width=80)
-        self._list.InsertColumn(1, "Document", width=340)
-        self._list.InsertColumn(2, "Matches", width=70)
-        self._list.InsertColumn(3, "Best snippet", width=380)
-        outer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        # Column 0 carries the tree's hierarchy (indentation/expand arrows -
+        # TreeListCtrl always shows those on its first column), so "Document"
+        # goes there instead of "Score" the way the old flat wx.ListCtrl had
+        # it - same reordering DocumentsPage's own tree already settled on.
+        self._tree = dv.TreeListCtrl(self, style=dv.TL_DEFAULT_STYLE | wx.BORDER_SUNKEN)
+        self._tree.AppendColumn("Document", width=340)
+        self._tree.AppendColumn("Score", width=80)
+        self._tree.AppendColumn("Matches", width=70)
+        self._tree.AppendColumn("Best snippet", width=380)
+        outer.Add(self._tree, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
         self._status_label = wx.StaticText(self, label=self._initial_status())
         outer.Add(self._status_label, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
@@ -88,10 +117,7 @@ class SearchPage(wx.Panel):
 
         self._search_btn.Bind(wx.EVT_BUTTON, self._on_search)
         self._query_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
-        self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_result_activated)
-        bind_hover_path_tooltip(
-            self._list, lambda row: self._results[row].document_path if 0 <= row < len(self._results) else None
-        )
+        self._tree.Bind(dv.EVT_TREELIST_ITEM_ACTIVATED, self._on_result_activated)
 
     def _initial_status(self) -> str:
         if self._repository.vector_enabled:
@@ -100,25 +126,13 @@ class SearchPage(wx.Panel):
 
     def set_profile(self, profile_id: int) -> None:
         self._profile_id = profile_id
-        self._list.DeleteAllItems()
+        self._tree.DeleteAllItems()
         self._results = []
         self._status_label.SetLabel(self._initial_status())
 
     def set_file_name_display(self, mode: str) -> None:
         self._file_name_display = mode
-        for row, doc in enumerate(self._results):
-            self._list.SetItem(row, 1, self._label_for(doc.document_id))
-
-    def _label_for(self, document_id: int) -> str:
-        """A record's DocumentSearchResult.document_path is a synthetic
-        string DocumentRepository generates purely to keep it unique (see
-        migration 0006) - never meant to be shown, so results are labeled
-        via the real Document (and, for a record, its container) instead."""
-        document = self._repository.get(document_id)
-        if document is None:
-            return "(removed)"
-        container = self._repository.get(document.parent_document_id) if document.parent_document_id else None
-        return format_document_label(document, container, self._file_name_display)
+        self._populate_tree()
 
     def _selected_mode(self) -> str:
         return MODE_LABELS[self._mode_radio.GetSelection()][0]
@@ -133,13 +147,8 @@ class SearchPage(wx.Panel):
         mode = self._selected_mode()
 
         def on_success(results) -> None:
-            self._results = group_by_document(results)
-            self._list.DeleteAllItems()
-            for row, doc in enumerate(self._results):
-                self._list.InsertItem(row, f"{doc.score:.4f}")
-                self._list.SetItem(row, 1, self._label_for(doc.document_id))
-                self._list.SetItem(row, 2, str(len(doc.matches)))
-                self._list.SetItem(row, 3, doc.best_match.snippet)
+            self._results = self._build_result_groups(group_by_document(results))
+            self._populate_tree()
             self._status_label.SetLabel(
                 f"{len(self._results)} document(s), {len(results)} match(es) for \"{query}\" ({mode})"
                 if results
@@ -158,11 +167,83 @@ class SearchPage(wx.Panel):
             disable=[self._search_btn],
         )
 
-    def _on_result_activated(self, event: wx.ListEvent) -> None:
-        index = event.GetIndex()
-        if index < 0 or index >= len(self._results):
-            return
-        self._load_and_show(self._results[index])
+    # ------------------------------------------------------------------
+    # Grouping - one row per document (see repositories.group_by_document)
+    # folded a level further into "one row per top-level parent" (plain
+    # files as themselves, records nested under their container).
+    # ------------------------------------------------------------------
+    def _build_result_groups(self, doc_results: List[DocumentSearchResult]) -> List[SearchResultGroup]:
+        groups = {}  # top_document_id -> SearchResultGroup
+        for doc_result in doc_results:
+            document = self._repository.get(doc_result.document_id)
+            if document is None:
+                continue  # removed since the search ran
+
+            if document.kind == KIND_RECORD and document.parent_document_id:
+                top_id = document.parent_document_id
+                group = groups.get(top_id)
+                if group is None:
+                    container = self._repository.get(top_id)
+                    if container is None:
+                        continue  # container removed since the search ran
+                    group = SearchResultGroup(top_document=container, score=0.0, match_count=0, best_snippet="")
+                    groups[top_id] = group
+                group.children.append((document, doc_result))
+            else:
+                groups[doc_result.document_id] = SearchResultGroup(
+                    top_document=document,
+                    score=doc_result.score,
+                    match_count=len(doc_result.matches),
+                    best_snippet=doc_result.best_match.snippet,
+                    self_result=doc_result,
+                )
+
+        for group in groups.values():
+            if group.children:
+                group.children.sort(key=lambda pair: pair[1].score, reverse=True)
+                _best_document, best_result = group.children[0]
+                group.score = best_result.score
+                group.match_count = sum(len(doc_result.matches) for _doc, doc_result in group.children)
+                group.best_snippet = best_result.best_match.snippet
+
+        # Same overall ordering the old flat list had: best-scoring document
+        # (now best-scoring group) first.
+        return sorted(groups.values(), key=lambda g: g.score, reverse=True)
+
+    def _populate_tree(self) -> None:
+        self._tree.DeleteAllItems()
+        root = self._tree.GetRootItem()
+        for group in self._results:
+            item = self._tree.AppendItem(root, "")
+            self._tree.SetItemData(item, group)
+            self._tree.SetItemText(item, 0, format_document_label(group.top_document, None, self._file_name_display))
+            self._tree.SetItemText(item, 1, f"{group.score:.4f}")
+            self._tree.SetItemText(item, 2, str(group.match_count))
+            self._tree.SetItemText(item, 3, group.best_snippet)
+
+            for record_document, doc_result in group.children:
+                child_item = self._tree.AppendItem(item, "")
+                self._tree.SetItemData(child_item, doc_result)
+                self._tree.SetItemText(child_item, 0, format_record_short_label(record_document, group.top_document))
+                self._tree.SetItemText(child_item, 1, f"{doc_result.score:.4f}")
+                self._tree.SetItemText(child_item, 2, str(len(doc_result.matches)))
+                self._tree.SetItemText(child_item, 3, doc_result.best_match.snippet)
+
+    def _selected_item_data(self):
+        item = self._tree.GetSelection()
+        if not item.IsOk():
+            return None
+        return self._tree.GetItemData(item)
+
+    def _on_result_activated(self, event: dv.TreeListEvent) -> None:
+        data = self._selected_item_data()
+        if isinstance(data, SearchResultGroup):
+            # A container group has no content of its own to open - just
+            # let the tree's own double-click expand/collapse happen.
+            if data.self_result is not None:
+                self._load_and_show(data.self_result)
+        elif isinstance(data, DocumentSearchResult):
+            self._load_and_show(data)
 
     def _get_viewer_frame(self) -> DocumentViewerFrame:
         if self._viewer_frame is None:
@@ -173,6 +254,20 @@ class SearchPage(wx.Panel):
     def _on_viewer_closed(self, event: wx.CloseEvent) -> None:
         self._viewer_frame = None
         event.Skip()
+
+    def _label_for(self, document_id: int) -> str:
+        """A record's DocumentSearchResult.document_path is a synthetic
+        string DocumentRepository generates purely to keep it unique (see
+        migration 0006) - never meant to be shown, so the viewer title is
+        built from the real Document (and, for a record, its container)
+        instead. Used here rather than reusing the tree row's label so this
+        still works when _load_and_show is reached some other way than
+        clicking a currently-populated row."""
+        document = self._repository.get(document_id)
+        if document is None:
+            return "(removed)"
+        container = self._repository.get(document.parent_document_id) if document.parent_document_id else None
+        return format_document_label(document, container, self._file_name_display)
 
     def _load_and_show(self, doc: DocumentSearchResult) -> None:
         label = self._label_for(doc.document_id)

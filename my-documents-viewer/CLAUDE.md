@@ -226,17 +226,27 @@ tables are *not* part of this migration system at all (see above).
 
 Left `Sidebar` (`app/sidebar.py`) drives a `wx.Simplebook` in `MainFrame` -
 `SIDEBAR_ITEMS` order must match page order: Profiles (0), Documents (1), Search
-(2), About (3). `profiles_page.py`/`profiles_dialog.py`, `search_page.py` follow
-the same list+toolbar-on-`wx.ListCtrl` / modal-dialog-for-create-edit pattern as
+(2), About (3). `profiles_page.py`/`profiles_dialog.py` follow the same
+list+toolbar-on-`wx.ListCtrl` / modal-dialog-for-create-edit pattern as
 `my-redis-viewer`'s pages - see that project's CLAUDE.md for the pattern to
-follow when adding a new concept's screen. `documents_page.py` is the one
-exception: it's a `wx.dataview.TreeListCtrl`, not a flat `wx.ListCtrl`, since it
-needs to show a container's records nested under it (see "Structured data
-import" above) - `SetItemData`/`GetItemData` round-trip plain `Document` objects
-directly in this wxPython version (Phoenix 4.3.1+; no `ClientData` wrapping
-needed), and lazy-loading a container's children on first expand uses the same
-dummy-placeholder-child trick as `my-redis-viewer`'s `KeyTreeView`
-(`app/data_explorer_page.py`).
+follow when adding a new concept's screen. `documents_page.py` and
+`search_page.py` are both `wx.dataview.TreeListCtrl` instead, since a
+container's records (see "Structured data import" above) need to show up
+nested under it in both places - `SetItemData`/`GetItemData` round-trip plain
+Python objects directly in this wxPython version (Phoenix 4.3.1+; no
+`ClientData` wrapping needed). The two pages build their tree differently
+though, matching how differently-sized their child sets are:
+`DocumentsPage` **lazily** loads a container's records on first expand (same
+dummy-placeholder-child trick as `my-redis-viewer`'s `KeyTreeView`,
+`app/data_explorer_page.py`) since a container can hold thousands of them;
+`SearchPage` builds its whole tree **eagerly** every search
+(`SearchPage._build_result_groups`), since a result set is small and already
+fully in hand - a container only appears as a top-level row at all if one of
+its records matched, grouping every matching record under it (score, match
+count, and best snippet aggregated from its best-scoring child, same
+"ordered by best chunk's score" rule `repositories.group_by_document` already
+applies at the single-document level) rather than listing records as
+unrelated flat rows the way the pre-hierarchy version did.
 
 ### PyInstaller packaging gotchas
 

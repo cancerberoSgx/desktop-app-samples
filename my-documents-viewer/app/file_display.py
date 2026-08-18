@@ -39,6 +39,19 @@ def format_display_path(path: str, mode: str) -> str:
     return path
 
 
+def format_record_short_label(document: "Document", container: Optional["Document"]) -> str:
+    """Just a record's own row label (its title column's value if the
+    container's import mapping set one, else its row_key) - no container
+    prefix. For contexts where the record is already shown visually nested
+    under its container (e.g. SearchPage's results tree, DocumentsPage's
+    Documents tree) and repeating the container's name on every child row
+    would be redundant. See format_document_label for the "container › row"
+    combined form used when there's no visual nesting to rely on."""
+    title_column = (container.properties or {}).get("title_column") if container else None
+    title = (document.properties or {}).get(title_column) if title_column else None
+    return str(title) if title not in (None, "") else (document.row_key or f"record {document.id}")
+
+
 def format_document_label(document: "Document", container: Optional["Document"], mode: str) -> str:
     """Display label for a Document row. Unchanged for a plain file or a
     container (format_display_path over its real path) - but a record's
@@ -52,7 +65,4 @@ def format_document_label(document: "Document", container: Optional["Document"],
         return format_display_path(document.path, mode)
 
     container_label = format_display_path(container.path, mode)
-    title_column = (container.properties or {}).get("title_column")
-    title = (document.properties or {}).get(title_column) if title_column else None
-    row_label = str(title) if title not in (None, "") else (document.row_key or f"record {document.id}")
-    return f"{container_label} › {row_label}"
+    return f"{container_label} › {format_record_short_label(document, container)}"

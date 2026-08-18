@@ -98,6 +98,11 @@ implement a menu File->Settings.. which display the settings dialog which contai
 Everywhere a file name is displayed (in documents or search views) this will be respected but on hover the full path is displayed.
 The default value for this setting is "file name"
 
+
+
+---
+
+
 # child documents and import data files
 Currently user is able to index "text documents" which text is indexed as one big document
 Now, user is able to import "data files" such as csv, json (object arrays), jsond, etc which will define multiple "child documents" associated with a "parent document"
@@ -113,10 +118,33 @@ explain me more about:
 Today one document = one file, so indexing N files means N sets of chunk embeddings, bounded by however many files a user reasonably has. A CSV import turns "one file" into potentially tens of thousands of child documents, each triggering its own embed call in index_paths. For local fastembed that's just slower; for openai/gemini backends it's real cost and rate-limit exposure the app has never had to think about. I'd make vectorizing row-imports opt-in (FTS-only by default for data-file imports, embeddings on request) rather than assuming every child document gets the same treatment as a hand-picked .md file.
 My objective is users to be able to find one or more child documents both using FTS or semantic - if you don't create a separate embedding for each row, how woudl you accomplish this ? 
 
+p3
+import data file /home/sg/Descargas/chat_metrics.csv says Importing... in the UI and nothing happens. Add more print() statements across all steps of importing a data file (csv parsing, item by item, embeddings generation, etc)
+
+p4
+on a new profile, when loading my first "data file" i get error "UNIQUE constraint failed: documents.profile_id, documents.parent_document_id, documents.row_key"
+
+p5
+in search results table, only parent documents are displayed and user can expand a parent document to see its child documents that matched the search, in a tree-like view, each with their score as currently is implemented for the "documents" view
+
+p7
+in documents, when double clicking a parent document it says "This is a container document with 41 record(s) - expand it in the Documents tree to browse them." instead list there the children documents in a data-view
+p6
+the text editor allows to search for a string with a search icon button or ctrl-f. The search can be next or prev occurrence and it must respect the current vertical scroll 
 
 ---
 
 # FUTURE
+
+
+# doc tags
+
+when a document is added or by editing a document, user can create or add tags to the document, User has a view to see all their tags and associated documents for each in a separate view. Each profile has its tags. In search, user can filtering by tags and verbs : contains all , contains any, don't contain, etc
+
+
+# issue:
+closing the window don't release the current indexing process.
+
 
 # fts5 fulltext
 add https://www.sqlite.org/fts5.html so we can have powerful fulltext searches too

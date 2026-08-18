@@ -32,16 +32,20 @@ def is_supported_data_file(path: Path) -> bool:
 def read_records(path: Path) -> List[Dict[str, object]]:
     """Parse a CSV or JSON (array-of-objects) file into one dict per
     row/object, preserving column/key order."""
+    print(f"[data_import] read_records: opening {path} ({path.stat().st_size} bytes)")
     suffix = path.suffix.lower()
     if suffix == ".csv":
         with path.open("r", encoding="utf-8", newline="") as handle:
             records = list(csv.DictReader(handle))
+        print(f"[data_import] read_records: parsed CSV, {len(records)} row(s), "
+              f"columns={records[0].keys() if records else '(no rows)'}")
     elif suffix == ".json":
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
         if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
             raise DataImportError("JSON import requires a top-level array of objects.")
         records = data
+        print(f"[data_import] read_records: parsed JSON array, {len(records)} object(s)")
     else:
         raise DataImportError(f"Unsupported data file type: {path.suffix}")
 
@@ -70,6 +74,7 @@ def preview(path: Path, max_sample_rows: int = 5) -> DataFilePreview:
     AsyncTaskRunner, not directly on the UI thread - see
     DocumentsPage._on_import_data_file - since parsing scales with file
     size, not with what's actually displayed."""
+    print(f"[data_import] preview: parsing {path} for the mapping dialog")
     records = read_records(path)
     columns: List[str] = []
     seen = set()
@@ -78,6 +83,7 @@ def preview(path: Path, max_sample_rows: int = 5) -> DataFilePreview:
             if key not in seen:
                 seen.add(key)
                 columns.append(key)
+    print(f"[data_import] preview: {len(records)} row(s), columns={columns}")
     return DataFilePreview(columns=columns, row_count=len(records), sample_rows=records[:max_sample_rows])
 
 
