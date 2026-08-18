@@ -98,6 +98,11 @@ implement a menu File->Settings.. which display the settings dialog which contai
 Everywhere a file name is displayed (in documents or search views) this will be respected but on hover the full path is displayed.
 The default value for this setting is "file name"
 
+# child documents and import data files
+User is able to import data files such as csv, json (object arrays), jsond, etc
+When this import happens, the system creates a parent document "foo.csv" without contents, and then many children documents (one per each csv row or json object)
+Normal documents like current .md or .txt files are created as "parent documents"
+In the documents view, by default it display only parent documents but user can expand a parent document to see its child documents in a tree-like view.
 
 ---
 

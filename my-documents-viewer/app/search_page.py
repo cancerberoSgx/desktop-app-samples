@@ -5,6 +5,8 @@ import wx
 
 from .async_task import AsyncTaskRunner
 from .document_viewer import DocumentViewerFrame
+from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_display_path
+from .list_ctrl_utils import bind_hover_path_tooltip
 from .models import DocumentSearchResult
 from .repositories import DocumentRepository, ProfileRepository, group_by_document
 from .text_extract import extract_text
@@ -34,11 +36,13 @@ class SearchPage(wx.Panel):
         repository: DocumentRepository,
         profile_repository: ProfileRepository,
         profile_id: int,
+        file_name_display: str = FILE_NAME_DISPLAY_DEFAULT,
     ) -> None:
         super().__init__(parent)
         self._repository = repository
         self._profile_repository = profile_repository
         self._profile_id = profile_id
+        self._file_name_display = file_name_display
         self._results: List[DocumentSearchResult] = []
         self._async = AsyncTaskRunner(self)
         # Separate from `_async`: loading a document's full text for preview
@@ -87,6 +91,9 @@ class SearchPage(wx.Panel):
         self._search_btn.Bind(wx.EVT_BUTTON, self._on_search)
         self._query_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
         self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_result_activated)
+        bind_hover_path_tooltip(
+            self._list, lambda row: self._results[row].document_path if 0 <= row < len(self._results) else None
+        )
 
     def _initial_status(self) -> str:
         if self._repository.vector_enabled:
@@ -98,6 +105,11 @@ class SearchPage(wx.Panel):
         self._list.DeleteAllItems()
         self._results = []
         self._status_label.SetLabel(self._initial_status())
+
+    def set_file_name_display(self, mode: str) -> None:
+        self._file_name_display = mode
+        for row, doc in enumerate(self._results):
+            self._list.SetItem(row, 1, format_display_path(doc.document_path, self._file_name_display))
 
     def _selected_mode(self) -> str:
         return MODE_LABELS[self._mode_radio.GetSelection()][0]
@@ -116,7 +128,7 @@ class SearchPage(wx.Panel):
             self._list.DeleteAllItems()
             for row, doc in enumerate(self._results):
                 self._list.InsertItem(row, f"{doc.score:.4f}")
-                self._list.SetItem(row, 1, doc.document_path)
+                self._list.SetItem(row, 1, format_display_path(doc.document_path, self._file_name_display))
                 self._list.SetItem(row, 2, str(len(doc.matches)))
                 self._list.SetItem(row, 3, doc.best_match.snippet)
             self._status_label.SetLabel(

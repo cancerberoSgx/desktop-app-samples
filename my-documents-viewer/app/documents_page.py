@@ -5,6 +5,8 @@ import wx
 
 from .async_task import AsyncTaskRunner
 from .document_viewer import DocumentViewerFrame
+from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_display_path
+from .list_ctrl_utils import bind_hover_path_tooltip
 from .models import Document
 from .repositories import DocumentRepository, IndexRunSummary, ProfileRepository
 from .text_extract import extract_text
@@ -24,6 +26,7 @@ class DocumentsPage(wx.Panel):
         profile_repository: ProfileRepository,
         profile_id: int,
         on_status: Optional[Callable[[str], None]] = None,
+        file_name_display: str = FILE_NAME_DISPLAY_DEFAULT,
     ) -> None:
         super().__init__(parent)
         self._repository = repository
@@ -31,6 +34,7 @@ class DocumentsPage(wx.Panel):
         self._profile_id = profile_id
         self._documents: List[Document] = []
         self._on_status = on_status or (lambda text: None)
+        self._file_name_display = file_name_display
         self._async = AsyncTaskRunner(self)
         # Separate from `_async`: opening the content viewer shouldn't be
         # blocked by (or block) an indexing run in flight on this page.
@@ -79,6 +83,7 @@ class DocumentsPage(wx.Panel):
         self._list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
         self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_view_document)
+        bind_hover_path_tooltip(self._list, lambda row: self._documents[row].path if 0 <= row < len(self._documents) else None)
 
         self.reload()
 
@@ -86,12 +91,16 @@ class DocumentsPage(wx.Panel):
         self._profile_id = profile_id
         self.reload()
 
+    def set_file_name_display(self, mode: str) -> None:
+        self._file_name_display = mode
+        self.reload()
+
     def reload(self) -> None:
         self._documents = self._repository.list(self._profile_id)
 
         self._list.DeleteAllItems()
         for row, document in enumerate(self._documents):
-            self._list.InsertItem(row, document.path)
+            self._list.InsertItem(row, format_display_path(document.path, self._file_name_display))
             self._list.SetItem(row, 1, str(document.chunk_count))
             self._list.SetItem(row, 2, document.indexed_at or "")
             self._list.SetItem(row, 3, f"{document.embedding_backend or ''} / {document.embedding_model or ''}")

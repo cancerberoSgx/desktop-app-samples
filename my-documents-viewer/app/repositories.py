@@ -8,12 +8,14 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from .chunking import chunk_text
 from .embeddings import EmbeddingError, get_backend
+from .file_display import FILE_NAME_DISPLAY_DEFAULT, FILE_NAME_DISPLAY_KEYS
 from .models import Document, DocumentSearchResult, Profile, SearchResult
 from .text_extract import extract_text, is_supported
 from .vector_codec import serialize_vector
 
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
+FILE_NAME_DISPLAY_SETTING_KEY = "file_name_display"
 
 # Reciprocal Rank Fusion constant - the standard choice (see e.g. Cormack et
 # al.'s RRF paper); combines the full-text and vector rankings without
@@ -134,6 +136,13 @@ class SettingsRepository:
 
     def set_sidebar_collapsed(self, collapsed: bool) -> None:
         self.set(SIDEBAR_COLLAPSED_SETTING_KEY, "1" if collapsed else "0")
+
+    def get_file_name_display(self) -> str:
+        value = self.get(FILE_NAME_DISPLAY_SETTING_KEY)
+        return value if value in FILE_NAME_DISPLAY_KEYS else FILE_NAME_DISPLAY_DEFAULT
+
+    def set_file_name_display(self, mode: str) -> None:
+        self.set(FILE_NAME_DISPLAY_SETTING_KEY, mode)
 
 
 class DocumentRepository:

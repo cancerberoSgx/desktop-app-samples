@@ -8,6 +8,7 @@ from .documents_page import DocumentsPage
 from .profiles_page import ProfilesPage
 from .repositories import DocumentRepository, ProfileRepository, SettingsRepository
 from .search_page import SearchPage
+from .settings_dialog import SettingsDialog
 from .sidebar import Sidebar, SIDEBAR_ITEMS
 
 DEFAULT_PROFILE_NAME = "default"
@@ -27,6 +28,7 @@ class MainFrame(wx.Frame):
         self.document_repository = DocumentRepository(conn, vector_enabled=vector_enabled)
 
         self.active_profile_id = self._bootstrap_active_profile()
+        self._file_name_display = self.settings_repository.get_file_name_display()
 
         self._build_menu_bar()
         self.CreateStatusBar(2)
@@ -61,12 +63,14 @@ class MainFrame(wx.Frame):
             self.profile_repository,
             self.active_profile_id,
             on_status=lambda text: self.SetStatusText(text, 0),
+            file_name_display=self._file_name_display,
         )
         self.search_page = SearchPage(
             self.book,
             self.document_repository,
             self.profile_repository,
             self.active_profile_id,
+            file_name_display=self._file_name_display,
         )
         self.book.AddPage(self.profiles_page, "Profiles")
         self.book.AddPage(self.documents_page, "Documents")
@@ -128,6 +132,8 @@ class MainFrame(wx.Frame):
         menu_bar = wx.MenuBar()
 
         file_menu = wx.Menu()
+        settings_item = file_menu.Append(wx.ID_PREFERENCES, "Settings...\tCtrl+,")
+        file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
 
         help_menu = wx.Menu()
@@ -138,6 +144,7 @@ class MainFrame(wx.Frame):
 
         self.SetMenuBar(menu_bar)
 
+        self.Bind(wx.EVT_MENU, self._on_settings, settings_item)
         self.Bind(wx.EVT_MENU, self._on_exit, id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
 
@@ -151,6 +158,17 @@ class MainFrame(wx.Frame):
 
     def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
         self.settings_repository.set_sidebar_collapsed(collapsed)
+
+    def _on_settings(self, event: wx.CommandEvent) -> None:
+        dlg = SettingsDialog(self, self._file_name_display)
+        if dlg.ShowModal() == wx.ID_OK:
+            mode = dlg.get_file_name_display()
+            if mode != self._file_name_display:
+                self._file_name_display = mode
+                self.settings_repository.set_file_name_display(mode)
+                self.documents_page.set_file_name_display(mode)
+                self.search_page.set_file_name_display(mode)
+        dlg.Destroy()
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()
