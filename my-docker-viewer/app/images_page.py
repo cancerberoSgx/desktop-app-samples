@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import wx
 
@@ -6,7 +6,7 @@ from .async_task import AsyncTaskRunner
 from .formatting import size_sort_key
 from .image_details_dialog import show_image_details
 from .models import Image, ImageDependents
-from .repositories import ImageRepository
+from .repositories import DockerCommandError, DockerNotAvailableError, ImageRepository
 
 STATUS_CHOICES = ["All", "In use", "Unused", "Dangling"]
 
@@ -139,7 +139,18 @@ class ImagesPage(wx.Panel):
     depend on it, via the same `find_dependents` lookup the cascading-
     remove dialog above already uses. That dialog is its own reusable
     component precisely so other screens can open the same view later from
-    just a reference, without needing a loaded `Image` row of their own."""
+    just a reference, without needing a loaded `Image` row of their own.
+
+    Like VolumesPage, the list is multi-select (`wx.LC_REPORT` without
+    `wx.LC_SINGLE_SEL`) - ctrl-click/shift-click and shift+Up/Down are
+    wx.ListCtrl's own native selection behavior, nothing custom here.
+    Removing exactly one image still goes through the full single-image
+    flow above (cascade dialog when it has dependent containers); removing
+    a batch of more than one uses a simpler all-or-nothing-per-item path
+    (`_on_remove_multiple`) that force-removes any in-use image directly
+    rather than presenting N cascade dialogs in a row - see that method's
+    docstring. Info only makes sense for one image at a time, so it stays
+    disabled unless the selection is exactly one row."""
 
     def __init__(
         self,
@@ -202,7 +213,9 @@ class ImagesPage(wx.Panel):
 
         outer.Add(filters_bar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, 12)
 
-        self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
+        # No wx.LC_SINGLE_SEL - this list is deliberately multi-select (see
+        # the class docstring), same as VolumesPage.
+        self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
         self._column_labels = [label for label, _width in _COLUMNS]
         for index, (label, width) in enumerate(_COLUMNS):
             self._list.InsertColumn(index, label, width=width)
@@ -229,6 +242,9 @@ class ImagesPage(wx.Panel):
         # to its details, same shortcut ContainersPage gives its own rows -
         # Info is still there on the toolbar for a single click.
         self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_info)
+        # Delete key as a shortcut for Remove, covering the whole selection
+        # same as clicking the button would - mirrors VolumesPage.
+        self._list.Bind(wx.EVT_LIST_KEY_DOWN, self._on_list_key_down)
 
         self._update_button_states(None)
         self._update_column_headers()
@@ -296,8 +312,9 @@ class ImagesPage(wx.Panel):
         return result
 
     def _populate_list(self) -> None:
-        selected = self._selected_image()
-        selected_ref = selected.reference if selected else None
+        # Preserve the whole selection, not just one row - a resort/filter/
+        # refresh mid multi-select shouldn't collapse it down to one item.
+        selected_refs = {i.reference for i in self._selected_images()}
 
         self._visible = self._filtered_images()
         self._sort_visible()
@@ -310,7 +327,7 @@ class ImagesPage(wx.Panel):
             self._list.SetItem(row, 4, image.size or "-")
             self._list.SetItem(row, 5, str(image.containers))
             self._list.SetItem(row, 6, image.status)
-            if selected_ref and image.reference == selected_ref:
+            if image.reference in selected_refs:
                 self._list.SetItemState(row, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
 
         self._update_button_states(None)
@@ -338,15 +355,30 @@ class ImagesPage(wx.Panel):
             self._list.SetColumn(index, column_info)
 
     def _selected_image(self) -> Optional[Image]:
+        """The single selected image - for actions (Info, the cascade-
+        aware single-image remove flow) that only make sense against
+        exactly one row. Returns `None` for zero *or* more than one
+        selected, unlike `_selected_images()` below."""
+        images = self._selected_images()
+        return images[0] if len(images) == 1 else None
+
+    def _selected_images(self) -> List[Image]:
+        """Every currently selected image, in list order - this is a
+        multi-select list (see the class docstring), so callers that act on
+        "the selection" (Remove) should use this, not `_selected_image()`."""
+        images = []
         index = self._list.GetFirstSelected()
-        if index == -1 or index >= len(self._visible):
-            return None
-        return self._visible[index]
+        while index != -1:
+            if index < len(self._visible):
+                images.append(self._visible[index])
+            index = self._list.GetNextSelected(index)
+        return images
 
     def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
-        image = self._selected_image()
-        self._info_btn.Enable(image is not None)
-        self._remove_btn.Enable(image is not None)
+        images = self._selected_images()
+        # Info only makes sense for exactly one image at a time.
+        self._info_btn.Enable(len(images) == 1)
+        self._remove_btn.Enable(bool(images))
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -363,24 +395,43 @@ class ImagesPage(wx.Panel):
 
     def _on_info(self, event: wx.Event) -> None:
         # Bound to both the Info button (wx.CommandEvent) and double-click/
-        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) -
-        # neither branch below needs anything event-type-specific.
-        image = self._selected_image()
+        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) - the
+        # activation event names the exact row that was double-clicked/
+        # entered, which - unlike _selected_image() - still resolves to one
+        # image even if a multi-select happens to include others.
+        if isinstance(event, wx.ListEvent):
+            index = event.GetIndex()
+            image = self._visible[index] if 0 <= index < len(self._visible) else None
+        else:
+            image = self._selected_image()
         if image is None:
             return
         show_image_details(self, image.reference, self._repository, initial=image)
 
-    def _apply_removed(self, reference: str) -> None:
-        """Mirrors ContainersPage._apply_removed - drop the image from the
-        already-loaded list and re-render immediately instead of waiting on
-        a full `docker image ls` round trip."""
-        self._images = [i for i in self._images if i.reference != reference]
+    def _on_list_key_down(self, event: wx.ListEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_DELETE:
+            self._on_remove(event)
+        else:
+            event.Skip()
+
+    def _apply_removed(self, references: List[str]) -> None:
+        """Mirrors VolumesPage._apply_removed - drop the given images from
+        the already-loaded list and re-render immediately instead of
+        waiting on a full `docker image ls` round trip. Takes a list (not
+        one reference) so a multi-select removal renders as a single batch
+        rather than one re-render per image."""
+        removed = set(references)
+        self._images = [i for i in self._images if i.reference not in removed]
         self._populate_list()
 
-    def _on_remove(self, event: wx.CommandEvent) -> None:
-        image = self._selected_image()
-        if image is None:
+    def _on_remove(self, event: wx.Event) -> None:
+        images = self._selected_images()
+        if not images:
             return
+        if len(images) > 1:
+            self._on_remove_multiple(images)
+            return
+        image = images[0]
 
         if image.containers == 0:
             # Nothing to cascade to - keep the plain yes/no confirm rather
@@ -453,7 +504,7 @@ class ImagesPage(wx.Panel):
 
         self._async.run(
             work=lambda: self._repository.remove(image.reference, force=force),
-            on_success=lambda _result: self._apply_removed(image.reference),
+            on_success=lambda _result: self._apply_removed([image.reference]),
             on_error=on_error,
             disable=[self._remove_btn, self._prune_btn],
         )
@@ -477,6 +528,69 @@ class ImagesPage(wx.Panel):
 
         self._async.run(
             work=lambda: self._repository.remove_with_dependents(image.reference, dependents),
+            on_success=on_success,
+            on_error=on_error,
+            disable=[self._remove_btn, self._prune_btn],
+        )
+
+    def _on_remove_multiple(self, images: List[Image]) -> None:
+        """Removing more than one image at once skips the cascade dialog
+        entirely, unlike the single-image path above - presenting that
+        dialog once per in-use image would just be N modal prompts in a
+        row for a batch. Instead any image still referenced by a container
+        is force-removed directly (the same fallback `_prompt_remove`
+        already uses when find_dependents() can't pin down anything
+        concrete to cascade to), and the confirm prompt says so up front so
+        the user isn't surprised that a batch remove doesn't offer to take
+        dependent containers/volumes/networks with it. Continues past an
+        individual failure rather than aborting the whole batch, same
+        posture as VolumesPage's batch remove."""
+        in_use = [i for i in images if i.containers > 0]
+        prompt = f"Remove {len(images)} images?"
+        if in_use:
+            prompt += (
+                f"\n\n{len(in_use)} still referenced by a container - those "
+                "will be force-removed. Removing a single in-use image "
+                "offers to cascade to its containers/volumes/networks too; "
+                "that option isn't available for a multi-image batch."
+            )
+        confirm = wx.MessageBox(prompt, "Confirm remove", wx.YES_NO | wx.ICON_WARNING, self)
+        if confirm != wx.YES:
+            return
+
+        jobs = [(image.reference, image.containers > 0) for image in images]
+
+        def work() -> List[Tuple[str, Optional[str]]]:
+            results = []
+            for reference, force in jobs:
+                try:
+                    self._repository.remove(reference, force=force)
+                    results.append((reference, None))
+                except (DockerCommandError, DockerNotAvailableError) as exc:
+                    results.append((reference, str(exc)))
+            return results
+
+        def on_success(results: List[Tuple[str, Optional[str]]]) -> None:
+            succeeded = [reference for reference, error in results if error is None]
+            failed = [(reference, error) for reference, error in results if error is not None]
+            if succeeded:
+                self._apply_removed(succeeded)
+            if failed:
+                details = "\n".join(f'"{reference}": {error}' for reference, error in failed)
+                wx.MessageBox(
+                    f"Could not remove {len(failed)} of {len(jobs)} image(s):\n\n{details}",
+                    "Remove failed",
+                    wx.OK | wx.ICON_ERROR,
+                    self,
+                )
+
+        def on_error(exc: Exception) -> None:
+            # Only reachable for a truly unexpected failure - work() itself
+            # catches both known docker exception types per-item above.
+            wx.MessageBox(f"Could not remove images:\n\n{exc}", "Remove failed", wx.OK | wx.ICON_ERROR, self)
+
+        self._async.run(
+            work=work,
             on_success=on_success,
             on_error=on_error,
             disable=[self._remove_btn, self._prune_btn],
