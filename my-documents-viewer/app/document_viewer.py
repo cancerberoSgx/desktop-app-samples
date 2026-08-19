@@ -1,11 +1,11 @@
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import wx
 import wx.dataview as dv
 import wx.stc as stc
 
-from .file_display import format_embedding_status, format_size
-from .models import KIND_CONTAINER, KIND_RECORD, Document, SearchResult
+from .file_display import format_embedding_status, format_record_short_label, format_size
+from .models import KIND_CONTAINER, KIND_RECORD, Document, DocumentSearchResult, SearchResult
 
 # Indicators (Scintilla's mechanism for painting extra highlighting under/
 # over text without touching the document's actual styling) - one per match
@@ -76,6 +76,32 @@ class DocumentViewerFrame(wx.Frame):
         self.SetTitle(label)
         self.panel.show_records(label, container, records)
 
+    def show_container_results(
+        self,
+        label: str,
+        container: Document,
+        children: List[Tuple[Document, DocumentSearchResult]],
+        on_child_selected: Callable[[Document, DocumentSearchResult], None],
+    ) -> None:
+        self.SetTitle(label)
+        self.panel.show_container_results(label, container, children, on_child_selected)
+
+    def show_container_child_loading(self, label: str) -> None:
+        self.panel.show_container_child_loading(label)
+
+    def show_container_child_content(
+        self,
+        label: str,
+        document: Document,
+        text: str,
+        matches: List[SearchResult],
+        container: Optional[Document] = None,
+    ) -> None:
+        self.panel.show_container_child_content(label, document, text, matches, container=container)
+
+    def show_container_child_error(self, label: str, message: str) -> None:
+        self.panel.show_container_child_error(label, message)
+
     def show_error(self, label: str, message: str) -> None:
         self.SetTitle(label)
         self.panel.show_error(label, message)
@@ -99,6 +125,12 @@ class DocumentViewerPanel(wx.Panel):
         self._matches: List[SearchResult] = []
         self._active_index: int = -1
         self._showing_records_grid: bool = False
+        # Search-result container browsing (show_container_results) - the
+        # rows currently listed on the left, and the owner's (SearchPage's)
+        # hook for "the user picked this child, go load its content" since
+        # this panel never talks to a repository directly.
+        self._children_rows: List[Tuple[Document, DocumentSearchResult]] = []
+        self.on_child_selected: Optional[Callable[[Document, DocumentSearchResult], None]] = None
 
         outer = wx.BoxSizer(wx.VERTICAL)
 
@@ -172,6 +204,17 @@ class DocumentViewerPanel(wx.Panel):
         self._properties_list.InsertColumn(1, "Value", width=180)
         self._properties_list.Hide()
 
+        # show_container_results()'s left pane - one row per matching child
+        # record, best-scoring first; selecting a row asks the owner (via
+        # on_child_selected) to load and display that child's content in the
+        # main pane, the same way _toc's rows jump to a chunk within a
+        # single document.
+        self._children_list = wx.ListCtrl(self._splitter, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
+        self._children_list.InsertColumn(0, "Score", width=70)
+        self._children_list.InsertColumn(1, "Record", width=170)
+        self._children_list.InsertColumn(2, "Best snippet", width=250)
+        self._children_list.Hide()
+
         self._stc = stc.StyledTextCtrl(self._splitter, style=wx.BORDER_SUNKEN)
         self._configure_stc()
 
@@ -189,6 +232,7 @@ class DocumentViewerPanel(wx.Panel):
         self.SetSizer(outer)
 
         self._toc.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_toc_select)
+        self._children_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_children_select)
         self._prev_btn.Bind(wx.EVT_BUTTON, lambda evt: self._activate(self._active_index - 1))
         self._next_btn.Bind(wx.EVT_BUTTON, lambda evt: self._activate(self._active_index + 1))
         self._find_toggle_btn.Bind(wx.EVT_BUTTON, lambda evt: self.toggle_find_bar())
@@ -236,12 +280,15 @@ class DocumentViewerPanel(wx.Panel):
     def clear(self) -> None:
         self._matches = []
         self._active_index = -1
+        self._children_rows = []
+        self.on_child_selected = None
         self._path_label.SetLabel("Select a search result to preview it here.")
         self._match_label.SetLabel("")
         self._details_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
+        self._children_list.DeleteAllItems()
         self._set_content_mode("text")
         self._set_left_pane(None)
         self._set_text("")
@@ -250,12 +297,15 @@ class DocumentViewerPanel(wx.Panel):
     def show_loading(self, label: str) -> None:
         self._matches = []
         self._active_index = -1
+        self._children_rows = []
+        self.on_child_selected = None
         self._path_label.SetLabel(f"Loading {label}...")
         self._match_label.SetLabel("")
         self._details_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
+        self._children_list.DeleteAllItems()
         self._set_content_mode("text")
         self._set_left_pane(None)
         self._set_text("")
@@ -264,12 +314,15 @@ class DocumentViewerPanel(wx.Panel):
     def show_error(self, label: str, message: str) -> None:
         self._matches = []
         self._active_index = -1
+        self._children_rows = []
+        self.on_child_selected = None
         self._path_label.SetLabel(label)
         self._match_label.SetLabel("")
         self._details_label.SetLabel("")
         self._set_warning(None)
         self._toc.DeleteAllItems()
         self._properties_list.DeleteAllItems()
+        self._children_list.DeleteAllItems()
         self._set_content_mode("text")
         self._set_left_pane(None)
         self._set_text(f"Could not open this document:\n\n{message}")
@@ -297,6 +350,9 @@ class DocumentViewerPanel(wx.Panel):
         properties = document.properties if document.kind == KIND_RECORD else None
 
         self._matches = matches
+        self._children_rows = []
+        self.on_child_selected = None
+        self._children_list.DeleteAllItems()
         self._set_content_mode("text")
         self._path_label.SetLabel(label)
         self._details_label.SetLabel(self._build_details_text(document, container))
@@ -348,6 +404,9 @@ class DocumentViewerPanel(wx.Panel):
         i.e. the same column order the source CSV/JSON had."""
         self._matches = []
         self._active_index = -1
+        self._children_rows = []
+        self.on_child_selected = None
+        self._children_list.DeleteAllItems()
         self._path_label.SetLabel(label)
         self._match_label.SetLabel("")
         self._details_label.SetLabel(self._build_details_text(container, None))
@@ -378,6 +437,106 @@ class DocumentViewerPanel(wx.Panel):
                 self._records_grid.SetItemText(item, col_index, str(properties.get(column, "")))
 
         self._set_content_mode("records")
+
+    def show_container_results(
+        self,
+        label: str,
+        container: Document,
+        children: List[Tuple[Document, DocumentSearchResult]],
+        on_child_selected: Callable[[Document, DocumentSearchResult], None],
+    ) -> None:
+        """Search-result container view (SearchPage) - unlike show_records()
+        (DocumentsPage's full, content-less record browser: every record,
+        flat grid, no text), this is for the small set of *matching* records
+        a search actually surfaced: the left pane lists them ranked best
+        first (score + snippet, same ordering as SearchResultGroup.children),
+        and selecting one loads and displays its full text with its own
+        matching chunks highlighted - the container becomes a browsable
+        "document" whose chapters are its matching children.
+
+        Loading a child's content is asynchronous (SearchPage owns the
+        repository call), hence `on_child_selected` rather than handing this
+        method the content directly - selecting the first row below fires it
+        immediately, so the best-scoring child loads by default the same way
+        show_document() opens on its best-scoring match."""
+        self.on_child_selected = on_child_selected
+        self._children_rows = children
+        self._path_label.SetLabel(label)
+        self._details_label.SetLabel(self._build_details_text(container, None))
+        self._set_warning(None)
+        self._set_content_mode("text")
+
+        self._children_list.DeleteAllItems()
+        for row, (document, result) in enumerate(children):
+            preview = " ".join(result.best_match.snippet.split())[:TOC_PREVIEW_LENGTH]
+            self._children_list.InsertItem(row, f"{result.score:.4f}")
+            self._children_list.SetItem(row, 1, format_record_short_label(document, container))
+            self._children_list.SetItem(row, 2, preview)
+
+        self._matches = []
+        self._set_text("")
+        self._set_left_pane(self._children_list)
+        self._enable_nav(False)
+
+        if children:
+            # Fires _on_children_select -> on_child_selected, the same
+            # Select()-drives-the-callback pattern _activate() already uses
+            # for _toc - see there for why this doesn't recurse forever.
+            self._children_list.Select(0)
+            self._children_list.Focus(0)
+            self._children_list.EnsureVisible(0)
+
+    def show_container_child_loading(self, label: str) -> None:
+        """Placeholder while SearchPage fetches the selected child's content
+        - keeps the children list in place (unlike show_loading(), which
+        unsplits the left pane entirely for the "nothing to show yet at
+        all" case before any container/document has been picked)."""
+        self._path_label.SetLabel(f"Loading {label}...")
+        self._details_label.SetLabel("")
+        self._matches = []
+        self._set_text("")
+        self._enable_nav(False)
+
+    def show_container_child_content(
+        self,
+        label: str,
+        document: Document,
+        text: str,
+        matches: List[SearchResult],
+        container: Optional[Document] = None,
+    ) -> None:
+        """Fills the right-hand pane for the child currently selected in
+        show_container_results()'s left list - everything show_document()
+        does for a document's text/matches/highlighting, minus touching the
+        left pane (the children list stays put; there's no per-child TOC to
+        swap in)."""
+        self._matches = matches
+        self._path_label.SetLabel(label)
+        self._details_label.SetLabel(self._build_details_text(document, container))
+        self._set_text(text)
+
+        clamped = any(match.end_offset > len(text) for match in matches)
+        self._set_warning(
+            "This document appears to have changed since it was indexed - "
+            "highlighted positions may be off. Reindex it to refresh."
+            if clamped
+            else None
+        )
+
+        self._paint_indicators(text, matches)
+        self._enable_nav(bool(matches))
+        if matches:
+            self._activate(0)
+        else:
+            self._match_label.SetLabel("")
+
+    def show_container_child_error(self, label: str, message: str) -> None:
+        self._matches = []
+        self._path_label.SetLabel(label)
+        self._details_label.SetLabel("")
+        self._set_warning(None)
+        self._set_text(f"Could not open this document:\n\n{message}")
+        self._enable_nav(False)
 
     # ------------------------------------------------------------------
     # Internals
@@ -455,17 +614,22 @@ class DocumentViewerPanel(wx.Panel):
         there are search matches, a read-only Properties list when viewing a
         record/container with none, or nothing at all (a plain file view -
         there's nothing useful to show, so it's unsplit entirely rather than
-        shown empty). `widget` is `self._toc`, `self._properties_list`, or
-        None."""
-        self._match_label.Show(widget is self._toc)
-        self._prev_btn.Show(widget is self._toc)
-        self._next_btn.Show(widget is self._toc)
+        shown empty). `widget` is `self._toc`, `self._properties_list`,
+        `self._children_list`, or None. Prev/Next and the match label apply
+        whenever matches are in play - both `_toc` (a single document's own
+        chunks) and `_children_list` (a container's children, each of which
+        shows its own chunk matches once selected - see
+        show_container_child_content)."""
+        self._match_label.Show(widget in (self._toc, self._children_list))
+        self._prev_btn.Show(widget in (self._toc, self._children_list))
+        self._next_btn.Show(widget in (self._toc, self._children_list))
 
         if self._splitter.IsSplit():
             self._last_sash = self._splitter.GetSashPosition()
             self._splitter.Unsplit(self._splitter.GetWindow1())
         self._toc.Hide()
         self._properties_list.Hide()
+        self._children_list.Hide()
 
         if widget is not None:
             widget.Show()
@@ -507,9 +671,14 @@ class DocumentViewerPanel(wx.Panel):
         self._match_label.SetLabel(f"Match {index + 1} of {len(self._matches)}")
         self._enable_nav(True)
 
-        if self._toc.GetFirstSelected() != index:
-            self._toc.Select(index)
-        self._toc.EnsureVisible(index)
+        # Only sync the TOC's own selection when it's actually the pane in
+        # play - in show_container_child_content(), _matches belongs to
+        # whichever child is currently selected in _children_list, and the
+        # (hidden, possibly stale) _toc has nothing to do with it.
+        if self._toc.IsShown():
+            if self._toc.GetFirstSelected() != index:
+                self._toc.Select(index)
+            self._toc.EnsureVisible(index)
 
         text = self._stc.GetText()
         start = _char_to_byte(text, min(match.start_offset, len(text)))
@@ -531,6 +700,12 @@ class DocumentViewerPanel(wx.Panel):
 
     def _on_toc_select(self, event: wx.ListEvent) -> None:
         self._activate(event.GetIndex())
+
+    def _on_children_select(self, event: wx.ListEvent) -> None:
+        index = event.GetIndex()
+        if 0 <= index < len(self._children_rows) and self.on_child_selected:
+            document, result = self._children_rows[index]
+            self.on_child_selected(document, result)
 
     # ------------------------------------------------------------------
     # Find in text - Ctrl+F/the toolbar button toggle the bar, F3/Shift+F3

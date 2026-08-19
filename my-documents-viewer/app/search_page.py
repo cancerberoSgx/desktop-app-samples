@@ -50,8 +50,12 @@ class SearchPage(wx.Panel):
     from the database. Double-clicking (or pressing Enter on) a file or
     record row opens its full text in a separate DocumentViewerFrame window,
     which highlights every matching chunk and offers a table of contents,
-    sorted by score, to jump between them; a container row has no content of
-    its own to open - double-clicking it just expands/collapses it."""
+    sorted by score, to jump between them. A container row has no content of
+    its own, but double-clicking it opens the same viewer on its matching
+    children instead (DocumentViewerPanel.show_container_results): a list of
+    just the records that matched, best-scoring first, with the best one's
+    content shown by default and each other one loadable by clicking it -
+    see _load_and_show_container."""
 
     def __init__(
         self,
@@ -238,10 +242,13 @@ class SearchPage(wx.Panel):
     def _on_result_activated(self, event: dv.TreeListEvent) -> None:
         data = self._selected_item_data()
         if isinstance(data, SearchResultGroup):
-            # A container group has no content of its own to open - just
-            # let the tree's own double-click expand/collapse happen.
             if data.self_result is not None:
                 self._load_and_show(data.self_result)
+            elif data.children:
+                # A container has no content of its own, but its matching
+                # children do - open the viewer on them instead of just
+                # letting the tree's own double-click expand/collapse it.
+                self._load_and_show_container(data)
         elif isinstance(data, DocumentSearchResult):
             self._load_and_show(data)
 
@@ -287,6 +294,51 @@ class SearchPage(wx.Panel):
         # directly the way plain-file viewing once did.
         self._viewer_async.run(
             work=lambda: self._repository.get_content(doc.document_id),
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    def _load_and_show_container(self, group: SearchResultGroup) -> None:
+        """Opens the shared viewer on a container's matching children
+        (DocumentViewerPanel.show_container_results) rather than doing
+        nothing - the container itself has no content, but the records that
+        actually matched do. `group.children` is already sorted best-first
+        (see _build_result_groups), so selecting the first one is what makes
+        the best-scoring child load by default."""
+        container = group.top_document
+        label = format_document_label(container, None, self._file_name_display)
+
+        viewer = self._get_viewer_frame()
+        viewer.Show()
+        viewer.Raise()
+        viewer.show_container_results(
+            label,
+            container,
+            group.children,
+            on_child_selected=lambda document, result: self._load_container_child(viewer, container, document, result),
+        )
+
+    def _load_container_child(
+        self,
+        viewer: DocumentViewerFrame,
+        container: Document,
+        document: Document,
+        result: DocumentSearchResult,
+    ) -> None:
+        label = format_document_label(document, container, self._file_name_display)
+        viewer.show_container_child_loading(label)
+
+        def on_success(text: str) -> None:
+            viewer.show_container_child_content(label, document, text, result.matches, container=container)
+
+        def on_error(exc: Exception) -> None:
+            viewer.show_container_child_error(label, str(exc))
+
+        # Same get_content() dispatch as _load_and_show - a record's path
+        # isn't a real file (see migration 0006), so this must go through
+        # the repository rather than reading document.path directly.
+        self._viewer_async.run(
+            work=lambda: self._repository.get_content(document.id),
             on_success=on_success,
             on_error=on_error,
         )

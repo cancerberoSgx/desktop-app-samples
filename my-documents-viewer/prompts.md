@@ -141,12 +141,23 @@ for openai or gemini models, when indexing, batch embeddings calls in 100 string
 
 
 
+# search parent doc result
+in search results, double clicking a parent document opens a document content viewer with the most relevant child documents at the left and clicking them I can see their contents. It display the first child document content by default
+
+
 
 ---
 
 # FUTURE
 
+# tests
+I want to write some integration tests but they should run without displaying an UI, only at the repository and service layers. 
+write pytest test which create a new profile (using default local embedding), add two data files a.csv with data {title: foo, description: 'lorem ipsum'} and b.csv with data {title: bar, description: 'lorem ipsum'}. Perform a fulltext search "lorem ipsum" and both should be returned. Perform a fulltext search with "bar" and only b.csv should be returned. 
+After the test finishes it should delete all created profiles and documents.
+
 # search embeddings should be cached (diskcache?)
+
+# The generate embeddings now confirmation modal, can be turned off in the modal "don't advice me again" and also in settings.
 
 # doc tags
 
