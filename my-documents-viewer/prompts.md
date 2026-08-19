@@ -154,12 +154,6 @@ After the test finishes it should delete all created profiles and documents.
 # The "generate embeddings now" confirmation modal, can be turned off in the modal "don't advice me again" and also in settings.
 
 
----
-
-# FUTURE
-
-# search embeddings should be cached (diskcache?)
-
 # chat
 I want users to be able to "chat" with their documents. Asking questions like "which years Argentina won the world cup?" or "give me the skus of red shirts". 
 Also I want to support conversations, for example multiple questions to refine a search. example: q1: "how many times Argentina won the world cup", q2: "on which years?", q3: "who played the final on 1986?" -all these questions in the same context.
@@ -167,6 +161,15 @@ Also users should be able to create new conversations, go back to previous conve
 Also I want to support product references, when the chat respond if there's a referenced document user should be able to click it and see the entire document details and content with the matched chunk or child document highlighted
 Chat should be able to use openai models or gemini models.
 Create a plan to implement so I can review &confirm before writing any code
+
+
+
+
+---
+
+# FUTURE
+
+# search embeddings should be cached (diskcache?)
 
 
 # doc tags
