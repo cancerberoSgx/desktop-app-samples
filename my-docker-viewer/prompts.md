@@ -256,3 +256,17 @@ In the sidebar, add a relevant icon to the "network" option
 
 # container disk details
 in containers disk screen, if user clicks a new action button "info" or double click a row in the table, the existing "container-details" screen is shown.
+
+# multiple selection
+in the containers list, user can multiple select containers by pressing ctrl (for individual selection) or shift (for range selections). Also they can shift+up or shift+down to multiple select. Actions start and stop apply to multiple containers selected
+
+p2
+in the volumes list, user can multiple select volumes by pressing ctrl (for individual selection) or shift (for range selections). Also they can shift+up or shift+down to multiple select. User can execute action "delete" on multiple selections
+
+# loading containers fast
+The containers screen takes too much time just to display containers names which should be instantaneous. Execute first 'docker ps' and display the available columns when execution finished. Execute "docker stats" in parallel and complete columns like mem, cpu, etc when that command finished (without blocking the UI at any moment) 
+
+# containers screen layout
+in containers screen, app window is too small and I can't see action buttons like start, stop, etc. 
+Can you put the controls in two rows, first the action buttons (refresh, start, stop, etc) and below the filters. 
+Also remove the "Containers" title on top to save vertical space

@@ -64,11 +64,17 @@ injection framework - everything is wired by hand in this one place, same as
 
 ### `ContainerRepository` (`app/repositories.py`) - the docker CLI wrapper
 
-- `list()` runs `docker ps -a --size --format '{{json .}}'` (one JSON object per
-  line - identity, status, size) and merges it with `docker stats --no-stream
-  --format '{{json .}}'` (live CPU/memory, keyed by container ID) - `docker stats`
-  only reports running containers, so stopped ones simply keep `cpu_percent` /
-  `mem_usage` / `mem_percent` as `None`.
+- `list_identity()` runs `docker ps -a --size --format '{{json .}}'` (one JSON
+  object per line - identity, status, size); `stats()` separately runs `docker
+  stats --no-stream --format '{{json .}}'` and returns live CPU/memory keyed by
+  container ID - `docker stats` only reports running containers, so stopped
+  ones are simply absent from that dict. These are two separate methods, not
+  one merged call, because `docker ps` is near-instant while `docker stats
+  --no-stream` has to wait out a full sampling window - `ContainersPage.reload()`
+  runs both concurrently and renders identity the moment it lands rather than
+  blocking the table on the slower of the two (see below). `list()` still
+  exists as a convenience that runs both sequentially and merges them into one
+  snapshot, for any caller that wants that and doesn't care about latency.
 - `stop(container_id)` / `remove(container_id, force=...)` shell out to
   `docker stop` / `docker rm [-f]` directly - no dry-run, no undo.
 - Every call goes through the private `_run()` helper, which distinguishes two
@@ -93,13 +99,41 @@ through `AsyncTaskRunner`, never called synchronously from a `wx.EVT_*` handler 
 timer tick.**
 
 - `ContainersPage` creates one `AsyncTaskRunner` instance in `__init__` and reuses
-  it for `reload()`, `_on_stop()`, and `_on_remove()`.
+  it for `_on_start()`, `_on_stop()`, and `_on_remove()`. `reload()` itself does
+  **not** use it - see "Containers list: identity and stats load independently"
+  below for why - it uses the lower-level `run_background()` instead, same as
+  `ContainersDiskPage`'s per-container jobs.
 - `AsyncTaskRunner.run()` ignores a second call while one is already in flight on
-  that instance - this is what makes the auto-refresh timer (see below) safe to
-  fire even if a manual refresh or a stop/remove is still running: `reload()`
-  checks `self._async.is_busy()` itself before even attempting to call `run()`.
-- Built on `wx.lib.delayedresult.startWorker`, not `asyncio` - keep using it for
-  any new blocking docker call rather than introducing a second concurrency model.
+  that instance - this is what keeps a stray double-click (or an auto-refresh
+  timer tick landing mid-action) from stacking overlapping `docker
+  start`/`stop`/`rm` calls.
+- Built on `wx.lib.delayedresult.startWorker`, not `asyncio` - keep using it (or
+  `run_background()` for independent concurrent jobs) for any new blocking
+  docker call rather than introducing a second concurrency model.
+
+### Containers list: identity and stats load independently
+
+`ContainersPage.reload()` fires two concurrent background jobs via
+`run_background()` (not `AsyncTaskRunner`, which only runs one task at a time)
+- `ContainerRepository.list_identity()` (`docker ps`) and `.stats()` (`docker
+stats --no-stream`) - instead of one sequential call, because `docker stats`
+has to wait out a full sampling window and would otherwise hold back the
+already-available identity data for that whole time, leaving the table
+sitting blank/stale for no reason. Whichever job finishes first renders
+first: identity landing populates every column except cpu/mem (shown as `-`
+until stats arrives); stats landing merges cpu/mem into whatever's already on
+screen by container ID. `_reload_pending` (an int, not a bool - two jobs) is
+this cycle's busy flag: `reload()` bails if it's nonzero (so the auto-refresh
+timer can't stack a new cycle on top of one still in flight), and
+`_on_start`/`_on_stop`/`_on_remove` also bail on it, since `AsyncTaskRunner`'s
+own busy flag no longer covers reload the way it used to when reload ran
+through that same runner. A job can land in either order - if stats arrives
+before identity (identity is normally the faster of the two, but isn't
+guaranteed to be), it's held in `_pending_stats` and merged in once identity
+shows up (`_identity_ready`), rather than merged against the previous cycle's
+containers or dropped. A `docker stats` failure alone doesn't blank the
+screen the way an identity failure does - `docker ps` already succeeded (or
+will) independently, so cpu/mem just stay `-` for that cycle.
 
 ### Auto-refresh
 

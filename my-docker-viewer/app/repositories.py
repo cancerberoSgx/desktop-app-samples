@@ -3,6 +3,7 @@ import os
 import subprocess
 import sqlite3
 import threading
+import time
 from typing import Dict, List, Optional, Set, Tuple
 
 from .models import (
@@ -48,6 +49,8 @@ def _run_docker(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> str:
     every repository in this module - `ContainerRepository._run` and
     `DiskUsageRepository` both delegate here rather than each shelling out
     independently."""
+    t0=time.time()
+    print('docker ', ' '.join(args))
     try:
         result = subprocess.run(
             [DOCKER_BINARY, *args],
@@ -67,18 +70,41 @@ def _run_docker(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> str:
         raise DockerCommandError(
             result.stderr.strip() or f"docker {' '.join(args)} failed with exit code {result.returncode}."
         )
+    print('docker ', ' '.join(args), 'took', time.time()-t0)
     return result.stdout
 
 
 class ContainerRepository:
     """Wraps the docker CLI - no docker SDK dependency, every operation
     shells out to `docker` and parses its `--format '{{json .}}'` output.
-    `list()` merges `docker ps -a --size` (identity, status, size) with
-    `docker stats --no-stream` (live cpu/mem, running containers only)."""
+
+    Identity (`docker ps -a --size`) and live stats (`docker stats
+    --no-stream`) are exposed as two separate calls - `list_identity()` and
+    `stats()` - rather than one merged `list()`, because they cost very
+    different amounts of time: `docker ps` is near-instant, while `docker
+    stats --no-stream` has to wait out a full sampling window. ContainersPage
+    fires both concurrently (via `run_background`, not this repository) and
+    renders identity the moment it lands rather than blocking the whole
+    table on the slower of the two - see its `reload()`. `list()` below is
+    kept as a convenience for callers that just want one complete snapshot
+    and don't care about the two calls landing separately."""
+
+    def list_identity(self) -> List[Container]:
+        return sorted(self._ps(), key=lambda c: c.names)
+
+    def stats(self) -> Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]]:
+        """Live cpu/mem for running containers, keyed by container id -
+        `docker stats` reports nothing for stopped containers, so they're
+        simply absent from this dict rather than present with `None`
+        values."""
+        return {
+            container_id: (cpu_percent, mem_usage, mem_percent)
+            for container_id, cpu_percent, mem_usage, mem_percent in self._stats()
+        }
 
     def list(self) -> List[Container]:
-        containers = {c.id: c for c in self._ps()}
-        for container_id, cpu_percent, mem_usage, mem_percent in self._stats():
+        containers = {c.id: c for c in self.list_identity()}
+        for container_id, (cpu_percent, mem_usage, mem_percent) in self.stats().items():
             container = containers.get(container_id)
             if container is not None:
                 container.cpu_percent = cpu_percent

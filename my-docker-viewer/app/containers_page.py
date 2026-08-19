@@ -1,8 +1,8 @@
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import wx
 
-from .async_task import AsyncTaskRunner
+from .async_task import AsyncTaskRunner, run_background
 from .container_details_dialog import show_container_details
 from .formatting import size_sort_key
 from .models import Container
@@ -60,6 +60,15 @@ class ContainersPage(wx.Panel):
     are point-in-time samples that go stale after every load; when enabled it
     reloads on a timer (skipped while a request is already in flight).
 
+    `reload()` fetches identity (`docker ps`) and live stats (`docker
+    stats --no-stream`) as two independent, concurrent background jobs
+    rather than one sequential call - `docker stats` has to wait out a full
+    sampling window, and the table would otherwise sit blank that whole
+    time even though the (near-instant) identity data was ready already.
+    Identity renders the moment it lands, with cpu/mem showing "-"; stats
+    fills those columns in whenever it finishes, in whichever order the two
+    jobs happen to complete.
+
     Info opens `ContainerDetailsDialog` (`app/container_details_dialog.py`)
     for the selected container - identity, live cpu/mem, ports, networks,
     and real disk usage in one popup. That dialog is its own reusable
@@ -76,6 +85,14 @@ class ContainersPage(wx.Panel):
         self._containers: List[Container] = []
         self._visible: List[Container] = []
         self._async = AsyncTaskRunner(self)
+        # reload() bookkeeping: two independent background jobs (identity +
+        # stats) run concurrently per cycle - see reload()'s docstring.
+        # _reload_pending counts how many of those two are still in flight
+        # (0 = idle); _pending_stats holds whichever of the two lands first
+        # until the other one is ready to be merged with it.
+        self._reload_pending = 0
+        self._identity_ready = False
+        self._pending_stats: Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]] = {}
 
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Containers"), 0, wx.ALL, 12)
@@ -134,8 +151,9 @@ class ContainersPage(wx.Panel):
 
         self.SetSizer(outer)
 
-        # Sortable columns: repository.list() already returns containers
-        # sorted by name, so that's also the initial header sort state.
+        # Sortable columns: repository.list_identity() already returns
+        # containers sorted by name, so that's also the initial header sort
+        # state.
         self._sort_column = 0
         self._sort_ascending = True
 
@@ -173,15 +191,28 @@ class ContainersPage(wx.Panel):
     # Loading
     # ------------------------------------------------------------------
     def reload(self) -> None:
-        if self._async.is_busy():
+        # Guard against both directions: don't stack a new reload cycle on
+        # top of one still in flight (the timer, mainly), and don't run
+        # while a start/stop/remove is in flight either - those mutate
+        # self._containers in place, and a reload landing mid-mutation
+        # would just clobber it (self-corrects next cycle, but no reason
+        # to race).
+        if self._async.is_busy() or self._reload_pending:
             return
         self._set_loading(True)
-        self._async.run(
-            work=self._repository.list,
-            on_success=self._on_loaded,
-            on_error=self._on_load_error,
-            on_done=lambda: self._set_loading(False),
-            disable=[self._refresh_btn],
+        self._refresh_btn.Enable(False)
+        self._reload_pending = 2
+        self._identity_ready = False
+        self._pending_stats = {}
+        run_background(
+            work=self._repository.list_identity,
+            on_success=self._on_identity_loaded,
+            on_error=self._on_identity_error,
+        )
+        run_background(
+            work=self._repository.stats,
+            on_success=self._on_stats_loaded,
+            on_error=self._on_stats_error,
         )
 
     def _set_loading(self, loading: bool) -> None:
@@ -197,15 +228,52 @@ class ContainersPage(wx.Panel):
         self._list.DeleteAllItems()
         self._list.InsertItem(0, "Loading containers...")
 
-    def _on_loaded(self, containers: List[Container]) -> None:
+    def _on_identity_loaded(self, containers: List[Container]) -> None:
         self._set_error(None)
+        # Stats can land before identity does (rare, but not impossible) -
+        # apply whatever this cycle already has rather than showing a
+        # moment of blank cpu/mem that a race just happened to avoid.
+        self._apply_stats(containers, self._pending_stats)
         self._containers = containers
+        self._identity_ready = True
         self._populate_list()
+        self._finish_reload_step()
 
-    def _on_load_error(self, exc: Exception) -> None:
+    def _on_identity_error(self, exc: Exception) -> None:
         self._set_error(str(exc))
         self._containers = []
+        self._identity_ready = True
         self._populate_list()
+        self._finish_reload_step()
+
+    def _on_stats_loaded(self, stats_by_id: Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]]) -> None:
+        self._pending_stats = stats_by_id
+        if self._identity_ready:
+            self._apply_stats(self._containers, stats_by_id)
+            self._populate_list()
+        self._finish_reload_step()
+
+    def _on_stats_error(self, exc: Exception) -> None:
+        # `docker ps` succeeds or fails independently of `docker stats` -
+        # don't blank out an otherwise-good table over a stats failure,
+        # just leave cpu/mem showing "-" for this cycle.
+        self._finish_reload_step()
+
+    def _finish_reload_step(self) -> None:
+        self._reload_pending = max(0, self._reload_pending - 1)
+        if self._reload_pending == 0:
+            self._set_loading(False)
+            self._refresh_btn.Enable(True)
+
+    @staticmethod
+    def _apply_stats(
+        containers: List[Container],
+        stats_by_id: Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]],
+    ) -> None:
+        for container in containers:
+            stats = stats_by_id.get(container.id)
+            if stats:
+                container.cpu_percent, container.mem_usage, container.mem_percent = stats
 
     def _set_error(self, message: Optional[str]) -> None:
         if message:
@@ -373,7 +441,11 @@ class ContainersPage(wx.Panel):
 
     def _on_start(self, event: wx.CommandEvent) -> None:
         container = self._selected_container()
-        if container is None:
+        # reload() no longer runs on the shared AsyncTaskRunner (see its
+        # docstring), so it can't rely on that runner's busy flag to keep
+        # this from racing self._containers - check the reload counter
+        # directly instead, same "just don't" as the busy check used to be.
+        if container is None or self._reload_pending:
             return
 
         def on_error(exc: Exception) -> None:
@@ -393,7 +465,7 @@ class ContainersPage(wx.Panel):
 
     def _on_stop(self, event: wx.CommandEvent) -> None:
         container = self._selected_container()
-        if container is None:
+        if container is None or self._reload_pending:
             return
 
         def on_error(exc: Exception) -> None:
@@ -413,7 +485,7 @@ class ContainersPage(wx.Panel):
 
     def _on_remove(self, event: wx.CommandEvent) -> None:
         container = self._selected_container()
-        if container is None:
+        if container is None or self._reload_pending:
             return
 
         force = container.is_running
