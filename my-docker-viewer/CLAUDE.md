@@ -361,6 +361,19 @@ something actually creates/removes one).
   explanation naming the referencing containers *instead of* attempting a call
   that's guaranteed to fail - "explain before it fails" rather than
   round-tripping to docker's own less specific error.
+- **`VolumesPage`'s list is the one multi-select list in this app** -
+  `wx.LC_REPORT` without `wx.LC_SINGLE_SEL`, so ctrl/shift-click and
+  shift+Up/Down are wx.ListCtrl's own native selection handling, no custom
+  code needed for that part. `_selected_volumes()` (plural, in list order)
+  backs Remove and the Delete-key shortcut bound to it; `_selected_volume()`
+  (singular) still exists for Info, which only makes sense for one row and
+  returns `None` - disabling the button - when the selection isn't exactly
+  one. Removing a multi-selection partitions it into removable/in-use
+  up front (same `is_in_use` check as the single-volume case) and removes
+  every removable one - continuing past an individual `docker volume rm`
+  failure rather than aborting the batch, same posture as
+  `ImageRepository.remove_with_dependents` - rather than blocking the whole
+  batch because one selected volume is in use.
 - **`Network.is_builtin`** (`bridge`/`host`/`none` - the networks docker
   creates itself at daemon startup) disables the Remove button outright in
   `NetworksPage._update_button_states`, same reasoning as the in-use check

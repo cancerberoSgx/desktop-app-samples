@@ -160,43 +160,47 @@ class ImagesPage(wx.Panel):
         self._async = AsyncTaskRunner(self)
 
         outer = wx.BoxSizer(wx.VERTICAL)
-        outer.Add(wx.StaticText(self, label="Images"), 0, wx.ALL, 12)
 
         self._error_text = wx.StaticText(self, label="")
         self._error_text.SetForegroundColour(wx.Colour(180, 30, 30))
-        outer.Add(self._error_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        outer.Add(self._error_text, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
         self._error_text.Hide()
 
-        toolbar = wx.BoxSizer(wx.HORIZONTAL)
-        toolbar.Add(wx.StaticText(self, label="Name:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._name_filter = wx.SearchCtrl(self, size=(160, -1))
-        self._name_filter.ShowCancelButton(True)
-        toolbar.Add(self._name_filter, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
-
-        toolbar.Add(wx.StaticText(self, label="Status:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self._status_choice = wx.Choice(self, choices=STATUS_CHOICES)
-        self._status_choice.SetSelection(0)
-        toolbar.Add(self._status_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
-
-        self._include_tagged_checkbox = wx.CheckBox(self, label="Prune: include tagged unused images")
-        toolbar.Add(self._include_tagged_checkbox, 0, wx.ALIGN_CENTER_VERTICAL)
-
-        toolbar.AddStretchSpacer()
-
-        self._loading_text = wx.StaticText(self, label="")
-        self._loading_text.SetForegroundColour(wx.Colour(120, 120, 120))
-        toolbar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-
+        # Row 1: actions.
+        actions_bar = wx.BoxSizer(wx.HORIZONTAL)
         self._refresh_btn = wx.Button(self, label="Refresh")
         self._info_btn = wx.Button(self, label="Info")
         self._remove_btn = wx.Button(self, label="Remove")
         self._prune_btn = wx.Button(self, label="Prune unused")
-        toolbar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
-        toolbar.Add(self._info_btn, 0, wx.RIGHT, 8)
-        toolbar.Add(self._remove_btn, 0, wx.RIGHT, 8)
-        toolbar.Add(self._prune_btn, 0)
+        actions_bar.Add(self._refresh_btn, 0, wx.RIGHT, 8)
+        actions_bar.Add(self._info_btn, 0, wx.RIGHT, 8)
+        actions_bar.Add(self._remove_btn, 0, wx.RIGHT, 8)
+        actions_bar.Add(self._prune_btn, 0)
 
-        outer.Add(toolbar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        actions_bar.AddStretchSpacer()
+
+        self._loading_text = wx.StaticText(self, label="")
+        self._loading_text.SetForegroundColour(wx.Colour(120, 120, 120))
+        actions_bar.Add(self._loading_text, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        outer.Add(actions_bar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
+
+        # Row 2: filters.
+        filters_bar = wx.BoxSizer(wx.HORIZONTAL)
+        filters_bar.Add(wx.StaticText(self, label="Name:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self._name_filter = wx.SearchCtrl(self, size=(160, -1))
+        self._name_filter.ShowCancelButton(True)
+        filters_bar.Add(self._name_filter, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        filters_bar.Add(wx.StaticText(self, label="Status:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self._status_choice = wx.Choice(self, choices=STATUS_CHOICES)
+        self._status_choice.SetSelection(0)
+        filters_bar.Add(self._status_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        self._include_tagged_checkbox = wx.CheckBox(self, label="Prune: include tagged unused images")
+        filters_bar.Add(self._include_tagged_checkbox, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        outer.Add(filters_bar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, 12)
 
         self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
         self._column_labels = [label for label, _width in _COLUMNS]
