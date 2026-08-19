@@ -7,3 +7,4 @@ dist
 aur/*.pkg.tar.zst
 aur/pkg
 aur/my-data-viewer-git
+aur/src

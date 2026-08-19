@@ -9,14 +9,13 @@
 # /AUR.md at the repo root for the full local-test/publish workflow.
 
 pkgname=my-data-viewer-git
-pkgver=r85.c130374
+pkgver=r103.3566771
 pkgrel=1
 pkgdesc="Native wxWidgets desktop viewer for CSV/JSON files and databases - browse tables/columns/indexes and run SQL"
 arch=('any')
 url="https://github.com/cancerberoSgx/desktop-app-samples"
 license=('MIT')
-depends=('python' 'python-wxpython' 'python-duckdb' 'python-sqlalchemy')
-optdepends=('python-psycopg2: connect to PostgreSQL data sources')
+depends=('python' 'python-wxpython' 'python-duckdb' 'python-sqlalchemy' 'python-psycopg2')
 makedepends=('git')
 provides=('my-data-viewer' 'mydataviewer')
 conflicts=('my-data-viewer' 'mydataviewer')

@@ -297,6 +297,8 @@ can you diagnose them and propose ways to fixing it ? just answer, don't write c
 # data table component
 can we unify ScriptResultPanel and DataTab that display db select records both for exploring whole table or a script select result ? I want to improve it a lot and a single component / file reused in both views would help. 
 
+issue:
+aur install runs but fails with "No module named 'psycopg2'"
 
 # FUTURE
 

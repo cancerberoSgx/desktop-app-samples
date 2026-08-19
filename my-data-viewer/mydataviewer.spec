@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('app/db/migrations', 'app/db/migrations')],
+    datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -41,11 +41,4 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='mydataviewer',
-)
-
-app = BUNDLE(
-    coll,
-    name='mydataviewer.app',
-    icon=None,
-    bundle_identifier=None,
 )

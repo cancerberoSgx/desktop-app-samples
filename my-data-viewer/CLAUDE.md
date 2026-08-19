@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A wxPython desktop app for exploring databases and CSV files: users pick a **profile**,
 and everything else (currently just data sources) belongs to that profile. A data
-source can be queried for its tables/columns/indexes and via arbitrary SQL. Only the
-`csv` data source type is implemented end-to-end (via DuckDB); `postgres`/`mysql` can
-be saved as records but raise `NotImplementedError` when queried.
+source can be queried for its tables/columns/indexes and via arbitrary SQL. `csv`/`json`
+are implemented via DuckDB, and `sqlite`/`postgres` via SQLAlchemy (see
+`app/drivers.py`); `mysql` can be saved as a record but raises `NotImplementedError`
+when queried.
 
 ## Commands
 

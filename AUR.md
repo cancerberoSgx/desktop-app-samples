@@ -13,7 +13,7 @@ path works; this file covers the AUR path only.
 
 | App | `aur/` PKGBUILD | AUR pkgname | Binary | Extra runtime deps |
 |---|---|---|---|---|
-| my-data-viewer | `my-data-viewer/aur/PKGBUILD` | `my-data-viewer-git` | `mydataviewer` | `python-duckdb`, `python-sqlalchemy`; optional `python-psycopg2` for Postgres data sources |
+| my-data-viewer | `my-data-viewer/aur/PKGBUILD` | `my-data-viewer-git` | `mydataviewer` | `python-duckdb`, `python-sqlalchemy`, `python-psycopg2` |
 | my-disk-viewer | `my-disk-viewer/aur/PKGBUILD` | `my-disk-viewer-git` | `mydiskviewer` | - |
 | my-docker-viewer | `my-docker-viewer/aur/PKGBUILD` | `my-docker-viewer-git` | `mydockerviewer` | optional `docker` (the CLI it shells out to) |
 | my-redis-viewer | `my-redis-viewer/aur/PKGBUILD` | `my-redis-viewer-git` | `myredisviewer` | `python-redis` |
