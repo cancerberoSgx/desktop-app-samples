@@ -9,9 +9,18 @@ from .data_import import DataFilePreview, ImportMapping
 from .data_import import preview as preview_data_file
 from .data_import_dialog import ImportMappingDialog
 from .document_viewer import DocumentViewerFrame
+from .embedding_confirm_dialog import EmbeddingConfirmDialog
 from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_document_label
 from .models import KIND_CONTAINER, KIND_FILE, KIND_RECORD, Document
-from .repositories import EMBED_BATCH_SIZE, DocumentRepository, IndexRunSummary, ProfileRepository
+from .repositories import (
+    EMBED_BATCH_SIZE,
+    EMBEDDING_CONFIRM_ALWAYS_EMBED,
+    EMBEDDING_CONFIRM_ALWAYS_TEXT_ONLY,
+    EMBEDDING_CONFIRM_DEFAULT,
+    DocumentRepository,
+    IndexRunSummary,
+    ProfileRepository,
+)
 
 FILE_DIALOG_WILDCARD = "Text/Markdown files (*.txt;*.md)|*.txt;*.md|All files (*.*)|*.*"
 DATA_FILE_DIALOG_WILDCARD = "Data files (*.csv;*.json)|*.csv;*.json|All files (*.*)|*.*"
@@ -38,6 +47,8 @@ class DocumentsPage(wx.Panel):
         profile_id: int,
         on_status: Optional[Callable[[str], None]] = None,
         file_name_display: str = FILE_NAME_DISPLAY_DEFAULT,
+        embedding_confirm_default: str = EMBEDDING_CONFIRM_DEFAULT,
+        on_embedding_confirm_default_changed: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._repository = repository
@@ -45,6 +56,8 @@ class DocumentsPage(wx.Panel):
         self._profile_id = profile_id
         self._on_status = on_status or (lambda text: None)
         self._file_name_display = file_name_display
+        self._embedding_confirm_default = embedding_confirm_default
+        self._on_embedding_confirm_default_changed = on_embedding_confirm_default_changed or (lambda mode: None)
         self._async = AsyncTaskRunner(self)
         # Separate from `_async`: opening the content viewer shouldn't be
         # blocked by (or block) an indexing/import run in flight on this page.
@@ -116,6 +129,9 @@ class DocumentsPage(wx.Panel):
     def set_file_name_display(self, mode: str) -> None:
         self._file_name_display = mode
         self.reload()
+
+    def set_embedding_confirm_default(self, mode: str) -> None:
+        self._embedding_confirm_default = mode
 
     def reload(self) -> None:
         self._tree.DeleteAllItems()
@@ -417,26 +433,40 @@ class DocumentsPage(wx.Panel):
             self._start_import(profile, path, mapping, embed=True, force=force, on_done_extra=on_done_extra)
             return
 
+        if self._embedding_confirm_default == EMBEDDING_CONFIRM_ALWAYS_EMBED:
+            print("[documents_page] remembered choice: always embed - skipping consent prompt")
+            self._start_import(profile, path, mapping, embed=True, force=force, on_done_extra=on_done_extra)
+            return
+        if self._embedding_confirm_default == EMBEDDING_CONFIRM_ALWAYS_TEXT_ONLY:
+            print("[documents_page] remembered choice: always full-text only - skipping consent prompt")
+            self._start_import(profile, path, mapping, embed=False, force=force, on_done_extra=on_done_extra)
+            return
+
         print(f"[documents_page] {profile.embedding_backend} backend - asking for embedding consent")
-        dlg = wx.MessageDialog(
+        dlg = EmbeddingConfirmDialog(
             self,
             f"This will send {row_count} row(s) to {profile.embedding_backend} for embedding "
             f"(in batches of up to {EMBED_BATCH_SIZE} rows per request), using your API key.\n\n"
             "Generate embeddings now, import for full-text search only for now (you can\n"
             "generate embeddings later via \"Generate Embeddings\"), or cancel?",
-            "Generate embeddings?",
-            wx.YES_NO | wx.CANCEL | wx.ICON_QUESTION,
         )
-        dlg.SetYesNoCancelLabels("Generate embeddings now", "Full-text only for now", "Cancel")
-        choice = dlg.ShowModal()
+        dlg.ShowModal()
+        choice = dlg.get_choice()
+        remember = dlg.get_remember()
         dlg.Destroy()
-        print(f"[documents_page] consent dialog choice: {choice} (YES={wx.ID_YES} NO={wx.ID_NO} CANCEL={wx.ID_CANCEL})")
+        print(f"[documents_page] consent dialog choice: {choice} remember={remember}")
 
-        if choice == wx.ID_CANCEL:
+        if choice is None:
             if on_done_extra:
                 on_done_extra()
             return
-        self._start_import(profile, path, mapping, embed=(choice == wx.ID_YES), force=force, on_done_extra=on_done_extra)
+
+        if remember:
+            new_default = EMBEDDING_CONFIRM_ALWAYS_EMBED if choice == "embed" else EMBEDDING_CONFIRM_ALWAYS_TEXT_ONLY
+            self._embedding_confirm_default = new_default
+            self._on_embedding_confirm_default_changed(new_default)
+
+        self._start_import(profile, path, mapping, embed=(choice == "embed"), force=force, on_done_extra=on_done_extra)
 
     def _start_reindex_container(self, container: Document, on_done_extra: Optional[Callable[[], None]] = None) -> None:
         profile = self._current_profile()

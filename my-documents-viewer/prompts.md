@@ -145,20 +145,28 @@ for openai or gemini models, when indexing, batch embeddings calls in 100 string
 in search results, double clicking a parent document opens a document content viewer with the most relevant child documents at the left and clicking them I can see their contents. It display the first child document content by default
 
 
-
----
-
-# FUTURE
-
 # tests
 I want to write some integration tests but they should run without displaying an UI, only at the repository and service layers. 
 write pytest test which create a new profile (using default local embedding), add two data files a.csv with data {title: foo, description: 'lorem ipsum'} and b.csv with data {title: bar, description: 'lorem ipsum'}. Perform a fulltext search "lorem ipsum" and both should be returned. Perform a fulltext search with "bar" and only b.csv should be returned. 
 After the test finishes it should delete all created profiles and documents.
 
+
+# The "generate embeddings now" confirmation modal, can be turned off in the modal "don't advice me again" and also in settings.
+
+
+---
+
+# FUTURE
+
 # search embeddings should be cached (diskcache?)
 
-# The generate embeddings now confirmation modal, can be turned off in the modal "don't advice me again" and also in settings.
-
+# chat
+I want users to be able to "chat" with their documents. Asking questions like "which years Argentina won the world cup?" or "give me the skus of red shirts". 
+Also I want to support conversations, for example multiple questions to refine a search. example: q1: "how many times Argentina won the world cup", q2: "on which years?", q3: "who played the final on 1986?" -all these questions in the same context.
+Also users should be able to create new conversations, go back to previous conversations, delete conversations, update/rename existing conversations.
+Also I want to support product references, when the chat respond if there's a referenced document user should be able to click it and see the entire document details and content with the matched chunk or child document highlighted
+Chat should be able to use openai models or gemini models.
+Create a plan to implement so I can review &confirm before writing any code
 # doc tags
 
 when a document is added or by editing a document, user can create or add tags to the document, User has a view to see all their tags and associated documents for each in a separate view. Each profile has its tags. In search, user can filtering by tags and verbs : contains all , contains any, don't contain, etc

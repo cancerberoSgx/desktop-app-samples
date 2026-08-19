@@ -29,6 +29,7 @@ class MainFrame(wx.Frame):
 
         self.active_profile_id = self._bootstrap_active_profile()
         self._file_name_display = self.settings_repository.get_file_name_display()
+        self._embedding_confirm_default = self.settings_repository.get_embedding_confirm_default()
 
         self._build_menu_bar()
         self.CreateStatusBar(2)
@@ -64,6 +65,8 @@ class MainFrame(wx.Frame):
             self.active_profile_id,
             on_status=lambda text: self.SetStatusText(text, 0),
             file_name_display=self._file_name_display,
+            embedding_confirm_default=self._embedding_confirm_default,
+            on_embedding_confirm_default_changed=self._on_embedding_confirm_default_changed,
         )
         self.search_page = SearchPage(
             self.book,
@@ -160,7 +163,7 @@ class MainFrame(wx.Frame):
         self.settings_repository.set_sidebar_collapsed(collapsed)
 
     def _on_settings(self, event: wx.CommandEvent) -> None:
-        dlg = SettingsDialog(self, self._file_name_display)
+        dlg = SettingsDialog(self, self._file_name_display, self._embedding_confirm_default)
         if dlg.ShowModal() == wx.ID_OK:
             mode = dlg.get_file_name_display()
             if mode != self._file_name_display:
@@ -168,7 +171,19 @@ class MainFrame(wx.Frame):
                 self.settings_repository.set_file_name_display(mode)
                 self.documents_page.set_file_name_display(mode)
                 self.search_page.set_file_name_display(mode)
+
+            embedding_confirm_default = dlg.get_embedding_confirm_default()
+            if embedding_confirm_default != self._embedding_confirm_default:
+                self._on_embedding_confirm_default_changed(embedding_confirm_default)
         dlg.Destroy()
+
+    def _on_embedding_confirm_default_changed(self, mode: str) -> None:
+        # Shared by SettingsDialog's own control and EmbeddingConfirmDialog's
+        # "Don't ask me again" checkbox (via DocumentsPage) - either one can
+        # undo the other, since both just write this one setting.
+        self._embedding_confirm_default = mode
+        self.settings_repository.set_embedding_confirm_default(mode)
+        self.documents_page.set_embedding_confirm_default(mode)
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         self.Close()

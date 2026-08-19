@@ -19,6 +19,19 @@ from .vector_codec import serialize_vector
 CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
 FILE_NAME_DISPLAY_SETTING_KEY = "file_name_display"
+EMBEDDING_CONFIRM_SETTING_KEY = "embedding_confirm_default"
+
+# Tri-state default for the "Generate embeddings?" consent prompt shown by
+# DocumentsPage._decide_embedding_and_import for openai/gemini profiles (see
+# EmbeddingConfirmDialog). ASK is the out-of-the-box behavior (unchanged);
+# the other two are what a "Don't ask me again" checkbox on that dialog, or
+# the matching Settings dialog control, remembers - skipping the prompt on
+# every later import until reset back to ASK.
+EMBEDDING_CONFIRM_ASK = "ask"
+EMBEDDING_CONFIRM_ALWAYS_EMBED = "always_embed"
+EMBEDDING_CONFIRM_ALWAYS_TEXT_ONLY = "always_text_only"
+EMBEDDING_CONFIRM_MODES = (EMBEDDING_CONFIRM_ASK, EMBEDDING_CONFIRM_ALWAYS_EMBED, EMBEDDING_CONFIRM_ALWAYS_TEXT_ONLY)
+EMBEDDING_CONFIRM_DEFAULT = EMBEDDING_CONFIRM_ASK
 
 # Reciprocal Rank Fusion constant - the standard choice (see e.g. Cormack et
 # al.'s RRF paper); combines the full-text and vector rankings without
@@ -132,7 +145,9 @@ class ProfileRepository:
 
 class SettingsRepository:
     """Key/value app settings (pure SQL against SQLite): which profile was
-    last active, and whether the sidebar was collapsed."""
+    last active, whether the sidebar was collapsed, file name display mode,
+    and the remembered default for the "Generate embeddings?" consent
+    prompt (see EMBEDDING_CONFIRM_MODES above)."""
 
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
@@ -168,6 +183,13 @@ class SettingsRepository:
 
     def set_file_name_display(self, mode: str) -> None:
         self.set(FILE_NAME_DISPLAY_SETTING_KEY, mode)
+
+    def get_embedding_confirm_default(self) -> str:
+        value = self.get(EMBEDDING_CONFIRM_SETTING_KEY)
+        return value if value in EMBEDDING_CONFIRM_MODES else EMBEDDING_CONFIRM_DEFAULT
+
+    def set_embedding_confirm_default(self, mode: str) -> None:
+        self.set(EMBEDDING_CONFIRM_SETTING_KEY, mode)
 
 
 class DocumentRepository:

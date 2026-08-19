@@ -40,7 +40,10 @@ app/
       0004_create_settings.sql
 probes/
   index_and_search.py          Standalone fastembed + sqlite-vec quality check (no UI)
+tests/
+  test_csv_import_search.py    Repository-layer integration test (no UI) - see "Tests"
 requirements.txt
+requirements-dev.txt            requirements.txt + pytest, for running tests/
 mydocumentsviewer.spec
 ```
 
@@ -141,6 +144,29 @@ python3 main.py
 database) that indexes a handful of sample texts with fastembed and searches them
 with sqlite-vec, to sanity-check retrieval quality in isolation. See
 `probes/README.md`.
+
+## Tests
+
+Integration tests live under `tests/` and run at the repository/service layer only -
+no wxPython UI is created, so they run headless (CI-friendly, no display needed).
+Each test builds its own temp-file SQLite database (via pytest's `tmp_path`), applies
+the real migrations, and exercises `ProfileRepository`/`DocumentRepository` directly -
+never against the real `~/.my-documents-viewer/my-documents-viewer.db` - and deletes
+whatever profile it created (which cascades to its documents/chunks/FTS rows) when
+it's done.
+
+Install test dependencies (into the same venv used to run the app) and run:
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+Because `ProfileRepository.create` leaves a profile on its `fastembed`/384d defaults
+and structured-data imports only embed when explicitly asked to
+(`import_data_file(..., embed=False)`), the tests never need fastembed's ONNX model
+downloaded - they stay fast and network-free even though the "default local
+embedding" profile config is exactly what's exercised.
 
 ## Building standalone executables
 
