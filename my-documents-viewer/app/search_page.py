@@ -5,6 +5,7 @@ import wx
 import wx.dataview as dv
 
 from .async_task import AsyncTaskRunner
+from .document_open import open_document_at_matches
 from .document_viewer import DocumentViewerFrame
 from .file_display import FILE_NAME_DISPLAY_DEFAULT, format_document_label, format_record_short_label
 from .models import KIND_RECORD, Document, DocumentSearchResult
@@ -265,37 +266,16 @@ class SearchPage(wx.Panel):
     def _load_and_show(self, doc: DocumentSearchResult) -> None:
         # A record's DocumentSearchResult.document_path is a synthetic
         # string DocumentRepository generates purely to keep it unique (see
-        # migration 0006) - never meant to be shown, so the viewer's title
-        # and details are built from the real Document (and, for a record,
-        # its container) instead.
-        document = self._repository.get(doc.document_id)
-        if document is None:
-            return  # removed since the search ran
-        container = self._repository.get(document.parent_document_id) if document.parent_document_id else None
-        label = format_document_label(document, container, self._file_name_display)
-
-        viewer = self._get_viewer_frame()
-        # Show/Raise before feeding it content - the viewer's splitter can
-        # leave stale rendering behind if its split state changes before the
-        # top-level window has ever been mapped (a GTK realization quirk).
-        viewer.Show()
-        viewer.Raise()
-        viewer.show_loading(label)
-
-        def on_success(text: str) -> None:
-            viewer.show_document(label, document, text, doc.matches, container=container)
-
-        def on_error(exc: Exception) -> None:
-            viewer.show_error(label, str(exc))
-
-        # get_content() dispatches on the document's kind - a record's
-        # `document_path` isn't a real file (see migration 0006), so this
-        # must go through the repository rather than reading the path
-        # directly the way plain-file viewing once did.
-        self._viewer_async.run(
-            work=lambda: self._repository.get_content(doc.document_id),
-            on_success=on_success,
-            on_error=on_error,
+        # migration 0006) - never meant to be shown; open_document_at_matches
+        # builds the viewer's title/details from the real Document (and, for
+        # a record, its container) instead.
+        open_document_at_matches(
+            self._get_viewer_frame(),
+            self._repository,
+            self._viewer_async,
+            doc.document_id,
+            doc.matches,
+            self._file_name_display,
         )
 
     def _load_and_show_container(self, group: SearchResultGroup) -> None:

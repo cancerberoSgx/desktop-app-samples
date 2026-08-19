@@ -18,6 +18,13 @@ class Profile:
     openai_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
     chunk_size: int = CHUNK_SIZE
+    # Text-generation config for the Chat page (app/chat_page.py,
+    # app/chat_service.py) - independent of the embedding config above, but
+    # shares its openai_api_key/gemini_api_key (same providers). None means
+    # chat hasn't been configured for this profile yet - see
+    # app/chat/__init__.py::get_chat_backend.
+    chat_backend: Optional[str] = None
+    chat_model: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -112,3 +119,35 @@ class DocumentSearchResult:
     @property
     def best_match(self) -> SearchResult:
         return self.matches[0]
+
+
+@dataclass
+class Conversation:
+    """One named, ordered chat thread - scoped to a profile the same way
+    documents are (see app/conversation_repository.py). `title` starts as a
+    placeholder ("New Conversation") and is either auto-derived from the
+    first question asked in it or renamed by the user - see
+    ChatPage._maybe_auto_title."""
+
+    id: Optional[int]
+    profile_id: int
+    title: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@dataclass
+class ChatMessage:
+    """One turn in a Conversation. `references` (assistant turns only) is the
+    list of chunks hybrid_search() retrieved to answer this turn - the same
+    SearchResult shape Search page results use, so ChatPage can open
+    DocumentViewerFrame on one exactly the way SearchPage does (see
+    app/document_open.py). Empty for user messages and for an assistant turn
+    that retrieved nothing."""
+
+    id: Optional[int]
+    conversation_id: int
+    role: str  # 'user' | 'assistant'
+    content: str
+    created_at: Optional[str] = None
+    references: List[SearchResult] = field(default_factory=list)

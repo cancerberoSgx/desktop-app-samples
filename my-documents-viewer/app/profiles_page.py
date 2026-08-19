@@ -104,6 +104,8 @@ class ProfilesPage(wx.Panel):
             created.openai_api_key = new_profile.openai_api_key
             created.gemini_api_key = new_profile.gemini_api_key
             created.chunk_size = new_profile.chunk_size
+            created.chat_backend = new_profile.chat_backend
+            created.chat_model = new_profile.chat_model
             self._repository.update(created)
             self._on_profiles_changed()
         dlg.Destroy()

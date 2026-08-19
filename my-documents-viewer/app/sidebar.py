@@ -7,6 +7,7 @@ SIDEBAR_ITEMS = [
     ("Profiles", wx.ART_HELP_SETTINGS),
     ("Documents", wx.ART_FILE_OPEN),
     ("Search", wx.ART_FIND),
+    ("Chat", wx.ART_QUESTION),
 ]
 
 

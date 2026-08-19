@@ -106,7 +106,8 @@ class ProfileRepository:
             """
             UPDATE profiles
             SET name = ?, embedding_backend = ?, embedding_model = ?, embedding_dim = ?,
-                openai_api_key = ?, gemini_api_key = ?, chunk_size = ?, updated_at = datetime('now')
+                openai_api_key = ?, gemini_api_key = ?, chunk_size = ?,
+                chat_backend = ?, chat_model = ?, updated_at = datetime('now')
             WHERE id = ?
             """,
             (
@@ -117,6 +118,8 @@ class ProfileRepository:
                 profile.openai_api_key,
                 profile.gemini_api_key,
                 profile.chunk_size,
+                profile.chat_backend,
+                profile.chat_model,
                 profile.id,
             ),
         )
@@ -138,6 +141,8 @@ class ProfileRepository:
             openai_api_key=row["openai_api_key"],
             gemini_api_key=row["gemini_api_key"],
             chunk_size=row["chunk_size"],
+            chat_backend=row["chat_backend"],
+            chat_model=row["chat_model"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -936,6 +941,26 @@ class DocumentRepository:
                 )
             )
         return results
+
+    def get_chunk_texts(self, chunk_ids: List[int]) -> Dict[int, str]:
+        """Full (untruncated) chunk text for exactly the given chunk ids -
+        SearchResult.snippet is truncated (SNIPPET_MAX_LENGTH) for list
+        display, too short to build a good answer-generation prompt from, so
+        ChatService fetches the real text here instead. Batched the same way
+        _delete_vec_rows is, so a large CHAT_RETRIEVAL_LIMIT (or a future
+        caller passing more ids) can't blow past SQLite's bound-parameter
+        cap."""
+        if not chunk_ids:
+            return {}
+        texts: Dict[int, str] = {}
+        for start in range(0, len(chunk_ids), VEC_DELETE_BATCH_SIZE):
+            batch = chunk_ids[start : start + VEC_DELETE_BATCH_SIZE]
+            placeholders = ",".join("?" for _ in batch)
+            for row in self._conn.execute(
+                f"SELECT id, text FROM chunks WHERE id IN ({placeholders})", batch
+            ):
+                texts[row["id"]] = row["text"]
+        return texts
 
     def _fts_search(self, profile_id: int, query: str, limit: int) -> Dict[int, int]:
         try:

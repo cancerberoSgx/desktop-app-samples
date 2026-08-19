@@ -1,6 +1,9 @@
 import wx
 
 from .about_dialog import AboutDialog
+from .chat_page import ChatPage
+from .chat_service import ChatService
+from .conversation_repository import ConversationRepository
 from .db.connection import get_connection, vector_search_available
 from .db.migrator import run_migrations
 from .db.paths import migrations_dir
@@ -26,6 +29,8 @@ class MainFrame(wx.Frame):
         self.profile_repository = ProfileRepository(conn)
         self.settings_repository = SettingsRepository(conn)
         self.document_repository = DocumentRepository(conn, vector_enabled=vector_enabled)
+        self.conversation_repository = ConversationRepository(conn)
+        self.chat_service = ChatService(self.document_repository, self.conversation_repository)
 
         self.active_profile_id = self._bootstrap_active_profile()
         self._file_name_display = self.settings_repository.get_file_name_display()
@@ -75,9 +80,19 @@ class MainFrame(wx.Frame):
             self.active_profile_id,
             file_name_display=self._file_name_display,
         )
+        self.chat_page = ChatPage(
+            self.book,
+            self.document_repository,
+            self.conversation_repository,
+            self.chat_service,
+            self.profile_repository,
+            self.active_profile_id,
+            file_name_display=self._file_name_display,
+        )
         self.book.AddPage(self.profiles_page, "Profiles")
         self.book.AddPage(self.documents_page, "Documents")
         self.book.AddPage(self.search_page, "Search")
+        self.book.AddPage(self.chat_page, "Chat")
 
         root_sizer.Add(self.book, 1, wx.EXPAND | wx.ALL, 0)
 
@@ -112,6 +127,7 @@ class MainFrame(wx.Frame):
         self.settings_repository.set_current_profile_id(profile_id)
         self.documents_page.set_profile(profile_id)
         self.search_page.set_profile(profile_id)
+        self.chat_page.set_profile(profile_id)
         self.profiles_page.reload()
         profile = self.profile_repository.get(profile_id)
         self.SetStatusText(f"Active profile: {profile.name if profile else '?'}", 0)
@@ -127,6 +143,11 @@ class MainFrame(wx.Frame):
             self._on_activate_profile(profiles[0].id)
         else:
             self.profiles_page.reload()
+            # The active profile itself may have just been edited (e.g. its
+            # chat backend/model was configured) without switching away from
+            # it - refresh ChatPage's availability state for that case too,
+            # not just on an actual profile switch.
+            self.chat_page.set_profile(self.active_profile_id)
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -171,6 +192,7 @@ class MainFrame(wx.Frame):
                 self.settings_repository.set_file_name_display(mode)
                 self.documents_page.set_file_name_display(mode)
                 self.search_page.set_file_name_display(mode)
+                self.chat_page.set_file_name_display(mode)
 
             embedding_confirm_default = dlg.get_embedding_confirm_default()
             if embedding_confirm_default != self._embedding_confirm_default:

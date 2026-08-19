@@ -167,6 +167,8 @@ Also users should be able to create new conversations, go back to previous conve
 Also I want to support product references, when the chat respond if there's a referenced document user should be able to click it and see the entire document details and content with the matched chunk or child document highlighted
 Chat should be able to use openai models or gemini models.
 Create a plan to implement so I can review &confirm before writing any code
+
+
 # doc tags
 
 when a document is added or by editing a document, user can create or add tags to the document, User has a view to see all their tags and associated documents for each in a separate view. Each profile has its tags. In search, user can filtering by tags and verbs : contains all , contains any, don't contain, etc
