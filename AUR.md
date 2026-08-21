@@ -1,6 +1,6 @@
 # AUR packaging
 
-Each of the four wxPython apps in this repo has an `aur/` directory with a
+Each of the five wxPython apps in this repo has an `aur/` directory with a
 PKGBUILD that installs it as a normal Arch Linux package - dynamically linked
 against the distro's own `python`/`python-wxpython`/etc, nothing bundled. This
 is deliberately a different distribution path from the PyInstaller builds in
@@ -16,13 +16,19 @@ path works; this file covers the AUR path only.
 | my-data-viewer | `my-data-viewer/aur/PKGBUILD` | `my-data-viewer-git` | `mydataviewer` | `python-duckdb`, `python-sqlalchemy`, `python-psycopg2` |
 | my-disk-viewer | `my-disk-viewer/aur/PKGBUILD` | `my-disk-viewer-git` | `mydiskviewer` | - |
 | my-docker-viewer | `my-docker-viewer/aur/PKGBUILD` | `my-docker-viewer-git` | `mydockerviewer` | optional `docker` (the CLI it shells out to) |
+| my-documents-viewer | `my-documents-viewer/aur/PKGBUILD` | `my-documents-viewer-git` | `mydocumentsviewer` | `python-fastembed`, `python-sqlite-vec` |
 | my-redis-viewer | `my-redis-viewer/aur/PKGBUILD` | `my-redis-viewer-git` | `myredisviewer` | `python-redis` |
 
-All four of these extra deps (`python-duckdb`, `python-sqlalchemy`,
-`python-psycopg2`, `python-redis`) as well as `python-wxpython` itself are in
-Arch's official `extra` repo, not AUR - confirmed by looking them up before
-writing the PKGBUILDs, so none of this depends on some other AUR
-maintainer's package staying up to date.
+The `python-duckdb`, `python-sqlalchemy`, `python-psycopg2` and `python-redis`
+deps, as well as `python-wxpython` itself, are all in Arch's official
+`extra` repo, not AUR - confirmed by looking them up before writing the
+PKGBUILDs, so none of those depend on some other AUR maintainer's package
+staying up to date. my-documents-viewer's two extra deps are the exception:
+`python-fastembed` and `python-sqlite-vec` only exist as AUR packages
+themselves (also confirmed by looking them up) - unavoidable since fastembed
+and sqlite-vec aren't in Arch's official repos at all, but it does mean an
+AUR helper (`yay`/`paru`) is needed to resolve them automatically; plain
+`makepkg` would require building those two first.
 
 ## Why `-git` (VCS) packages
 
@@ -37,10 +43,10 @@ regular (non-`-git`) packages sourced from a release tarball instead - but
 that's a bigger change to how releases are cut, not just to packaging, so
 wasn't done as part of this.
 
-## How install works (all four PKGBUILDs follow this same shape)
+## How install works (all five PKGBUILDs follow this same shape)
 
 Every app's top-level Python package is literally named `app` (see e.g.
-`my-docker-viewer/app/frame.py`). Installing four different `app` packages
+`my-docker-viewer/app/frame.py`). Installing five different `app` packages
 into Python's shared `site-packages` would collide, so `package()` instead
 vendors each app's `main.py` + `app/` tree under its own private
 `/usr/lib/<binary>/` directory, and installs a thin launcher shell script

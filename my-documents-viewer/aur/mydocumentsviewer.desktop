@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=My Documents Viewer
+Comment=Browse, search and chat with your documents using local embeddings
+Exec=mydocumentsviewer
+Terminal=false
+Categories=Utility;Office;

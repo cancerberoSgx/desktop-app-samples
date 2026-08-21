@@ -1,29 +1,29 @@
 # Maintainer: Sebastián Gurin (cancerberoSgx) <sebastian@devaiq.com>
 
-# VCS (-git) package: builds my-data-viewer straight from this monorepo's
+# VCS (-git) package: builds my-documents-viewer straight from this monorepo's
 # main branch. There are no per-app release tags (yet), and Arch's own
 # package manager already guarantees python/wxWidgets are on the target
 # system, so there is nothing to bundle - unlike the PyInstaller builds in
-# .github/workflows/my-data-viewer-build.yml, which target non-Arch Linux
-# (and Windows/macOS) and so vendor a private copy of everything. See
+# .github/workflows/my-documents-viewer-build.yml, which target non-Arch
+# Linux (and Windows/macOS) and so vendor a private copy of everything. See
 # /AUR.md at the repo root for the full local-test/publish workflow.
 
-pkgname=my-data-viewer-git
+pkgname=my-documents-viewer-git
 pkgver=r106.d86727c
 pkgrel=1
-pkgdesc="Native wxWidgets desktop viewer for CSV/JSON files and databases - browse tables/columns/indexes and run SQL"
+pkgdesc="Native wxWidgets desktop viewer for indexing local text files and searching/chatting with them via full-text, vector or hybrid search"
 arch=('any')
 url="https://github.com/cancerberoSgx/desktop-app-samples"
 license=('MIT')
-depends=('python' 'python-wxpython' 'python-duckdb' 'python-sqlalchemy' 'python-psycopg2')
+depends=('python' 'python-wxpython' 'python-fastembed' 'python-sqlite-vec')
 makedepends=('git')
-provides=('my-data-viewer' 'mydataviewer')
-conflicts=('my-data-viewer' 'mydataviewer')
+provides=('my-documents-viewer' 'mydocumentsviewer')
+conflicts=('my-documents-viewer' 'mydocumentsviewer')
 source=("$pkgname::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main")
 sha256sums=('SKIP')
 
-_pkgsubdir=my-data-viewer
-_bin=mydataviewer
+_pkgsubdir=my-documents-viewer
+_bin=mydocumentsviewer
 
 pkgver() {
   cd "$pkgname"

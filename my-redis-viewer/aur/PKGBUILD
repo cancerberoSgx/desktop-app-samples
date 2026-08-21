@@ -9,7 +9,7 @@
 # /AUR.md at the repo root for the full local-test/publish workflow.
 
 pkgname=my-redis-viewer-git
-pkgver=r53.9e4f04a
+pkgver=r106.d86727c
 pkgrel=1
 pkgdesc="Native wxWidgets desktop app for managing and testing Redis connection profiles"
 arch=('any')
