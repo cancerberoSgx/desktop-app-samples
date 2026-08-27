@@ -194,6 +194,7 @@ class MainFrame(wx.Frame):
         self.Close()
 
     def _on_close(self, event: wx.CloseEvent) -> None:
+        self.datasource_repository.close_all_pools()
         self.Destroy()
 
     def _on_about(self, event: wx.CommandEvent) -> None:

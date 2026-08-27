@@ -139,5 +139,10 @@ Instead I would like to remember the last main datasource the user was and when 
 make the sidebar collapsible to save space. Also remember this in user's preferences
 
 
+# scan keys is too slow
+in app/data_explorer_page.py "Scanning keys..." is too slow and I'm afraid it can block the redis server (please confirm)
+this is implemented in app/repositories.py scan_keys method
+scan_keys is currently used to build the keys tree
+can you research another more performant way of doing this or if it's not possible ? or perform the scanning faster ? also confirm this scan keys has little impact on redis server performance ? Don't write code yet
 
 # FUTURE

@@ -1,6 +1,7 @@
 import sqlite3
+import threading
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import redis
 
@@ -17,7 +18,12 @@ CURRENT_PROFILE_SETTING_KEY = "current_profile_id"
 LAST_DATASOURCE_SETTING_KEY = "last_datasource_id"
 SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
 CONNECTION_TIMEOUT_SECONDS = 5
-KEY_SCAN_BATCH_SIZE = 1000
+# SCAN's COUNT hint - how many keys each round trip asks the server to walk.
+# The server-side cost of one SCAN call is ~proportional to this regardless
+# of total keyspace size, so raising it is close to free on the server; what
+# it buys the client is fewer round trips (wall clock for a full scan is
+# dominated by round-trip latency, not server work - see scan_keys below).
+KEY_SCAN_BATCH_SIZE = 5000
 KEY_SCAN_LIMIT = 200_000
 
 
@@ -84,10 +90,25 @@ class IndexDetails:
 class DatasourceRepository:
     """CRUD for `datasources` (pure SQL against SQLite), scoped to a profile,
     plus `test_connection`, which opens a real connection to the Redis server
-    described by the record and issues a PING."""
+    described by the record and issues a PING.
+
+    Every live Redis operation below goes through `_make_client`, which
+    hands out a `redis.Redis` backed by a per-datasource `redis.ConnectionPool`
+    cached in `self._pools` (keyed by datasource id + decode_responses, since
+    that flag is baked into a pool's connection kwargs) instead of opening a
+    fresh TCP connection (and, for authenticated servers, re-running AUTH)
+    on every single call. `client.close()` at each call site still does the
+    right thing here - passing `connection_pool=` explicitly makes redis-py
+    treat the pool as caller-owned, so `close()` just returns the connection
+    to the pool instead of tearing it down (see redis.Redis.close). Pools are
+    invalidated on update()/delete() (host/port/credentials may have changed,
+    or the datasource is gone) and all of them are dropped via
+    close_all_pools() on app shutdown."""
 
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
+        self._pools: Dict[Tuple[int, bool], redis.ConnectionPool] = {}
+        self._pools_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # CRUD
@@ -145,11 +166,13 @@ class DatasourceRepository:
             ),
         )
         self._conn.commit()
+        self._invalidate_pool(datasource.id)
         return datasource
 
     def delete(self, datasource_id: int) -> None:
         self._conn.execute("DELETE FROM datasources WHERE id = ?", (datasource_id,))
         self._conn.commit()
+        self._invalidate_pool(datasource_id)
 
     @staticmethod
     def _row_to_datasource(row: sqlite3.Row) -> Datasource:
@@ -185,30 +208,44 @@ class DatasourceRepository:
         datasource: Datasource,
         limit: int = KEY_SCAN_LIMIT,
         batch_size: int = KEY_SCAN_BATCH_SIZE,
-        on_progress: Optional[Callable[[int], None]] = None,
+        on_progress: Optional[Callable[[List[str]], None]] = None,
     ) -> KeyScanResult:
         """Walk the whole keyspace with SCAN (never KEYS, which blocks the
         server) and return every key name, capped at `limit` so a
         pathologically large keyspace can't hang the scan indefinitely.
-        `on_progress(count)` is invoked periodically (from this method's
-        caller's thread - the caller is responsible for hopping back to the
-        UI thread, e.g. via wx.CallAfter) so a caller can show a running
-        count while the scan is in flight."""
+
+        `on_progress(new_keys)` is invoked once per completed batch (plus
+        once more for a trailing partial batch, if any, right before this
+        method returns) with just the keys collected since the previous
+        call - so every scanned key is delivered to the caller exactly
+        once, in order, as it's found rather than only once the entire
+        (possibly slow, on a high-latency connection) scan has finished.
+        Invoked from this method's caller's thread - the caller is
+        responsible for hopping back to the UI thread, e.g. via
+        wx.CallAfter, and can use this to render results (a running count,
+        a partially-filled tree/list) progressively instead of blocking
+        the UI on the whole scan. Note this only spreads out *when* the
+        client sees results - it doesn't change how much work SCAN does on
+        the server, which is already cheap and bounded per call regardless
+        (see the KEY_SCAN_BATCH_SIZE comment above)."""
         client = self._make_client(datasource, decode_responses=True)
         keys: List[str] = []
+        pending: List[str] = []
         truncated = False
         try:
             for key in client.scan_iter(count=batch_size):
                 keys.append(key)
-                if on_progress and len(keys) % batch_size == 0:
-                    on_progress(len(keys))
+                pending.append(key)
+                if on_progress and len(pending) >= batch_size:
+                    on_progress(pending)
+                    pending = []
                 if len(keys) >= limit:
                     truncated = True
                     break
         finally:
             client.close()
-        if on_progress:
-            on_progress(len(keys))
+        if on_progress and pending:
+            on_progress(pending)
         return KeyScanResult(keys=keys, truncated=truncated)
 
     # ------------------------------------------------------------------
@@ -514,17 +551,52 @@ class DatasourceRepository:
             hash_indexing_failures=to_int(info.get("hash_indexing_failures")),
         )
 
-    @staticmethod
-    def _make_client(datasource: Datasource, decode_responses: bool = False) -> redis.Redis:
-        return redis.Redis(
-            host=datasource.redis_host,
-            port=datasource.redis_port,
-            username=datasource.redis_user or None,
-            password=datasource.redis_password or None,
-            socket_connect_timeout=CONNECTION_TIMEOUT_SECONDS,
-            socket_timeout=CONNECTION_TIMEOUT_SECONDS,
-            decode_responses=decode_responses,
-        )
+    def _make_client(self, datasource: Datasource, decode_responses: bool = False) -> redis.Redis:
+        return redis.Redis(connection_pool=self._get_pool(datasource, decode_responses))
+
+    def _get_pool(self, datasource: Datasource, decode_responses: bool) -> redis.ConnectionPool:
+        """Return the cached ConnectionPool for this datasource + decode
+        mode, creating it on first use. redis-py bakes decode_responses
+        into a pool's connection kwargs (it's ignored on Redis() when
+        connection_pool= is passed), so True/False need separate pools."""
+        key = (datasource.id, decode_responses)
+        with self._pools_lock:
+            pool = self._pools.get(key)
+            if pool is None:
+                pool = redis.ConnectionPool(
+                    host=datasource.redis_host,
+                    port=datasource.redis_port,
+                    username=datasource.redis_user or None,
+                    password=datasource.redis_password or None,
+                    socket_connect_timeout=CONNECTION_TIMEOUT_SECONDS,
+                    socket_timeout=CONNECTION_TIMEOUT_SECONDS,
+                    decode_responses=decode_responses,
+                )
+                self._pools[key] = pool
+            return pool
+
+    def _invalidate_pool(self, datasource_id: int) -> None:
+        """Drop and disconnect any cached pool(s) for this datasource id -
+        called from update()/delete() so an edited host/port/credentials
+        (or a deleted datasource) can't leave a pool serving stale
+        connection params or dangling sockets."""
+        with self._pools_lock:
+            pools = [
+                self._pools.pop(key)
+                for key in list(self._pools)
+                if key[0] == datasource_id
+            ]
+        for pool in pools:
+            pool.disconnect()
+
+    def close_all_pools(self) -> None:
+        """Disconnect every cached connection pool - call once on app
+        shutdown to close sockets cleanly instead of leaving that to the
+        OS/GC on process exit."""
+        with self._pools_lock:
+            pools, self._pools = list(self._pools.values()), {}
+        for pool in pools:
+            pool.disconnect()
 
 
 class ProfileRepository:
