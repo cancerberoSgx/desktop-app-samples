@@ -1,6 +1,6 @@
 import bisect
 import fnmatch
-from typing import Callable, Dict, FrozenSet, List, Optional, Set
+from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Set
 
 import wx
 
@@ -9,10 +9,22 @@ from .indexes_view import IndexesView
 from .key_details_dialog import KeyDetailsDialog
 from .key_list_ctrl import KeyListCtrl
 from .models import Datasource
-from .redis_key_tree import insert_key, new_node
+from .redis_key_tree import NO_PREFIX_LABEL, insert_key, new_node
 from .repositories import DatasourceRepository, ScriptRepository
 from .scripts_view import ScriptsView
 from .stats_view import StatsView
+
+
+class _BranchRef(NamedTuple):
+    """What a KeyTreeView tree item's data actually holds: the branch's
+    full colon-joined path (e.g. "doc:foo", or NO_PREFIX_LABEL for the
+    synthetic no-delimiter bucket - see redis_key_tree.py) alongside its
+    trie node. The path is only needed for the Delete button's
+    confirmation text and its SCAN MATCH pattern; every other tree
+    operation only ever cared about the node."""
+
+    path: str
+    node: Dict
 
 
 class KeyTreeView(wx.Panel):
@@ -32,10 +44,14 @@ class KeyTreeView(wx.Panel):
     def __init__(
         self,
         parent: wx.Window,
+        repository: DatasourceRepository,
         on_activate_key: Optional[Callable[[str], None]] = None,
         on_refresh: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(parent)
+        self._repository = repository
+        self._datasource: Optional[Datasource] = None
+        self._async = AsyncTaskRunner(self)
         self._on_refresh = on_refresh or (lambda: None)
         self._root: Dict = new_node()
         self._hidden_root: Optional[wx.TreeItemId] = None
@@ -73,20 +89,39 @@ class KeyTreeView(wx.Panel):
             splitter,
             style=wx.TR_HAS_BUTTONS | wx.TR_HIDE_ROOT | wx.TR_LINES_AT_ROOT | wx.BORDER_SUNKEN,
         )
-        self._list = KeyListCtrl(splitter, on_activate_key=on_activate_key)
-        splitter.SplitVertically(self._tree, self._list, 280)
+
+        right_panel = wx.Panel(splitter)
+        right_sizer = wx.BoxSizer(wx.VERTICAL)
+        right_toolbar = wx.BoxSizer(wx.HORIZONTAL)
+        self._delete_btn = wx.Button(right_panel, label="Delete")
+        self._delete_btn.SetToolTip(
+            "Delete every key under the selected branch - asks for confirmation and "
+            "shows the exact key pattern first."
+        )
+        self._delete_btn.Enable(False)
+        right_toolbar.Add(self._delete_btn, 0)
+        right_sizer.Add(right_toolbar, 0, wx.ALL, 8)
+        self._list = KeyListCtrl(right_panel, on_activate_key=on_activate_key)
+        right_sizer.Add(self._list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        right_panel.SetSizer(right_sizer)
+
+        splitter.SplitVertically(self._tree, right_panel, 280)
         splitter.SetMinimumPaneSize(150)
 
         sizer.Add(splitter, 1, wx.EXPAND)
         self.SetSizer(sizer)
 
         self.refresh_btn.Bind(wx.EVT_BUTTON, lambda event: self._on_refresh())
+        self._delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
         self._filter_ctrl.Bind(wx.EVT_TEXT, self._on_filter_changed)
         self._filter_ctrl.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_filter_cancel)
         self._tree.Bind(wx.EVT_TREE_ITEM_EXPANDING, self._on_expanding)
         self._tree.Bind(wx.EVT_TREE_ITEM_EXPANDED, self._on_expanded)
         self._tree.Bind(wx.EVT_TREE_ITEM_COLLAPSED, self._on_collapsed)
         self._tree.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_select)
+
+    def set_datasource(self, datasource: Datasource) -> None:
+        self._datasource = datasource
 
     def clear(self) -> None:
         self._tree.DeleteAllItems()
@@ -99,6 +134,7 @@ class KeyTreeView(wx.Panel):
         self._filter_query = ""
         self._filter_ctrl.ChangeValue("")
         self._expanded_node_ids = set()
+        self._delete_btn.Enable(False)
 
     def begin_scan(self) -> None:
         """Reset the tree and get ready for add_keys() - call once before
@@ -123,7 +159,7 @@ class KeyTreeView(wx.Panel):
         touched_labels = {insert_key(self._root, key) for key in new_keys}
 
         selection = self._tree.GetSelection()
-        selected_node = self._tree.GetItemData(selection) if selection.IsOk() else None
+        selected_ref = self._tree.GetItemData(selection) if selection.IsOk() else None
 
         for label in touched_labels:
             node = self._root["children"][label]
@@ -136,7 +172,7 @@ class KeyTreeView(wx.Panel):
             if self._branch_relevant(label, node):
                 if item is None:
                     item = self._tree.InsertItem(self._hidden_root, self._visible_index(label), label_text)
-                    self._tree.SetItemData(item, node)
+                    self._tree.SetItemData(item, _BranchRef(label, node))
                     self._top_level_items[label] = item
                 else:
                     self._tree.SetItemText(item, label_text)
@@ -150,7 +186,7 @@ class KeyTreeView(wx.Panel):
                 # back the moment the filter no longer excludes it.
                 self._tree.Delete(item)
                 del self._top_level_items[label]
-            if node is selected_node:
+            if selected_ref is not None and node is selected_ref.node:
                 self._set_list_from_node(node)
 
     def _matches_text(self, text: str) -> bool:
@@ -201,17 +237,21 @@ class KeyTreeView(wx.Panel):
         )
 
     def _on_expanded(self, event: wx.TreeEvent) -> None:
-        node = self._tree.GetItemData(event.GetItem())
-        if node is not None:
-            self._expanded_node_ids.add(id(node))
+        ref = self._tree.GetItemData(event.GetItem())
+        if ref is not None:
+            self._expanded_node_ids.add(id(ref.node))
 
     def _on_collapsed(self, event: wx.TreeEvent) -> None:
-        node = self._tree.GetItemData(event.GetItem())
-        if node is not None:
-            self._expanded_node_ids.discard(id(node))
+        ref = self._tree.GetItemData(event.GetItem())
+        if ref is not None:
+            self._expanded_node_ids.discard(id(ref.node))
 
     def _add_children(
-        self, parent_item: wx.TreeItemId, node: Dict, expanded_ids: FrozenSet[int] = frozenset()
+        self,
+        parent_item: wx.TreeItemId,
+        node: Dict,
+        parent_path: str,
+        expanded_ids: FrozenSet[int] = frozenset(),
     ) -> None:
         """Render `node`'s children under `parent_item`, skipping any
         branch the active filter excludes (own label, its leaves, and its
@@ -225,31 +265,34 @@ class KeyTreeView(wx.Panel):
             if not self._branch_relevant(segment, child):
                 continue
             label = f"{segment} ({len(child['leaves'])})" if child["leaves"] else segment
+            child_path = f"{parent_path}:{segment}"
             item = self._tree.AppendItem(parent_item, label)
-            self._tree.SetItemData(item, child)
+            self._tree.SetItemData(item, _BranchRef(child_path, child))
             if child["children"]:
                 if id(child) in expanded_ids:
-                    self._add_children(item, child, expanded_ids)
+                    self._add_children(item, child, child_path, expanded_ids)
                     self._tree.Expand(item)
                 else:
                     self._tree.AppendItem(item, "")  # dummy placeholder for lazy expansion
 
     def _on_expanding(self, event: wx.TreeEvent) -> None:
         item = event.GetItem()
-        node = self._tree.GetItemData(item)
-        if node is None:
+        ref = self._tree.GetItemData(item)
+        if ref is None:
             return
         first_child, _cookie = self._tree.GetFirstChild(item)
         if first_child.IsOk() and self._tree.GetItemData(first_child) is None:
             self._tree.Delete(first_child)
-            self._add_children(item, node)
+            self._add_children(item, ref.node, ref.path)
 
     def _on_select(self, event: wx.TreeEvent) -> None:
-        node = self._tree.GetItemData(event.GetItem())
-        if node is None:
+        ref = self._tree.GetItemData(event.GetItem())
+        if ref is None:
             self._list.set_keys([])
+            self._delete_btn.Enable(False)
         else:
-            self._set_list_from_node(node)
+            self._set_list_from_node(ref.node)
+            self._delete_btn.Enable(True)
 
     def _on_filter_changed(self, event: wx.CommandEvent) -> None:
         self._filter_query = self._filter_ctrl.GetValue().strip().lower()
@@ -263,8 +306,10 @@ class KeyTreeView(wx.Panel):
     def _find_item_for_node(self, item: wx.TreeItemId, target_node: Dict) -> Optional[wx.TreeItemId]:
         """Search the tree items already rendered under `item` for the one
         holding `target_node` - used to re-find the previously-selected
-        branch after a filter re-render rebuilds the tree's items."""
-        if self._tree.GetItemData(item) is target_node:
+        branch after a filter re-render rebuilds the tree's items, and to
+        locate a branch's current tree item when it's deleted."""
+        ref = self._tree.GetItemData(item)
+        if ref is not None and ref.node is target_node:
             return item
         child, cookie = self._tree.GetFirstChild(item)
         while child.IsOk():
@@ -285,7 +330,8 @@ class KeyTreeView(wx.Panel):
             return
         expanded_ids = self._expanded_node_ids
         selection = self._tree.GetSelection()
-        selected_node = self._tree.GetItemData(selection) if selection.IsOk() else None
+        selected_ref = self._tree.GetItemData(selection) if selection.IsOk() else None
+        selected_node = selected_ref.node if selected_ref is not None else None
 
         self._tree.DeleteChildren(self._hidden_root)
         self._top_level_items = {}
@@ -295,11 +341,11 @@ class KeyTreeView(wx.Panel):
                 continue
             label_text = f"{label} ({len(node['leaves'])})" if node["leaves"] else label
             item = self._tree.AppendItem(self._hidden_root, label_text)
-            self._tree.SetItemData(item, node)
+            self._tree.SetItemData(item, _BranchRef(label, node))
             self._top_level_items[label] = item
             if node["children"]:
                 if id(node) in expanded_ids:
-                    self._add_children(item, node, expanded_ids)
+                    self._add_children(item, node, label, expanded_ids)
                     self._tree.Expand(item)
                 else:
                     self._tree.AppendItem(item, "")  # dummy placeholder for lazy expansion
@@ -311,6 +357,108 @@ class KeyTreeView(wx.Panel):
             self._tree.SelectItem(restored)  # fires EVT_TREE_SEL_CHANGED -> re-filters the list
         else:
             self._list.set_keys([])
+            self._delete_btn.Enable(False)
+
+    def _collect_subtree_node_ids(self, node: Dict) -> Set[int]:
+        """id(node) for `node` and every descendant in the in-memory trie
+        - used to purge _expanded_node_ids of a branch being deleted, so a
+        stale id can never coincidentally collide with some unrelated
+        future node's id() once the deleted node is garbage collected."""
+        ids = {id(node)}
+        for child in node["children"].values():
+            ids |= self._collect_subtree_node_ids(child)
+        return ids
+
+    def _remove_branch(self, path: str) -> None:
+        """Drop `path` (and everything under it) from the tree - both the
+        in-memory trie (self._root) and, if it's currently rendered, its
+        wx tree item - after its keys have already been deleted from
+        Redis. Purely local bookkeeping, no Redis round-trip."""
+        segments = path.split(":")
+        parent = self._root
+        for segment in segments[:-1]:
+            child = parent["children"].get(segment)
+            if child is None:
+                return  # already gone somehow - nothing left to do
+            parent = child
+        last = segments[-1]
+        node = parent["children"].get(last)
+        if node is None:
+            return
+
+        self._expanded_node_ids -= self._collect_subtree_node_ids(node)
+
+        item = self._find_item_for_node(self._hidden_root, node) if self._hidden_root is not None else None
+        if item is not None:
+            self._tree.Delete(item)
+
+        del parent["children"][last]
+        if len(segments) == 1:
+            self._top_level_order.remove(last)
+            self._top_level_labels.discard(last)
+            self._top_level_items.pop(last, None)
+
+    def _on_delete(self, event: wx.CommandEvent) -> None:
+        if self._datasource is None:
+            return
+        datasource = self._datasource
+        selection = self._tree.GetSelection()
+        if not selection.IsOk():
+            return
+        ref = self._tree.GetItemData(selection)
+        if ref is None:
+            return
+        path = ref.path
+
+        if path == NO_PREFIX_LABEL:
+            # Synthetic bucket for keys with no ":" in their name at all -
+            # they share no common substring a single Redis glob could
+            # express, so this deletes exactly the key names already
+            # known from the scan rather than a live pattern match.
+            keys = sorted(ref.node["leaves"])
+            if not keys:
+                return
+            noun = "key" if len(keys) == 1 else "keys"
+            prompt = (
+                f"Delete {len(keys):,} {noun} with no \":\" in their name?\n\n"
+                "These share no common pattern, so they'll be deleted by exact name, "
+                "not by a wildcard match."
+            )
+            work: Callable[[], int] = lambda: self._repository.delete_keys(datasource, keys)
+        else:
+            pattern = f"{path}:*"
+            prompt = f'Delete every key matching "{pattern}"?\n\nThis cannot be undone.'
+            work = lambda: self._repository.delete_keys_by_pattern(datasource, pattern)
+
+        confirm = wx.MessageBox(prompt, "Delete keys", wx.YES_NO | wx.ICON_WARNING, self)
+        if confirm != wx.YES:
+            return
+
+        def on_success(_deleted_count: int) -> None:
+            # Removed locally instead of re-scanning: reload()/rescan would
+            # run through this same AsyncTaskRunner from inside this very
+            # callback, whose "busy" flag isn't cleared until after this
+            # callback returns - that call would be silently dropped (see
+            # the same fix applied to IndexesView._on_delete), leaving the
+            # just-deleted branch showing until the user hit Refresh.
+            self._remove_branch(path)
+            self._list.set_keys([])
+            self._delete_btn.Enable(False)
+
+        def on_error(exc: Exception) -> None:
+            wx.MessageBox(
+                f"Could not delete keys:\n\n{exc}",
+                "Delete keys failed",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+
+        self._async.run(
+            work=work,
+            on_success=on_success,
+            on_error=on_error,
+            disable=[self.refresh_btn, self._delete_btn],
+        )
 
 
 class KeySearchView(wx.Panel):
@@ -507,7 +655,7 @@ class DataExplorerPage(wx.Panel):
 
         notebook = wx.Notebook(self)
         self._tree_view = KeyTreeView(
-            notebook, on_activate_key=self._on_key_activated, on_refresh=self._rescan_keys
+            notebook, repository, on_activate_key=self._on_key_activated, on_refresh=self._rescan_keys
         )
         notebook.AddPage(self._tree_view, "Tree")
         self._search_view = KeySearchView(
@@ -535,6 +683,7 @@ class DataExplorerPage(wx.Panel):
         self._datasource = datasource
         self._title.SetLabel(f"Data Explorer - {datasource.name}")
         self._tree_view.clear()
+        self._tree_view.set_datasource(datasource)
         self._search_view.clear()
         self._search_view.set_datasource(datasource)
         self._scripts_view.clear()

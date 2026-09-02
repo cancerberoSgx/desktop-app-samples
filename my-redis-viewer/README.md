@@ -82,6 +82,10 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
+## Run test (development)
+
+See test/README.md
+
 ## Installing on Arch Linux (AUR)
 
 There's an `aur/PKGBUILD` in this directory that installs `myredisviewer` as

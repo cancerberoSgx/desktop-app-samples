@@ -281,6 +281,52 @@ class DatasourceRepository:
         return KeyScanResult(keys=keys, truncated=truncated)
 
     # ------------------------------------------------------------------
+    # Bulk key deletion for the Data Explorer's Tree tab.
+    # ------------------------------------------------------------------
+    def delete_keys_by_pattern(
+        self, datasource: Datasource, pattern: str, batch_size: int = KEY_SCAN_BATCH_SIZE
+    ) -> int:
+        """Delete every key currently matching `pattern` (a Redis glob,
+        e.g. "foo:bar:*") via SCAN MATCH + UNLINK in batches - never KEYS
+        (blocks the server) or FLUSHDB, and never limited to whatever the
+        Tree tab happened to already have scanned/cached, so this also
+        catches keys created since. Returns how many keys were deleted."""
+        client = self._make_client(datasource, decode_responses=True)
+        deleted = 0
+        try:
+            batch: List[str] = []
+            for key in client.scan_iter(match=pattern, count=batch_size):
+                batch.append(key)
+                if len(batch) >= batch_size:
+                    deleted += client.unlink(*batch)
+                    batch = []
+            if batch:
+                deleted += client.unlink(*batch)
+        finally:
+            client.close()
+        return deleted
+
+    def delete_keys(
+        self, datasource: Datasource, keys: List[str], batch_size: int = KEY_SCAN_BATCH_SIZE
+    ) -> int:
+        """UNLINK an explicit list of key names, in batches - for the rare
+        case a single Redis glob can't express what to delete (e.g. the
+        Tree tab's synthetic "no prefix" bucket, whose keys share nothing
+        in common beyond having no ":" in their name). Returns how many
+        keys were deleted."""
+        if not keys:
+            return 0
+        client = self._make_client(datasource, decode_responses=True)
+        deleted = 0
+        try:
+            for start in range(0, len(keys), batch_size):
+                batch = keys[start : start + batch_size]
+                deleted += client.unlink(*batch)
+        finally:
+            client.close()
+        return deleted
+
+    # ------------------------------------------------------------------
     # Single-key details for the Key Details view.
     # ------------------------------------------------------------------
     def get_key_details(self, datasource: Datasource, key: str) -> KeyDetails:
