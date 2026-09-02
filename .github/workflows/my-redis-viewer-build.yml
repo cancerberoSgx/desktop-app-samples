@@ -2,13 +2,37 @@ name: my-redis-viewer build
 
 on:
   workflow_dispatch: {}
-
-defaults:
-  run:
-    working-directory: my-redis-viewer
+  push:
+    tags:
+      - 'my-redis-viewer-v*'
 
 jobs:
+  # Guards against tagging without bumping VERSION (or vice versa) - the tag
+  # is what a real release build runs off, VERSION is the source of truth an
+  # in-app About dialog could read from a frozen build (which has no .git to
+  # derive a version from at runtime), so the two must always agree. A no-op
+  # on workflow_dispatch runs (there's no tag to check against yet).
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches VERSION file
+        if: github.ref_type == 'tag'
+        run: |
+          tag_version="${GITHUB_REF_NAME#my-redis-viewer-v}"
+          file_version="$(cat my-redis-viewer/VERSION)"
+          if [ "$tag_version" != "$file_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME (version $tag_version) doesn't match my-redis-viewer/VERSION ($file_version)"
+            exit 1
+          fi
+          echo "Building version $file_version"
+
   build:
+    needs: check-version
+    defaults:
+      run:
+        working-directory: my-redis-viewer
     strategy:
       fail-fast: false
       matrix:
@@ -84,8 +108,12 @@ jobs:
           path: ${{ matrix.asset }}.zip
 
   # Publishes two GitHub Releases from the three zipped binaries above:
-  #   - a versioned one (myredisviewer-build.<run number>) that's never
-  #     touched again, giving a permanent build history.
+  #   - a versioned one - when this run was triggered by pushing a
+  #     my-redis-viewer-v* tag, the release is published on that same tag
+  #     (e.g. my-redis-viewer-v1.0.0); a plain workflow_dispatch test run
+  #     (no such tag) falls back to the old myredisviewer-build.<run number>
+  #     naming instead. Either way, once published it's never touched again,
+  #     giving a permanent build history.
   #   - "myredisviewer-latest", deleted and recreated every run, whose asset
   #     URLs never change - this is what docs/my-redis-viewer/index.html's
   #     download buttons link to, so the homepage needs no edits when a new
@@ -110,13 +138,24 @@ jobs:
           find artifacts -type f -name '*.zip' -exec cp {} release-assets/ \;
           ls -la release-assets
 
+      - name: Determine release tag and title
+        id: release-info
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "title=My Redis Viewer ${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=myredisviewer-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "title=My Redis Viewer build #${{ github.run_number }} (dev)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish versioned release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "myredisviewer-build.${{ github.run_number }}" release-assets/*.zip \
+          gh release create "${{ steps.release-info.outputs.tag }}" release-assets/*.zip \
             --repo "${{ github.repository }}" \
-            --title "My Redis Viewer build #${{ github.run_number }}" \
+            --title "${{ steps.release-info.outputs.title }}" \
             --notes "Built from commit ${{ github.sha }}."
 
       - name: Publish rolling "latest" release

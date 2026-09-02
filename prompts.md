@@ -24,5 +24,15 @@ in docs/index.html we've created some html docs user facing for each docs/my-dat
 
 
 
+# version
+in all projects (my-data-viewer) (my-disk-viewer) (my-docker-viewer) (my-documents-viewer) (my-file-viewer) (my-redis-viewer), I want to start versioning each with a semver like 1.0.3. Both in gitlab action builds / artifacts and in aur/ code.
+How would you recommend to do this ? (don't write code)
+
+p2
+convert scripts/bump-app-version.sh to python. Add a section in readme.md about how to version projects
+Also add an option --patch that just increment patch version number
+
+
+
 
 ---

@@ -7,5 +7,6 @@ dist
 aur/*.pkg.tar.zst
 aur/pkg
 aur/my-redis-viewer-git
+aur/my-redis-viewer
 aur/src
 test/.env

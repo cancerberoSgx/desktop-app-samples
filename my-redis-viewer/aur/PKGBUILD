@@ -1,15 +1,18 @@
 # Maintainer: Sebastián Gurin (cancerberoSgx) <sebastian@devaiq.com>
 
-# VCS (-git) package: builds my-redis-viewer straight from this monorepo's
-# main branch. There are no per-app release tags (yet), and Arch's own
-# package manager already guarantees python/wxWidgets are on the target
-# system, so there is nothing to bundle - unlike the PyInstaller builds in
+# Versioned package: builds my-redis-viewer from a tagged release
+# (my-redis-viewer-v<pkgver>), not the rolling main branch - unlike the
+# other apps in this monorepo, which are still -git (VCS) packages built
+# straight off main because they don't have release tags yet. See /AUR.md
+# at the repo root for why -git packages exist at all, and for the full
+# local-test/publish workflow. Arch's own package manager already
+# guarantees python/wxWidgets are on the target system, so there is
+# nothing to bundle - unlike the PyInstaller builds in
 # .github/workflows/my-redis-viewer-build.yml, which target non-Arch Linux
-# (and Windows/macOS) and so vendor a private copy of everything. See
-# /AUR.md at the repo root for the full local-test/publish workflow.
+# (and Windows/macOS) and so vendor a private copy of everything.
 
-pkgname=my-redis-viewer-git
-pkgver=r106.d86727c
+pkgname=my-redis-viewer
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Native wxWidgets desktop app for managing and testing Redis connection profiles"
 arch=('any')
@@ -17,20 +20,13 @@ url="https://github.com/cancerberoSgx/desktop-app-samples"
 license=('MIT')
 depends=('python' 'python-wxpython' 'python-redis')
 makedepends=('git')
-provides=('my-redis-viewer' 'myredisviewer')
-conflicts=('my-redis-viewer' 'myredisviewer')
-source=("$pkgname::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main")
+provides=('myredisviewer')
+conflicts=('my-redis-viewer-git' 'myredisviewer')
+source=("$pkgname::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-redis-viewer-v$pkgver")
 sha256sums=('SKIP')
 
 _pkgsubdir=my-redis-viewer
 _bin=myredisviewer
-
-pkgver() {
-  cd "$pkgname"
-  # Whole-repo commit count (not just this app's subtree) so the version
-  # always increases even across history that touches other apps only.
-  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
-}
 
 package() {
   local _src="$srcdir/$pkgname/$_pkgsubdir"
