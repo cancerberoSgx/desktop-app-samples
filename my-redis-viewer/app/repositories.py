@@ -451,6 +451,17 @@ class DatasourceRepository:
             client.close()
         return self._parse_index_info(index_name, info)
 
+    def delete_index(self, datasource: Datasource, index_name: str, delete_data: bool) -> None:
+        """FT.DROPINDEX <index_name> [DD]. With delete_data=False this only
+        detaches the index definition - every hash/JSON document it
+        covered is left in place, just no longer searchable. With
+        delete_data=True (the DD flag) those documents are deleted too."""
+        client = self._make_client(datasource, decode_responses=True)
+        try:
+            client.ft(index_name).dropindex(delete_documents=delete_data)
+        finally:
+            client.close()
+
     # FT.INFO's flat attribute list alternates key/value pairs (identifier,
     # attribute, type, WEIGHT, SEPARATOR, PHONETIC, and per-type config like
     # VECTOR's algorithm/data_type/dim/distance_metric/...) with a handful

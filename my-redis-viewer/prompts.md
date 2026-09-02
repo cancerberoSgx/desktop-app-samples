@@ -162,10 +162,31 @@ docker run -d --name redis-stack -p 6379:6379 -p 8001:8001 redis/redis-stack:lat
 
 Also add /test/README.md with instructions about how to run tests
 
-#
+# indexes & tree delete
+
+in indexes screen, there's a "delete" button that is enabled when an index is selected.
+When clicked it display a dialog asking for options : delete-only-index, delete-index-and-data, cancel
+delete button must be placed right next to refresh button
+p2:
+after index is deleted successfully it should desapear from the list without user having to press refresh
+
+p3
+similarly to what we did for indexes, 
+in tree view, when selecting any node (leave or branch), at the right section there's always a "delete" button.
+when clicked it ask user confirmation and then delete all keys matching the branch  (inform the user of the keys pattern to be deleted like foo:bar:*)
+after pattern is deleted successfully it should desapear from the list without user having to press refresh
+
+
+
+  screen, there's a "delete" button that is enabled when an index is selected.
+When clicked it display a dialog asking for options : delete-only-index, delete-index-and-data, cancel
+delete button must be placed right next to refresh button
+
+
 
 # FUTURE
 
+in "
 indexes delete and delete+data options
 
 tree - delete node and all its children
