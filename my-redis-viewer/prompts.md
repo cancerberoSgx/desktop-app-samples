@@ -145,4 +145,11 @@ this is implemented in app/repositories.py scan_keys method
 scan_keys is currently used to build the keys tree
 can you research another more performant way of doing this or if it's not possible ? or perform the scanning faster ? also confirm this scan keys has little impact on redis server performance ? Don't write code yet
 
+
+# filter tree and filters
+in screen "filters", add an input box that allows users to filter indexes and display only those which contains the user input. Put it right next to "refresh" button. Perform the filtering client side - don't call redis to filter
+
+in screen "Tree", add an input box that allows users to filter tree keys and display only those which contains the user input. Put it right next to "refresh" button. Perform the filtering client side - don't call redis to filter. Only filter out "known" tree nodes /the one that user probably is seeing right now, don't consult redis to expand the whole tree to perform the filtering. If the filter is applied and user expands a new tree leave, filter the new children too (make sure the filter is always respected for new content)
+
+
 # FUTURE
