@@ -152,4 +152,20 @@ in screen "filters", add an input box that allows users to filter indexes and di
 in screen "Tree", add an input box that allows users to filter tree keys and display only those which contains the user input. Put it right next to "refresh" button. Perform the filtering client side - don't call redis to filter. Only filter out "known" tree nodes /the one that user probably is seeing right now, don't consult redis to expand the whole tree to perform the filtering. If the filter is applied and user expands a new tree leave, filter the new children too (make sure the filter is always respected for new content)
 
 
+
+# tests
+I want to have some pytest in folder /test that given a redis instance defined in a .env file (a local docker instance), test the repository classes really against redis. These tests should create new profiles, new datasources, sample redis data, and each redis related repository operations. Do you have any doubts before implementing this ? By default you can use the current redis instance running at localhost default port with no user and password.
+
+
+Also in /test create a docker-compose file that runs a docker redis using this same : 
+docker run -d --name redis-stack -p 6379:6379 -p 8001:8001 redis/redis-stack:latest
+
+Also add /test/README.md with instructions about how to run tests
+
+#
+
 # FUTURE
+
+indexes delete and delete+data options
+
+tree - delete node and all its children

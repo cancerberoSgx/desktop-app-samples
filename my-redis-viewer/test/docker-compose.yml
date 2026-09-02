@@ -1,0 +1,17 @@
+# Local Redis instance for the integration tests in this folder.
+#
+# Equivalent to:
+#   docker run -d --name redis-stack -p 6379:6379 -p 8001:8001 redis/redis-stack:latest
+#
+# redis-stack (not plain redis) is used deliberately: the repository tests
+# exercise RedisJSON (get_key_details on a "ReJSON-RL" key) and RediSearch
+# (list_indexes/get_index_details), both of which only exist as redis-stack
+# modules - plain redis:latest would fail those tests with "unknown command".
+services:
+  redis-stack:
+    image: redis/redis-stack:latest
+    container_name: redis-stack
+    ports:
+      - "6379:6379"   # Redis protocol - what the tests/app connect to.
+      - "8001:8001"   # RedisInsight web UI - optional, handy for poking at test data.
+    restart: unless-stopped

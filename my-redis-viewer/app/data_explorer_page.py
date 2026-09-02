@@ -1,6 +1,6 @@
 import bisect
 import fnmatch
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, FrozenSet, List, Optional, Set
 
 import wx
 
@@ -40,7 +40,14 @@ class KeyTreeView(wx.Panel):
         self._root: Dict = new_node()
         self._hidden_root: Optional[wx.TreeItemId] = None
         self._top_level_order: List[str] = []
+        self._top_level_labels: Set[str] = set()
         self._top_level_items: Dict[str, wx.TreeItemId] = {}
+        self._filter_query = ""
+        # Node identities (id(node)) the user has expanded - tracked
+        # independently of what's currently rendered, so re-filtering
+        # (which deletes and re-adds tree items) never loses track of what
+        # was open, even if a stricter filter temporarily hides everything.
+        self._expanded_node_ids: Set[int] = set()
 
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -49,7 +56,16 @@ class KeyTreeView(wx.Panel):
         self.refresh_btn.SetToolTip(
             "Re-scan the keyspace - picks up keys created since this tree was last built."
         )
-        toolbar.Add(self.refresh_btn, 0)
+        toolbar.Add(self.refresh_btn, 0, wx.RIGHT, 8)
+        self._filter_ctrl = wx.SearchCtrl(self, size=(200, -1))
+        self._filter_ctrl.SetDescriptiveText("Filter tree")
+        self._filter_ctrl.ShowCancelButton(True)
+        self._filter_ctrl.SetToolTip(
+            "Show only branches and keys containing this text - filters the tree as "
+            "already built, in memory, without re-scanning Redis. A branch stays "
+            "visible if a key nested inside it matches, even if its own name doesn't."
+        )
+        toolbar.Add(self._filter_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(toolbar, 0, wx.ALL, 8)
 
         splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
@@ -65,7 +81,11 @@ class KeyTreeView(wx.Panel):
         self.SetSizer(sizer)
 
         self.refresh_btn.Bind(wx.EVT_BUTTON, lambda event: self._on_refresh())
+        self._filter_ctrl.Bind(wx.EVT_TEXT, self._on_filter_changed)
+        self._filter_ctrl.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_filter_cancel)
         self._tree.Bind(wx.EVT_TREE_ITEM_EXPANDING, self._on_expanding)
+        self._tree.Bind(wx.EVT_TREE_ITEM_EXPANDED, self._on_expanded)
+        self._tree.Bind(wx.EVT_TREE_ITEM_COLLAPSED, self._on_collapsed)
         self._tree.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_select)
 
     def clear(self) -> None:
@@ -74,7 +94,11 @@ class KeyTreeView(wx.Panel):
         self._root = new_node()
         self._hidden_root = None
         self._top_level_order = []
+        self._top_level_labels = set()
         self._top_level_items = {}
+        self._filter_query = ""
+        self._filter_ctrl.ChangeValue("")
+        self._expanded_node_ids = set()
 
     def begin_scan(self) -> None:
         """Reset the tree and get ready for add_keys() - call once before
@@ -104,30 +128,111 @@ class KeyTreeView(wx.Panel):
         for label in touched_labels:
             node = self._root["children"][label]
             label_text = f"{label} ({len(node['leaves'])})" if node["leaves"] else label
-            item = self._top_level_items.get(label)
-            if item is None:
+            if label not in self._top_level_labels:
                 index = bisect.bisect_left(self._top_level_order, label)
                 self._top_level_order.insert(index, label)
-                item = self._tree.InsertItem(self._hidden_root, index, label_text)
-                self._tree.SetItemData(item, node)
-                self._top_level_items[label] = item
-            else:
-                self._tree.SetItemText(item, label_text)
-            if node["children"]:
-                first_child, _cookie = self._tree.GetFirstChild(item)
-                if not first_child.IsOk():
-                    self._tree.AppendItem(item, "")  # dummy placeholder for lazy expansion
+                self._top_level_labels.add(label)
+            item = self._top_level_items.get(label)
+            if self._branch_relevant(label, node):
+                if item is None:
+                    item = self._tree.InsertItem(self._hidden_root, self._visible_index(label), label_text)
+                    self._tree.SetItemData(item, node)
+                    self._top_level_items[label] = item
+                else:
+                    self._tree.SetItemText(item, label_text)
+                if node["children"]:
+                    first_child, _cookie = self._tree.GetFirstChild(item)
+                    if not first_child.IsOk():
+                        self._tree.AppendItem(item, "")  # dummy placeholder for lazy expansion
+            elif item is not None:
+                # was shown, no longer matches the active filter - drop the
+                # tree item but keep the node data (self._root), so it comes
+                # back the moment the filter no longer excludes it.
+                self._tree.Delete(item)
+                del self._top_level_items[label]
             if node is selected_node:
-                self._list.set_keys(sorted(node["leaves"]))
+                self._set_list_from_node(node)
 
-    def _add_children(self, parent_item: wx.TreeItemId, node: Dict) -> None:
+    def _matches_text(self, text: str) -> bool:
+        return self._filter_query in text.lower()
+
+    def _branch_relevant(self, label: str, node: Dict) -> bool:
+        """True if this branch belongs on screen under the active filter:
+        its own label matches, one of its already-known leaf keys
+        matches, or (recursively) a descendant branch does. This walks
+        the already-scanned in-memory trie (self._root and its nested
+        node dicts) - the whole keyspace already sitting in memory from
+        the last scan/expand, never Redis - so a branch containing a
+        deeply-nested match stays reachable even though its own label
+        doesn't match. It only decides what's *worth* rendering; actually
+        materializing it into the wx.TreeCtrl still happens lazily/on
+        expand exactly as before, so an irrelevant branch never gets
+        rendered just to answer this question."""
+        if not self._filter_query:
+            return True
+        if self._matches_text(label):
+            return True
+        if any(self._matches_text(leaf) for leaf in node["leaves"]):
+            return True
+        return any(
+            self._branch_relevant(child_label, child_node)
+            for child_label, child_node in node["children"].items()
+        )
+
+    def _set_list_from_node(self, node: Dict) -> None:
+        """Populate the right-hand key list from `node`'s leaves,
+        respecting the active filter (so selecting a branch that's only
+        shown because a nested descendant matches doesn't dump every
+        unrelated key in that branch into the list)."""
+        leaves = node["leaves"]
+        if self._filter_query:
+            leaves = [leaf for leaf in leaves if self._matches_text(leaf)]
+        self._list.set_keys(sorted(leaves))
+
+    def _visible_index(self, label: str) -> int:
+        """Position `label` should land at among the top-level items
+        currently shown (i.e. respecting the active filter) - the ones
+        before it in sorted order that the filter also lets through."""
+        pos = bisect.bisect_left(self._top_level_order, label)
+        return sum(
+            1
+            for prior in self._top_level_order[:pos]
+            if self._branch_relevant(prior, self._root["children"][prior])
+        )
+
+    def _on_expanded(self, event: wx.TreeEvent) -> None:
+        node = self._tree.GetItemData(event.GetItem())
+        if node is not None:
+            self._expanded_node_ids.add(id(node))
+
+    def _on_collapsed(self, event: wx.TreeEvent) -> None:
+        node = self._tree.GetItemData(event.GetItem())
+        if node is not None:
+            self._expanded_node_ids.discard(id(node))
+
+    def _add_children(
+        self, parent_item: wx.TreeItemId, node: Dict, expanded_ids: FrozenSet[int] = frozenset()
+    ) -> None:
+        """Render `node`'s children under `parent_item`, skipping any
+        branch the active filter excludes (own label, its leaves, and its
+        own descendants all considered - see _branch_relevant). A child
+        whose node id is in `expanded_ids` (i.e. it was already expanded
+        before a filter change triggered a re-render) is rendered
+        eagerly, recursing into its own children the same way, so
+        re-filtering never collapses a branch the user already had open."""
         for segment in sorted(node["children"]):
             child = node["children"][segment]
+            if not self._branch_relevant(segment, child):
+                continue
             label = f"{segment} ({len(child['leaves'])})" if child["leaves"] else segment
             item = self._tree.AppendItem(parent_item, label)
             self._tree.SetItemData(item, child)
             if child["children"]:
-                self._tree.AppendItem(item, "")  # dummy placeholder for lazy expansion
+                if id(child) in expanded_ids:
+                    self._add_children(item, child, expanded_ids)
+                    self._tree.Expand(item)
+                else:
+                    self._tree.AppendItem(item, "")  # dummy placeholder for lazy expansion
 
     def _on_expanding(self, event: wx.TreeEvent) -> None:
         item = event.GetItem()
@@ -141,7 +246,71 @@ class KeyTreeView(wx.Panel):
 
     def _on_select(self, event: wx.TreeEvent) -> None:
         node = self._tree.GetItemData(event.GetItem())
-        self._list.set_keys(sorted(node["leaves"]) if node else [])
+        if node is None:
+            self._list.set_keys([])
+        else:
+            self._set_list_from_node(node)
+
+    def _on_filter_changed(self, event: wx.CommandEvent) -> None:
+        self._filter_query = self._filter_ctrl.GetValue().strip().lower()
+        self._apply_filter()
+
+    def _on_filter_cancel(self, event: wx.CommandEvent) -> None:
+        self._filter_ctrl.ChangeValue("")
+        self._filter_query = ""
+        self._apply_filter()
+
+    def _find_item_for_node(self, item: wx.TreeItemId, target_node: Dict) -> Optional[wx.TreeItemId]:
+        """Search the tree items already rendered under `item` for the one
+        holding `target_node` - used to re-find the previously-selected
+        branch after a filter re-render rebuilds the tree's items."""
+        if self._tree.GetItemData(item) is target_node:
+            return item
+        child, cookie = self._tree.GetFirstChild(item)
+        while child.IsOk():
+            found = self._find_item_for_node(child, target_node)
+            if found is not None:
+                return found
+            child, cookie = self._tree.GetNextChild(item, cookie)
+        return None
+
+    def _apply_filter(self) -> None:
+        """Re-render the tree from what's already known - self._root (the
+        full in-memory trie built from the scan so far) for top-level
+        branches, and whatever was already expanded for deeper ones -
+        without any Redis round-trip. A branch only gets (re)materialized
+        into the wx.TreeCtrl if _branch_relevant says it's worth showing,
+        so this never force-renders a branch nobody will end up seeing."""
+        if self._hidden_root is None:
+            return
+        expanded_ids = self._expanded_node_ids
+        selection = self._tree.GetSelection()
+        selected_node = self._tree.GetItemData(selection) if selection.IsOk() else None
+
+        self._tree.DeleteChildren(self._hidden_root)
+        self._top_level_items = {}
+        for label in self._top_level_order:
+            node = self._root["children"][label]
+            if not self._branch_relevant(label, node):
+                continue
+            label_text = f"{label} ({len(node['leaves'])})" if node["leaves"] else label
+            item = self._tree.AppendItem(self._hidden_root, label_text)
+            self._tree.SetItemData(item, node)
+            self._top_level_items[label] = item
+            if node["children"]:
+                if id(node) in expanded_ids:
+                    self._add_children(item, node, expanded_ids)
+                    self._tree.Expand(item)
+                else:
+                    self._tree.AppendItem(item, "")  # dummy placeholder for lazy expansion
+
+        restored = None
+        if selected_node is not None:
+            restored = self._find_item_for_node(self._hidden_root, selected_node)
+        if restored is not None:
+            self._tree.SelectItem(restored)  # fires EVT_TREE_SEL_CHANGED -> re-filters the list
+        else:
+            self._list.set_keys([])
 
 
 class KeySearchView(wx.Panel):

@@ -8,3 +8,4 @@ aur/*.pkg.tar.zst
 aur/pkg
 aur/my-redis-viewer-git
 aur/src
+test/.env
