@@ -37,10 +37,13 @@ package() {
   # package (see app/frame.py etc.) - installing them all as global `app`
   # modules would collide. The launcher script below points PYTHONPATH at
   # this private directory instead, same effect as a venv without the venv.
-  # app/db/paths.py locates app/db/migrations relative to this directory's
-  # own layout, so main.py and app/ must stay siblings exactly like this.
+  # app/db/paths.py locates app/db/migrations (and, via app/version.py, the
+  # VERSION file - what Help > About reads) relative to this directory's
+  # own layout, so main.py, app/ and VERSION must stay siblings exactly
+  # like this.
   install -d "$_appdir"
   cp "$_src/main.py" "$_appdir/main.py"
+  cp "$_src/VERSION" "$_appdir/VERSION"
   cp -r "$_src/app" "$_appdir/app"
   find "$_appdir" -name '__pycache__' -type d -exec rm -rf {} +
 

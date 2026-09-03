@@ -67,9 +67,8 @@ Cutting a new my-redis-viewer release:
    packaging-only fix at the same upstream version (no app change), use
    `--pkgrel-only` instead - it just bumps `pkgrel` and leaves `VERSION`
    untouched. The script prints the exact `git` commands to run next; it
-   doesn't commit, tag, or push anything itself. See `scripts/README.md`
-   (or the "Versioning" section in the root `README.md`) for the full
-   picture.
+   doesn't commit, tag, or push anything itself. See the "Versioning"
+   section in the root `README.md` for the cross-app overview.
 2. `git add` the three changed files, commit, then
    `git tag my-redis-viewer-v1.0.1 && git push && git push --tags`.
 3. `.github/workflows/my-redis-viewer-build.yml`'s `check-version` job fails

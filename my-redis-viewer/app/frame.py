@@ -12,6 +12,7 @@ from app.pages import AboutPage
 from app.profiles_page import ProfilesPage
 from app.repositories import DatasourceRepository, ProfileRepository, ScriptRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
+from app.version import get_version
 
 DEFAULT_PROFILE_NAME = "default"
 
@@ -199,7 +200,7 @@ class MainFrame(wx.Frame):
 
     def _on_about(self, event: wx.CommandEvent) -> None:
         wx.MessageBox(
-            "My Redis Viewer\n\n"
+            f"My Redis Viewer {get_version()}\n\n"
             "Manage Redis connections: create data sources per profile and "
             "connect to check they're reachable.",
             "About My Redis Viewer",

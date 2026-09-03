@@ -9,27 +9,35 @@ on:
 jobs:
   # Guards against tagging without bumping VERSION (or vice versa) - the tag
   # is what a real release build runs off, VERSION is the source of truth an
-  # in-app About dialog could read from a frozen build (which has no .git to
-  # derive a version from at runtime), so the two must always agree. A no-op
-  # on workflow_dispatch runs (there's no tag to check against yet).
+  # in-app About dialog reads from a frozen build (which has no .git to
+  # derive a version from at runtime), so the two must always agree. Also
+  # exposes VERSION's value as an output so later jobs can stamp it onto
+  # artifact/release filenames without re-reading the file themselves.
   check-version:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify tag matches VERSION file
-        if: github.ref_type == 'tag'
+      - name: Determine version and verify it matches the tag (if any)
+        id: version
         run: |
-          tag_version="${GITHUB_REF_NAME#my-redis-viewer-v}"
           file_version="$(cat my-redis-viewer/VERSION)"
-          if [ "$tag_version" != "$file_version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME (version $tag_version) doesn't match my-redis-viewer/VERSION ($file_version)"
-            exit 1
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#my-redis-viewer-v}"
+            if [ "$tag_version" != "$file_version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME (version $tag_version) doesn't match my-redis-viewer/VERSION ($file_version)"
+              exit 1
+            fi
           fi
+          echo "value=$file_version" >> "$GITHUB_OUTPUT"
           echo "Building version $file_version"
 
   build:
     needs: check-version
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
     defaults:
       run:
         working-directory: my-redis-viewer
@@ -86,40 +94,45 @@ jobs:
 
       # actions/upload-artifact would otherwise re-zip the raw dist folder
       # anyway, but only as an internal Actions-run artifact - packaging it
-      # ourselves here means the exact same .zip also becomes the public
-      # release asset in the "release" job below, with a name matching what
-      # docs/my-redis-viewer/index.html's download buttons expect.
+      # ourselves here means the exact same versioned .zip also becomes the
+      # versioned release asset in the "release" job below. The rolling
+      # "myredisviewer-latest" release (what docs/my-redis-viewer/index.html's
+      # download buttons link to) needs unversioned filenames instead - the
+      # release job strips the version back off for those, rather than this
+      # job producing two copies of every zip.
       - name: Package archive (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           cd "$(dirname '${{ matrix.dist-dir }}')"
-          zip -r "${{ github.workspace }}/${{ matrix.asset }}.zip" "$(basename '${{ matrix.dist-dir }}')"
+          zip -r "${{ github.workspace }}/${{ matrix.asset }}-${{ env.VERSION }}.zip" "$(basename '${{ matrix.dist-dir }}')"
 
       - name: Package archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "${{ matrix.dist-dir }}" -DestinationPath "${{ github.workspace }}\${{ matrix.asset }}.zip"
+          Compress-Archive -Path "${{ matrix.dist-dir }}" -DestinationPath "${{ github.workspace }}\${{ matrix.asset }}-${{ env.VERSION }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}.zip
+          name: ${{ matrix.asset }}-${{ env.VERSION }}
+          path: ${{ matrix.asset }}-${{ env.VERSION }}.zip
 
   # Publishes two GitHub Releases from the three zipped binaries above:
-  #   - a versioned one - when this run was triggered by pushing a
-  #     my-redis-viewer-v* tag, the release is published on that same tag
-  #     (e.g. my-redis-viewer-v1.0.0); a plain workflow_dispatch test run
-  #     (no such tag) falls back to the old myredisviewer-build.<run number>
-  #     naming instead. Either way, once published it's never touched again,
-  #     giving a permanent build history.
-  #   - "myredisviewer-latest", deleted and recreated every run, whose asset
-  #     URLs never change - this is what docs/my-redis-viewer/index.html's
-  #     download buttons link to, so the homepage needs no edits when a new
-  #     build is published.
+  #   - a versioned one, with versioned asset filenames
+  #     (myredisviewer-linux-1.0.0.zip etc.) - when this run was triggered by
+  #     pushing a my-redis-viewer-v* tag, the release is published on that
+  #     same tag (e.g. my-redis-viewer-v1.0.0); a plain workflow_dispatch
+  #     test run (no such tag) falls back to the old
+  #     myredisviewer-build.<run number> naming instead. Either way, once
+  #     published it's never touched again, giving a permanent build history.
+  #   - "myredisviewer-latest", deleted and recreated every run, with the
+  #     version stripped back off each asset's filename - this is what
+  #     docs/my-redis-viewer/index.html's download buttons link to, so both
+  #     the release name *and* the asset filenames must stay stable, or the
+  #     homepage would need edits every release.
   release:
-    needs: build
+    needs: [build, check-version]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -158,12 +171,23 @@ jobs:
             --title "${{ steps.release-info.outputs.title }}" \
             --notes "Built from commit ${{ github.sha }}."
 
+      - name: Strip version from filenames for the rolling "latest" release
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          mkdir -p latest-assets
+          for f in release-assets/*.zip; do
+            unversioned="$(basename "$f" | sed "s/-${VERSION}\.zip$/.zip/")"
+            cp "$f" "latest-assets/$unversioned"
+          done
+          ls -la latest-assets
+
       - name: Publish rolling "latest" release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release delete myredisviewer-latest --repo "${{ github.repository }}" --yes --cleanup-tag || true
-          gh release create myredisviewer-latest release-assets/*.zip \
+          gh release create myredisviewer-latest latest-assets/*.zip \
             --repo "${{ github.repository }}" \
             --title "My Redis Viewer (latest build)" \
-            --notes "Always the most recent successful build. For version history, see releases prefixed myredisviewer-build.*"
+            --notes "Always the most recent successful build. For version history, see releases prefixed myredisviewer-build.* and vX.Y.Z tags."
