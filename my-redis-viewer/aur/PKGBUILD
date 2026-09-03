@@ -1,11 +1,11 @@
 # Maintainer: Sebastián Gurin (cancerberoSgx) <sebastian@devaiq.com>
 
 # Versioned package: builds my-redis-viewer from a tagged release
-# (my-redis-viewer-v<pkgver>), not the rolling main branch - unlike the
-# other apps in this monorepo, which are still -git (VCS) packages built
-# straight off main because they don't have release tags yet. See /AUR.md
-# at the repo root for why -git packages exist at all, and for the full
-# local-test/publish workflow. Arch's own package manager already
+# (my-redis-viewer-v<pkgver>), not the rolling main branch - every app in this
+# monorepo now uses this same versioned-package scheme (my-file-viewer is
+# the only app with no AUR package at all - see /AUR.md at the repo root
+# for why, and for the full local-test/publish workflow). Arch's own
+# package manager already
 # guarantees python/wxWidgets are on the target system, so there is
 # nothing to bundle - unlike the PyInstaller builds in
 # .github/workflows/my-redis-viewer-build.yml, which target non-Arch Linux

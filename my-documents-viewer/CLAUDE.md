@@ -231,6 +231,29 @@ INSERT/UPDATE/DELETE (not e.g. a bulk `executescript` that bypasses row-level
 triggers) or the FTS index will drift out of sync. Remember per-profile `vec0`
 tables are *not* part of this migration system at all (see above).
 
+### Version (`app/version.py`, `VERSION`)
+
+`app/version.py::get_version()` reads the plain-text `VERSION` file at the
+project root (via `app/db/paths.py::project_root()` - the same
+frozen-vs-source resolution the migrations dir uses) and is what the
+Help > About dialog (`app/about_dialog.py::AboutDialog`) displays under the
+title. There is no sidebar About page here (unlike `my-redis-viewer`) - About
+was pulled out of the sidebar into the standard Help menu, so the dialog is
+the only surface this needs wiring into. It is **not** derived from git
+(`git describe` etc.) - a PyInstaller build has no `.git` directory to read
+that from at runtime, so `VERSION` is baked in at build time instead.
+Anywhere this file needs to be read from, it must also be **bundled
+alongside `main.py`/`app/`**:
+- `mydocumentsviewer.spec`'s `datas=[...]` includes `('VERSION', '.')`,
+  alongside the migrations and `sqlite_vec` entries already there.
+- `aur/PKGBUILD`'s `package()` copies `VERSION` next to `main.py` under
+  `/usr/lib/mydocumentsviewer/`, same as it does for `main.py` itself.
+
+See the root `README.md`'s "Versioning" section and `AUR.md` for how
+`VERSION` gets bumped (`scripts/bump-app-version.py`) and how it flows into
+release tags, GitHub Actions artifact filenames, and the AUR package's
+`pkgver`.
+
 ### UI structure
 
 Left `Sidebar` (`app/sidebar.py`) drives a `wx.Simplebook` in `MainFrame` -

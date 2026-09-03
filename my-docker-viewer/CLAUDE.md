@@ -461,6 +461,27 @@ file is automatically picked up by the existing
 `datas=[('app/db/migrations', 'app/db/migrations')]` glob-style entry in
 `mydockerviewer.spec` - no spec change needed unless the directory itself moves.
 
+### Version (`app/version.py`, `VERSION`)
+
+`app/version.py::get_version()` reads the plain-text `VERSION` file at the
+project root (via `app/db/paths.py::project_root()` - the same
+frozen-vs-source resolution the migrations dir uses) and is what the
+Help > About dialog displays. It is **not** derived from git (`git describe`
+etc.) - a PyInstaller build has no `.git` directory to read that from at
+runtime, so `VERSION` is baked in at build time instead. Unlike
+`my-redis-viewer`, there is no sidebar About page to also show it on - the
+Help menu's `MainFrame._on_about` (see "UI structure" below) is the only
+About surface in this app. Anywhere this file needs to be read from, it must
+also be **bundled alongside `main.py`/`app/`**:
+- `mydockerviewer.spec`'s `datas=[...]` includes `('VERSION', '.')`.
+- `aur/PKGBUILD`'s `package()` copies `VERSION` next to `main.py` under
+  `/usr/lib/mydockerviewer/`, same as it does for `main.py` itself.
+
+See the root `README.md`'s "Versioning" section and `AUR.md` for how
+`VERSION` gets bumped (`scripts/bump-app-version.py`) and how it flows into
+release tags, GitHub Actions artifact filenames, and the AUR package's
+`pkgver`.
+
 ### UI structure
 
 Left `Sidebar` (icon buttons, `app/sidebar.py`) drives a `wx.Simplebook` in
@@ -469,7 +490,8 @@ book (`Sidebar._on_button_clicked` selects by index): Containers (0),
 Containers Disk (1), Images (2), Volumes (3), Networks (4). There is no About
 entry in the sidebar (or an Exit button pinned under it, as there once was) -
 "About" only exists as the Help menu's About dialog (`MainFrame._on_about`),
-which is also the one place author/license/home links are shown.
+which is also the one place author/license/home links are shown, and now also
+shows the app's version (see "Version" above).
 
 ### PyInstaller packaging gotchas (see my-redis-viewer's/my-data-viewer's git history for the original incident)
 

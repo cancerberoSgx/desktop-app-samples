@@ -12,6 +12,7 @@ from app.repositories import FavoriteRepository, SettingsRepository
 from app.right_sidebar import RightSidebar
 from app.settings_dialog import SettingsDialog
 from app.sidebar import FavoritesSidebar
+from app.version import get_version
 
 
 class MainFrame(wx.Frame):
@@ -279,7 +280,7 @@ class MainFrame(wx.Frame):
 
     def _on_about(self, event: wx.CommandEvent) -> None:
         wx.MessageBox(
-            "My File Viewer\n\n"
+            f"My File Viewer {get_version()}\n\n"
             "A performant file explorer: pin folders as favorites in the\n"
             "sidebar, browse a folder's contents in a sortable table\n"
             "(Name, Size, Modified), and pick up right where you left off\n"

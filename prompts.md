@@ -33,6 +33,10 @@ convert scripts/bump-app-version.sh to python. Add a section in readme.md about 
 Also add an option --patch that just increment patch version number
 
 
+also I need some way of knowing the version of  the executable I'm running, like in file Help->about menu. Also I would like to see
+  the version in the github artifacts file names
 
+p2
+seems to be working fine, so now perform the same you did for my-redis-viewer for the rest of the projects (my-data-viewer) (my-disk-viewer) (my-docker-viewer) (my-documents-viewer) (my-file-viewer)
 
 ---

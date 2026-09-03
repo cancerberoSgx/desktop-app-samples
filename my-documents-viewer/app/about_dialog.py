@@ -1,6 +1,8 @@
 import wx
 import wx.adv
 
+from .version import get_version
+
 HOMEPAGE_URL = "https://github.com/cancerberoSgx/desktop-app-samples"
 
 
@@ -22,6 +24,10 @@ class AboutDialog(wx.Dialog):
         font.MakeBold()
         title.SetFont(font)
         outer.Add(title, 0, wx.TOP | wx.LEFT | wx.RIGHT, 20)
+
+        version = wx.StaticText(self, label=f"Version {get_version()}")
+        version.SetForegroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT))
+        outer.Add(version, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 20)
 
         subtitle = wx.StaticText(
             self, label="Index local text files and search them by keyword, meaning, or both."

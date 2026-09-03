@@ -1,6 +1,6 @@
-pkgbase = my-data-viewer-git
+pkgbase = my-data-viewer
 	pkgdesc = Native wxWidgets desktop viewer for CSV/JSON files and databases - browse tables/columns/indexes and run SQL
-	pkgver = r1.0000000
+	pkgver = 1.0.0
 	pkgrel = 1
 	url = https://github.com/cancerberoSgx/desktop-app-samples
 	arch = any
@@ -10,12 +10,11 @@ pkgbase = my-data-viewer-git
 	depends = python-wxpython
 	depends = python-duckdb
 	depends = python-sqlalchemy
-	optdepends = python-psycopg2: connect to PostgreSQL data sources
-	provides = my-data-viewer
+	depends = python-psycopg2
 	provides = mydataviewer
-	conflicts = my-data-viewer
+	conflicts = my-data-viewer-git
 	conflicts = mydataviewer
-	source = my-data-viewer-git::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main
+	source = my-data-viewer::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-data-viewer-v1.0.0
 	sha256sums = SKIP
 
-pkgname = my-data-viewer-git
+pkgname = my-data-viewer

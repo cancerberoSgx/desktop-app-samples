@@ -6,5 +6,5 @@ build
 dist
 aur/*.pkg.tar.zst
 aur/pkg
-aur/my-disk-viewer-git
+aur/my-disk-viewer
 aur/src

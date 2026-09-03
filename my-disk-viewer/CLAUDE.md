@@ -176,6 +176,27 @@ with indexes on `parent_path` (drill-down queries) and `files.extension` (chart
 queries); `0002_create_settings.sql` is the key/value table. Data lives in
 `~/.my-disk-viewer/my-disk-viewer.db`.
 
+### Version (`app/version.py`, `VERSION`)
+
+`app/version.py::get_version()` reads the plain-text `VERSION` file at the
+project root (via `app/db/paths.py::project_root()` - the same
+frozen-vs-source resolution the migrations dir uses) and is what the
+Help > About menu item displays (`MainFrame._on_about`). There is no
+sidebar/About page in this app to also show it (see "`app/frame.py` -
+composition root" below) - the menu item is the only About surface. It is
+**not** derived from git (`git describe` etc.) - a PyInstaller build has no
+`.git` directory to read that from at runtime, so `VERSION` is baked in at
+build time instead. Anywhere this file needs to be read from, it must also
+be **bundled alongside `main.py`/`app/`**:
+- `mydiskviewer.spec`'s `datas=[...]` includes `('VERSION', '.')`.
+- `aur/PKGBUILD`'s `package()` copies `VERSION` next to `main.py` under
+  `/usr/lib/mydiskviewer/`, same as it does for `main.py` itself.
+
+See the root `README.md`'s "Versioning" section and `AUR.md` for how
+`VERSION` gets bumped (`scripts/bump-app-version.py`) and how it flows into
+release tags, GitHub Actions artifact filenames, and the AUR package's
+`pkgver`.
+
 ### `app/frame.py` - composition root
 
 Same posture as `my-docker-viewer`'s: opens the one sqlite3 connection, runs

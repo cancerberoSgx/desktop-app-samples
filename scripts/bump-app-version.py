@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Bumps an app's version under the AUR "versioned package" scheme (see
-AUR.md's "Per-app semver" section) - keeps <app>/VERSION, the pkgver=/
-pkgrel= lines in <app>/aur/PKGBUILD, and <app>/aur/.SRCINFO all in sync
-instead of hand-editing each one. Currently only my-redis-viewer uses this
-scheme; run this for another app once it gets its own release tags too.
+"""Bumps an app's version (see the root README.md's "Versioning" section
+and AUR.md's "Per-app semver" section) - keeps <app>/VERSION and, for an
+app with an AUR package, the pkgver=/pkgrel= lines in <app>/aur/PKGBUILD
+and <app>/aur/.SRCINFO in sync too, instead of hand-editing each one.
+my-file-viewer has no aur/PKGBUILD (it has no AUR package at all) - for it,
+this only touches VERSION, and --pkgrel-only doesn't apply.
 
 Usage:
   scripts/bump-app-version.py <app> <new-version>   # e.g. my-redis-viewer 1.0.1
   scripts/bump-app-version.py <app> --patch         # 1.0.1 -> 1.0.2, same major.minor
-  scripts/bump-app-version.py <app> --pkgrel-only   # packaging-only fix, same version
+  scripts/bump-app-version.py <app> --pkgrel-only   # packaging-only fix, same version (AUR apps only)
 
 Does NOT commit, tag, or push anything - prints what to run next instead,
 since pushing a tag triggers a real CI build and a public GitHub Release.
@@ -56,18 +57,20 @@ def main() -> None:
     app_dir = Path(args.app)
     version_file = app_dir / "VERSION"
     pkgbuild_file = app_dir / "aur" / "PKGBUILD"
+    has_aur = pkgbuild_file.is_file()
 
-    if not version_file.is_file() or not pkgbuild_file.is_file():
+    if not version_file.is_file():
         fail(
-            f"{args.app} isn't set up for versioned releases yet "
-            f"(missing {version_file} or {pkgbuild_file})\n"
-            "       see AUR.md's 'Per-app semver' section - only my-redis-viewer "
-            "uses this scheme so far."
+            f"{args.app} isn't set up for versioned releases yet (missing {version_file})\n"
+            "       see the root README.md's 'Versioning' section."
         )
+    if args.pkgrel_only and not has_aur:
+        fail(f"{args.app} has no AUR package ({pkgbuild_file} doesn't exist) - "
+             "--pkgrel-only only makes sense for an app with a PKGBUILD to bump.")
 
     current_version = version_file.read_text().strip()
-    pkgbuild_text = pkgbuild_file.read_text()
-    current_pkgrel = read_pkgrel(pkgbuild_text)
+    pkgbuild_text = pkgbuild_file.read_text() if has_aur else None
+    current_pkgrel = read_pkgrel(pkgbuild_text) if has_aur else None
 
     if args.pkgrel_only:
         new_version = current_version
@@ -89,24 +92,28 @@ def main() -> None:
         print(f"Version bump: {args.app} {current_version} -> {new_version} (pkgrel reset to 1)")
 
     version_file.write_text(f"{new_version}\n")
-    pkgbuild_text = re.sub(r"^pkgver=.*$", f"pkgver={new_version}", pkgbuild_text, flags=re.MULTILINE)
-    pkgbuild_text = re.sub(r"^pkgrel=.*$", f"pkgrel={new_pkgrel}", pkgbuild_text, flags=re.MULTILINE)
-    pkgbuild_file.write_text(pkgbuild_text)
+    updated_files = [version_file]
 
-    srcinfo_file = app_dir / "aur" / ".SRCINFO"
-    result = subprocess.run(
-        ["makepkg", "--printsrcinfo"],
-        cwd=app_dir / "aur",
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        fail(f"makepkg --printsrcinfo failed:\n{result.stderr}")
-    srcinfo_file.write_text(result.stdout)
+    if has_aur:
+        pkgbuild_text = re.sub(r"^pkgver=.*$", f"pkgver={new_version}", pkgbuild_text, flags=re.MULTILINE)
+        pkgbuild_text = re.sub(r"^pkgrel=.*$", f"pkgrel={new_pkgrel}", pkgbuild_text, flags=re.MULTILINE)
+        pkgbuild_file.write_text(pkgbuild_text)
 
-    print(f"\nUpdated: {version_file}, {pkgbuild_file}, {srcinfo_file}\n")
+        srcinfo_file = app_dir / "aur" / ".SRCINFO"
+        result = subprocess.run(
+            ["makepkg", "--printsrcinfo"],
+            cwd=app_dir / "aur",
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            fail(f"makepkg --printsrcinfo failed:\n{result.stderr}")
+        srcinfo_file.write_text(result.stdout)
+        updated_files += [pkgbuild_file, srcinfo_file]
+
+    print(f"\nUpdated: {', '.join(str(f) for f in updated_files)}\n")
     print("Next steps:")
-    print(f"  git add {version_file} {pkgbuild_file} {srcinfo_file}")
+    print(f"  git add {' '.join(str(f) for f in updated_files)}")
     if args.pkgrel_only:
         print(f'  git commit -m "{args.app}: packaging fix (pkgrel {new_pkgrel})"')
         print("  git push   # no new tag needed - same upstream version")
@@ -114,7 +121,8 @@ def main() -> None:
         print(f'  git commit -m "{args.app}: bump to {new_version}"')
         print(f"  git tag {args.app}-v{new_version}")
         print("  git push && git push --tags   # pushing the tag triggers the release build")
-    print("  then update the AUR git repo clone (PKGBUILD + .SRCINFO) and push - see AUR.md")
+    if has_aur:
+        print("  then update the AUR git repo clone (PKGBUILD + .SRCINFO) and push - see AUR.md")
 
 
 if __name__ == "__main__":

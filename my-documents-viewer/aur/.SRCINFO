@@ -1,6 +1,6 @@
-pkgbase = my-documents-viewer-git
+pkgbase = my-documents-viewer
 	pkgdesc = Native wxWidgets desktop viewer for indexing local text files and searching/chatting with them via full-text, vector or hybrid search
-	pkgver = r1.0000000
+	pkgver = 1.0.0
 	pkgrel = 1
 	url = https://github.com/cancerberoSgx/desktop-app-samples
 	arch = any
@@ -10,11 +10,10 @@ pkgbase = my-documents-viewer-git
 	depends = python-wxpython
 	depends = python-fastembed
 	depends = python-sqlite-vec
-	provides = my-documents-viewer
 	provides = mydocumentsviewer
-	conflicts = my-documents-viewer
+	conflicts = my-documents-viewer-git
 	conflicts = mydocumentsviewer
-	source = my-documents-viewer-git::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main
+	source = my-documents-viewer::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-documents-viewer-v1.0.0
 	sha256sums = SKIP
 
-pkgname = my-documents-viewer-git
+pkgname = my-documents-viewer

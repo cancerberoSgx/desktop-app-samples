@@ -6,6 +6,7 @@ from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
 from app.disk_scan_repository import DiskScanRepository
 from app.explorer_page import ExplorerPage
+from app.version import get_version
 
 
 class MainFrame(wx.Frame):
@@ -72,7 +73,7 @@ class MainFrame(wx.Frame):
 
     def _on_about(self, event: wx.CommandEvent) -> None:
         wx.MessageBox(
-            "My Disk Viewer\n\n"
+            f"My Disk Viewer {get_version()}\n\n"
             "Visualize disk usage in a folder recursively - which subfolders "
             "and file types are using the most space - so you can find what's "
             "actually worth deleting. Read-only: it never deletes anything "

@@ -16,6 +16,7 @@ from app.repositories import (
     VolumeRepository,
 )
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
+from app.version import get_version
 from app.volumes_page import VolumesPage
 
 
@@ -116,7 +117,7 @@ class MainFrame(wx.Frame):
 
     def _on_about(self, event: wx.CommandEvent) -> None:
         wx.MessageBox(
-            "My Docker Viewer\n\n"
+            f"My Docker Viewer {get_version()}\n\n"
             "Admin your local Docker containers: list, filter, inspect "
             "resource usage, stop, and remove - plus a read-only Containers "
             "Disk screen to see real per-container disk usage, and Images/"

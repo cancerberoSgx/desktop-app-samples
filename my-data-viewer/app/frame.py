@@ -12,6 +12,7 @@ from app.db.migrator import run_migrations
 from app.db.paths import migrations_dir
 from app.models import Datasource, Script
 from app.pages import AboutPage
+from app.version import get_version
 from app.profiles_page import ProfilesPage
 from app.repositories import DatasourceRepository, ProfileRepository, ScriptRepository, SettingsRepository
 from app.sidebar import Sidebar, SIDEBAR_ITEMS
@@ -436,7 +437,7 @@ class MainFrame(wx.Frame):
 
     def _on_about(self, event: wx.CommandEvent) -> None:
         wx.MessageBox(
-            "My Data Viewer\n\n"
+            f"My Data Viewer {get_version()}\n\n"
             "Explore databases and CSV files: create data sources, browse "
             "their tables/columns, and run SQL against them.",
             "About My Data Viewer",

@@ -1,15 +1,18 @@
 # Maintainer: Sebastián Gurin (cancerberoSgx) <sebastian@devaiq.com>
 
-# VCS (-git) package: builds my-documents-viewer straight from this monorepo's
-# main branch. There are no per-app release tags (yet), and Arch's own
-# package manager already guarantees python/wxWidgets are on the target
-# system, so there is nothing to bundle - unlike the PyInstaller builds in
+# Versioned package: builds my-documents-viewer from a tagged release
+# (my-documents-viewer-v<pkgver>), not the rolling main branch - every app in this
+# monorepo now uses this same versioned-package scheme (my-file-viewer is
+# the only app with no AUR package at all - see /AUR.md at the repo root
+# for why, and for the full local-test/publish workflow). Arch's own
+# package manager already
+# guarantees python/wxWidgets are on the target system, so there is
+# nothing to bundle - unlike the PyInstaller builds in
 # .github/workflows/my-documents-viewer-build.yml, which target non-Arch
-# Linux (and Windows/macOS) and so vendor a private copy of everything. See
-# /AUR.md at the repo root for the full local-test/publish workflow.
+# Linux (and Windows/macOS) and so vendor a private copy of everything.
 
-pkgname=my-documents-viewer-git
-pkgver=r106.d86727c
+pkgname=my-documents-viewer
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Native wxWidgets desktop viewer for indexing local text files and searching/chatting with them via full-text, vector or hybrid search"
 arch=('any')
@@ -17,20 +20,13 @@ url="https://github.com/cancerberoSgx/desktop-app-samples"
 license=('MIT')
 depends=('python' 'python-wxpython' 'python-fastembed' 'python-sqlite-vec')
 makedepends=('git')
-provides=('my-documents-viewer' 'mydocumentsviewer')
-conflicts=('my-documents-viewer' 'mydocumentsviewer')
-source=("$pkgname::git+https://github.com/cancerberoSgx/desktop-app-samples.git#branch=main")
+provides=('mydocumentsviewer')
+conflicts=('my-documents-viewer-git' 'mydocumentsviewer')
+source=("$pkgname::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-documents-viewer-v$pkgver")
 sha256sums=('SKIP')
 
 _pkgsubdir=my-documents-viewer
 _bin=mydocumentsviewer
-
-pkgver() {
-  cd "$pkgname"
-  # Whole-repo commit count (not just this app's subtree) so the version
-  # always increases even across history that touches other apps only.
-  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
-}
 
 package() {
   local _src="$srcdir/$pkgname/$_pkgsubdir"
@@ -41,10 +37,13 @@ package() {
   # package (see app/frame.py etc.) - installing them all as global `app`
   # modules would collide. The launcher script below points PYTHONPATH at
   # this private directory instead, same effect as a venv without the venv.
-  # app/db/paths.py locates app/db/migrations relative to this directory's
-  # own layout, so main.py and app/ must stay siblings exactly like this.
+  # app/db/paths.py locates app/db/migrations (and, via app/version.py, the
+  # VERSION file - what Help > About reads) relative to this directory's
+  # own layout, so main.py, app/ and VERSION must stay siblings exactly
+  # like this.
   install -d "$_appdir"
   cp "$_src/main.py" "$_appdir/main.py"
+  cp "$_src/VERSION" "$_appdir/VERSION"
   cp -r "$_src/app" "$_appdir/app"
   find "$_appdir" -name '__pycache__' -type d -exec rm -rf {} +
 

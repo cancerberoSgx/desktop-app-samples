@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files
 # sqlite-vec ships its loadable extension (vec0.so/.dylib/.dll) as package
 # data rather than importable Python, so it needs collecting explicitly -
 # PyInstaller's default module scan won't find it on its own.
-datas = [('app/db/migrations', 'app/db/migrations')]
+datas = [('app/db/migrations', 'app/db/migrations'), ('VERSION', '.')]
 datas += collect_data_files('sqlite_vec')
 
 a = Analysis(

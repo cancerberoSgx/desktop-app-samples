@@ -1032,6 +1032,26 @@ migration file is automatically picked up by `myfileviewer.spec`'s
 `datas=[('app/db/migrations', 'app/db/migrations')]` glob-style entry, no spec
 change needed unless the directory itself moves.
 
+### Version (`app/version.py`, `VERSION`)
+
+`app/version.py::get_version()` reads the plain-text `VERSION` file at the
+project root (via `app/db/paths.py::project_root()` - the same
+frozen-vs-source resolution the migrations dir uses) and is what the
+Help > About message box displays (this app has no sidebar About page - see
+"No wx.Simplebook / page-switching sidebar" above). It is **not** derived
+from git (`git describe` etc.) - a PyInstaller build has no `.git` directory
+to read that from at runtime, so `VERSION` is baked in at build time
+instead. Anywhere this file needs to be read from, it must also be
+**bundled alongside `main.py`/`app/`**: `myfileviewer.spec`'s `datas=[...]`
+includes `('VERSION', '.')`. Unlike `my-redis-viewer`, this app has no AUR
+package, so there's no PKGBUILD to keep in sync.
+
+See the root `README.md`'s "Versioning" section for how `VERSION` gets
+bumped (`scripts/bump-app-version.py`) and how it flows into release tags
+and GitHub Actions artifact filenames - this app isn't AUR-packaged, so only
+that VERSION/scripts/GitHub-Actions side of the doc applies here, not the
+AUR side.
+
 ### PyInstaller packaging gotchas (see my-redis-viewer's/my-data-viewer's git history for the original incident)
 
 - **Always build with this project's own venv's pyinstaller**

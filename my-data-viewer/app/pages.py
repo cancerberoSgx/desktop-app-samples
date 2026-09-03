@@ -1,5 +1,7 @@
 import wx
 
+from app.version import get_version
+
 
 class AboutPage(wx.Panel):
     def __init__(self, parent: wx.Window) -> None:
@@ -11,6 +13,9 @@ class AboutPage(wx.Panel):
         font.SetPointSize(font.GetPointSize() + 8)
         font.MakeBold()
         title.SetFont(font)
+
+        version = wx.StaticText(self, label=f"Version {get_version()}")
+        version.SetForegroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT))
 
         body = wx.StaticText(
             self,
@@ -30,6 +35,7 @@ class AboutPage(wx.Panel):
             ),
         )
 
-        sizer.Add(title, 0, wx.ALL, 24)
+        sizer.Add(title, 0, wx.LEFT | wx.RIGHT | wx.TOP, 24)
+        sizer.Add(version, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 24)
         sizer.Add(body, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 24)
         self.SetSizer(sizer)
