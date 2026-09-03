@@ -45,3 +45,36 @@ For every app:
 - The AUR side of this - the versioned-PKGBUILD scheme, publishing a
   package, and updating an already-published one - is documented in full
   in `AUR.md`.
+- **`docs/<app>/index.html`'s version label** (the four apps that have a
+  homepage - my-data-viewer, my-disk-viewer, my-docker-viewer,
+  my-redis-viewer) shows the current version next to the download buttons,
+  e.g. `v1.0.1`, as a `<span id="version">` near the
+  `downloads-note` div. The download buttons themselves keep pointing at
+  the stable `<binary>-latest` release regardless - that release's own
+  asset filenames are already unversioned/permanent (see above), so
+  nothing about the *links* needs to track the version; the label is
+  purely a human-readable "this is what you'd get" indicator, and it would
+  otherwise have no way to stay accurate since the docs are static HTML
+  with no build step of their own.
+
+  That label is kept in sync by CI, not by hand: each app's
+  `.github/workflows/<app>-build.yml` `release` job ends with a step that
+  only runs when the job was triggered by a real `<app>-v*` tag push
+  (never for a `workflow_dispatch` test run), which checks out `main`
+  separately from the tag being built, `sed`-replaces the `<span
+  id="version">` text with the version being released, and - if that
+  changed anything - commits and pushes it straight back to `main` as
+  `github-actions[bot]`. GitHub Pages here serves directly from
+  `main`/`docs` (no separate Pages deploy workflow), so that push alone is
+  enough to update the live site. This can't loop: the workflow only
+  triggers on tag pushes, never on pushes to `main`, so its own commit-back
+  never re-triggers it.
+
+  (A client-side alternative - fetching version info from GitHub's
+  Releases API in the browser instead - was considered and rejected: the
+  `-latest` release's own tag/assets carry no version info by design, so
+  the browser would have to fetch the whole releases list, filter for
+  `<app>-v*` tags, and pick the highest semver itself, adding runtime
+  complexity, an API round-trip before the label appears, and a dependency
+  on GitHub's unauthenticated rate limit - for no benefit over CI just
+  writing the value it already knows.)

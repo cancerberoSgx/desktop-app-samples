@@ -39,4 +39,10 @@ also I need some way of knowing the version of  the executable I'm running, like
 p2
 seems to be working fine, so now perform the same you did for my-redis-viewer for the rest of the projects (my-data-viewer) (my-disk-viewer) (my-docker-viewer) (my-documents-viewer) (my-file-viewer)
 
+p3
+how can we support versioning in docs/ so links to download points to the current versions ? 
+
+# docs
+in /docs, remove any mention to wxPython - just mention "lightweight"
+only at the bottom 
 ---

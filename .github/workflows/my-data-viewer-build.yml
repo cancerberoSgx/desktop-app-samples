@@ -191,3 +191,31 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "My Data Viewer (latest build)" \
             --notes "Always the most recent successful build. For version history, see releases prefixed mydataviewer-build.* and vX.Y.Z tags."
+
+      # Keeps docs/my-data-viewer/index.html's visible "vX.Y.Z" label in sync with the
+      # actual release (its download links point at the stable "*-latest"
+      # release, so they don't need this - this is purely the human-readable
+      # label). Only runs for a real tag push, never for a workflow_dispatch
+      # dev run, and checks out `main` separately since the job's default
+      # checkout so far has been the tag being released.
+      - name: Checkout main (to stamp the docs/ version label)
+        if: github.ref_type == 'tag'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Stamp version label into docs/my-data-viewer/index.html
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          sed -i "s|<span id=\"version\">v[^<]*</span>|<span id=\"version\">v${VERSION}</span>|" docs/my-data-viewer/index.html
+          if git diff --quiet -- docs/my-data-viewer/index.html; then
+            echo "docs/my-data-viewer/index.html already at v${VERSION}, nothing to commit"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/my-data-viewer/index.html
+            git commit -m "docs(my-data-viewer): bump version label to v${VERSION}"
+            git push origin main
+          fi
