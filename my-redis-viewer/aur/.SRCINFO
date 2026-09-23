@@ -1,6 +1,6 @@
 pkgbase = my-redis-viewer
 	pkgdesc = Native wxWidgets desktop app for managing and testing Redis connection profiles
-	pkgver = 1.0.0
+	pkgver = 1.0.1
 	pkgrel = 1
 	url = https://github.com/cancerberoSgx/desktop-app-samples
 	arch = any
@@ -12,7 +12,7 @@ pkgbase = my-redis-viewer
 	provides = myredisviewer
 	conflicts = my-redis-viewer-git
 	conflicts = myredisviewer
-	source = my-redis-viewer::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-redis-viewer-v1.0.0
+	source = my-redis-viewer::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-redis-viewer-v1.0.1
 	sha256sums = SKIP
 
 pkgname = my-redis-viewer
