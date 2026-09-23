@@ -1,6 +1,6 @@
 pkgbase = my-docker-viewer
 	pkgdesc = Native wxWidgets desktop viewer for Docker containers, images, volumes and networks (shells out to the docker CLI - no Docker SDK/Engine API dependency)
-	pkgver = 1.0.0
+	pkgver = 1.0.1
 	pkgrel = 1
 	url = https://github.com/cancerberoSgx/desktop-app-samples
 	arch = any
@@ -12,7 +12,7 @@ pkgbase = my-docker-viewer
 	provides = mydockerviewer
 	conflicts = my-docker-viewer-git
 	conflicts = mydockerviewer
-	source = my-docker-viewer::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-docker-viewer-v1.0.0
+	source = my-docker-viewer::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-docker-viewer-v1.0.1
 	sha256sums = SKIP
 
 pkgname = my-docker-viewer
