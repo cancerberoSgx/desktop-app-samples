@@ -42,7 +42,16 @@ seems to be working fine, so now perform the same you did for my-redis-viewer fo
 p3
 how can we support versioning in docs/ so links to download points to the current versions ? 
 
+
+---
+
+
+# FUTURE
+
+# other linux packages 
+
 # docs
 in /docs, remove any mention to wxPython - just mention "lightweight"
 only at the bottom 
----
+
+

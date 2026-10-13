@@ -276,3 +276,7 @@ Can you put the controls in two rows, first the action buttons (refresh, start, 
 Also remove the "Containers" title on top to save vertical space
 
 Perform the same in Volumes, images and Networks list (actions on top, filters below)
+
+
+# container multi select
+like in images and volumes listing, "containers" listing must support multiple select with control and shift keys. when multiple selection, start, stop, remove actions can be applied when the selection allows it. you start all even if there's one selected that's already started. you stop all even if one of the selected is stopped. etc

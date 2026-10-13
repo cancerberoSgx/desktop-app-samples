@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import wx
 
@@ -6,7 +6,7 @@ from .async_task import AsyncTaskRunner, run_background
 from .container_details_dialog import show_container_details
 from .formatting import size_sort_key
 from .models import Container
-from .repositories import ContainerRepository, DiskUsageRepository
+from .repositories import ContainerRepository, DiskUsageRepository, DockerCommandError, DockerNotAvailableError
 
 STATUS_CHOICES = ["All", "running", "exited", "paused", "restarting", "created", "removing", "dead"]
 AUTO_REFRESH_INTERVAL_MS = 5000
@@ -55,7 +55,7 @@ _SORT_KEYS = [
 class ContainersPage(wx.Panel):
     """List every docker container (running and stopped), merged with live
     CPU/memory usage from `docker stats`; filter by name/image/status, and
-    start, stop, or remove the selected one. Auto-refresh is opt-in via a checkbox
+    start, stop, or remove the selection. Auto-refresh is opt-in via a checkbox
     (off by default - the user must click Refresh otherwise) since CPU/memory
     are point-in-time samples that go stale after every load; when enabled it
     reloads on a timer (skipped while a request is already in flight).
@@ -74,7 +74,15 @@ class ContainersPage(wx.Panel):
     and real disk usage in one popup. That dialog is its own reusable
     component precisely so other screens can open the same view later from
     just a container id/name, without needing a loaded `Container` row of
-    their own."""
+    their own.
+
+    The list is multi-select (`wx.LC_REPORT` without `wx.LC_SINGLE_SEL`),
+    same as Images/Volumes - ctrl-click/shift-click are wx.ListCtrl's own
+    native selection. Start/Stop/Remove (Delete key too) act on the whole
+    selection: Start is enabled if any selected container isn't running and
+    starts just those, Stop likewise for the running ones, and Remove takes
+    every selected one (force-removing the running ones). Info needs
+    exactly one row selected."""
 
     def __init__(
         self, parent: wx.Window, repository: ContainerRepository, disk_usage_repository: DiskUsageRepository
@@ -150,7 +158,8 @@ class ContainersPage(wx.Panel):
 
         outer.Add(filters_bar, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, 12)
 
-        self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.BORDER_SUNKEN)
+        # No wx.LC_SINGLE_SEL - multi-select (see the class docstring).
+        self._list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
         self._column_labels = [label for label, _width in _COLUMNS]
         for index, (label, width) in enumerate(_COLUMNS):
             self._list.InsertColumn(index, label, width=width)
@@ -182,6 +191,9 @@ class ContainersPage(wx.Panel):
         # straight to its details, same shortcut a file manager gives you
         # for "open" - Info is still there on the toolbar for a single click.
         self._list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_info)
+        # Delete key as a shortcut for Remove, covering the whole selection
+        # same as clicking the button would.
+        self._list.Bind(wx.EVT_LIST_KEY_DOWN, self._on_list_key_down)
 
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
@@ -324,8 +336,9 @@ class ContainersPage(wx.Panel):
         return result
 
     def _populate_list(self) -> None:
-        selected = self._selected_container()
-        selected_id = selected.id if selected else None
+        # Preserve the whole selection, not just one row - a resort/filter/
+        # refresh mid multi-select shouldn't collapse it down to one item.
+        selected_ids = {c.id for c in self._selected_containers()}
 
         self._visible = self._filtered_containers()
         self._sort_visible()
@@ -341,7 +354,7 @@ class ContainersPage(wx.Panel):
             self._list.SetItem(row, 7, container.size or "-")
             self._list.SetItem(row, 8, container.ports)
             self._list.SetItem(row, 9, container.id)
-            if selected_id and container.id == selected_id:
+            if container.id in selected_ids:
                 self._list.SetItemState(row, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
 
         self._update_button_states(None)
@@ -369,17 +382,33 @@ class ContainersPage(wx.Panel):
             self._list.SetColumn(index, column_info)
 
     def _selected_container(self) -> Optional[Container]:
+        """The single selected container - for Info, which only makes sense
+        against exactly one row. Returns `None` for zero *or* more than one
+        selected, unlike `_selected_containers()` below."""
+        containers = self._selected_containers()
+        return containers[0] if len(containers) == 1 else None
+
+    def _selected_containers(self) -> List[Container]:
+        """Every currently selected container, in list order - this is a
+        multi-select list (see the class docstring), so Start/Stop/Remove
+        act on this, not `_selected_container()`."""
+        containers = []
         index = self._list.GetFirstSelected()
-        if index == -1 or index >= len(self._visible):
-            return None
-        return self._visible[index]
+        while index != -1:
+            if index < len(self._visible):
+                containers.append(self._visible[index])
+            index = self._list.GetNextSelected(index)
+        return containers
 
     def _update_button_states(self, event: Optional[wx.ListEvent]) -> None:
-        container = self._selected_container()
-        self._info_btn.Enable(container is not None)
-        self._start_btn.Enable(container is not None and not container.is_running)
-        self._stop_btn.Enable(container is not None and container.is_running)
-        self._remove_btn.Enable(container is not None)
+        containers = self._selected_containers()
+        # Start/Stop are enabled as long as *some* selected container can
+        # take the action - a mixed selection acts on the ones it applies
+        # to and leaves the rest alone (see _on_start/_on_stop).
+        self._info_btn.Enable(len(containers) == 1)
+        self._start_btn.Enable(any(not c.is_running for c in containers))
+        self._stop_btn.Enable(any(c.is_running for c in containers))
+        self._remove_btn.Enable(bool(containers))
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -398,124 +427,179 @@ class ContainersPage(wx.Panel):
     def _on_refresh(self, event: wx.CommandEvent) -> None:
         self.reload()
 
-    def _apply_started(self, container_id: str) -> None:
+    def _apply_started(self, container_ids: List[str]) -> None:
         """Mirrors `_apply_stopped`: reflect a successful start instantly
         rather than waiting on a full `docker ps`/`docker stats` round trip.
         cpu/mem are left `None` (not immediately re-fetched) since a
         container that just started has no `docker stats` sample yet
         either way - the next manual or auto-refresh picks those up along
-        with docker's exact `Status` text ("Up 1 second", ...)."""
+        with docker's exact `Status` text ("Up 1 second", ...). Takes a
+        list so a multi-select start renders as one batch."""
+        started = set(container_ids)
         for container in self._containers:
-            if container.id == container_id:
+            if container.id in started:
                 container.state = "running"
                 container.status = "Up"
-                break
         self._populate_list()
 
-    def _apply_stopped(self, container_id: str) -> None:
+    def _apply_stopped(self, container_ids: List[str]) -> None:
         """Reflects a successful stop instantly, without waiting on a full
         `docker ps`/`docker stats` round trip: mutate the already-loaded
-        container in place and re-render from it. A later manual or
+        containers in place and re-render from them. A later manual or
         auto-refresh reconciles this with docker's actual reporting (exact
         status text, final size, ...) - this is just an optimistic, "we know
         it stopped" update."""
+        stopped = set(container_ids)
         for container in self._containers:
-            if container.id == container_id:
+            if container.id in stopped:
                 container.state = "exited"
                 container.status = "Stopped"
                 container.cpu_percent = None
                 container.mem_usage = None
                 container.mem_percent = None
-                break
         self._populate_list()
 
-    def _apply_removed(self, container_id: str) -> None:
-        """Same idea as `_apply_stopped` - drop the container from the
+    def _apply_removed(self, container_ids: List[str]) -> None:
+        """Same idea as `_apply_stopped` - drop the containers from the
         already-loaded list right away instead of re-fetching."""
-        self._containers = [c for c in self._containers if c.id != container_id]
+        removed = set(container_ids)
+        self._containers = [c for c in self._containers if c.id not in removed]
         self._populate_list()
 
     def _on_info(self, event: wx.Event) -> None:
         # Bound to both the Info button (wx.CommandEvent) and double-click/
-        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent) -
-        # neither branch below needs anything event-type-specific.
-        container = self._selected_container()
+        # Enter on a row (wx.EVT_LIST_ITEM_ACTIVATED, a wx.ListEvent). The
+        # activation event names the exact row that was double-clicked/
+        # entered, which - unlike _selected_container() - still resolves to
+        # one container even if a multi-select happens to include others.
+        if isinstance(event, wx.ListEvent):
+            index = event.GetIndex()
+            container = self._visible[index] if 0 <= index < len(self._visible) else None
+        else:
+            container = self._selected_container()
         if container is None:
             return
         show_container_details(
             self, container.id, self._repository, self._disk_usage_repository, initial=container
         )
 
+    def _on_list_key_down(self, event: wx.ListEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_DELETE:
+            self._on_remove(event)
+        else:
+            event.Skip()
+
+    def _run_batch(
+        self,
+        containers: List[Container],
+        action: Callable[[Container], None],
+        verb: str,
+        on_applied: Callable[[List[str]], None],
+    ) -> None:
+        """Run `action` against every container in `containers` as one
+        `AsyncTaskRunner` task - one docker call per container, continuing
+        past an individual failure rather than aborting the whole batch,
+        same posture as VolumesPage's multi-select remove. Successes are
+        applied optimistically (`on_applied`) in one re-render; failures
+        are reported together in one message box afterwards."""
+
+        def work() -> List[Tuple[Container, Optional[str]]]:
+            # DockerNotAvailableError is caught per-item too, so a missing
+            # `docker` binary is reported the same way for every container
+            # instead of only aborting on the first.
+            results = []
+            for container in containers:
+                try:
+                    action(container)
+                    results.append((container, None))
+                except (DockerCommandError, DockerNotAvailableError) as exc:
+                    results.append((container, str(exc)))
+            return results
+
+        def on_success(results: List[Tuple[Container, Optional[str]]]) -> None:
+            succeeded = [c.id for c, error in results if error is None]
+            failed = [(c, error) for c, error in results if error is not None]
+            if succeeded:
+                on_applied(succeeded)
+            if failed:
+                if len(results) == 1:
+                    message = f'Could not {verb} "{failed[0][0].names}":\n\n{failed[0][1]}'
+                else:
+                    details = "\n".join(f'"{c.names}": {error}' for c, error in failed)
+                    message = f"Could not {verb} {len(failed)} of {len(results)} container(s):\n\n{details}"
+                wx.MessageBox(message, f"{verb.capitalize()} failed", wx.OK | wx.ICON_ERROR, self)
+
+        def on_error(exc: Exception) -> None:
+            # Only reachable for a truly unexpected failure - work() itself
+            # catches both known docker exception types per-item above.
+            wx.MessageBox(
+                f"Could not {verb} containers:\n\n{exc}", f"{verb.capitalize()} failed", wx.OK | wx.ICON_ERROR, self
+            )
+
+        self._async.run(
+            work=work,
+            on_success=on_success,
+            on_error=on_error,
+            # AsyncTaskRunner re-enables everything in `disable` after
+            # on_done, regardless of the new selection's state - recompute
+            # button states once it has, rather than leaving e.g. Start
+            # enabled on a selection that's now entirely running.
+            on_done=lambda: wx.CallAfter(self._update_button_states, None),
+            disable=[self._start_btn, self._stop_btn, self._remove_btn],
+        )
+
     def _on_start(self, event: wx.CommandEvent) -> None:
-        container = self._selected_container()
         # reload() no longer runs on the shared AsyncTaskRunner (see its
         # docstring), so it can't rely on that runner's busy flag to keep
         # this from racing self._containers - check the reload counter
         # directly instead, same "just don't" as the busy check used to be.
-        if container is None or self._reload_pending:
+        if self._reload_pending:
             return
-
-        def on_error(exc: Exception) -> None:
-            wx.MessageBox(
-                f'Could not start "{container.names}":\n\n{exc}',
-                "Start failed",
-                wx.OK | wx.ICON_ERROR,
-                self,
-            )
-
-        self._async.run(
-            work=lambda: self._repository.start(container.id),
-            on_success=lambda _result: self._apply_started(container.id),
-            on_error=on_error,
-            disable=[self._start_btn, self._stop_btn, self._remove_btn],
-        )
+        # A mixed selection starts only the ones not already running -
+        # the already-running ones are simply left alone.
+        targets = [c for c in self._selected_containers() if not c.is_running]
+        if not targets:
+            return
+        self._run_batch(targets, lambda c: self._repository.start(c.id), "start", self._apply_started)
 
     def _on_stop(self, event: wx.CommandEvent) -> None:
-        container = self._selected_container()
-        if container is None or self._reload_pending:
+        if self._reload_pending:
+            return
+        # Mirror of _on_start: only the running ones in the selection.
+        targets = [c for c in self._selected_containers() if c.is_running]
+        if not targets:
+            return
+        self._run_batch(targets, lambda c: self._repository.stop(c.id), "stop", self._apply_stopped)
+
+    def _on_remove(self, event: wx.Event) -> None:
+        containers = self._selected_containers()
+        if not containers or self._reload_pending or self._async.is_busy():
             return
 
-        def on_error(exc: Exception) -> None:
-            wx.MessageBox(
-                f'Could not stop "{container.names}":\n\n{exc}',
-                "Stop failed",
-                wx.OK | wx.ICON_ERROR,
-                self,
+        running = [c for c in containers if c.is_running]
+        if len(containers) == 1:
+            container = containers[0]
+            prompt = (
+                f'Container "{container.names}" is currently running. Force remove it?'
+                if running
+                else f'Remove container "{container.names}"?'
             )
-
-        self._async.run(
-            work=lambda: self._repository.stop(container.id),
-            on_success=lambda _result: self._apply_stopped(container.id),
-            on_error=on_error,
-            disable=[self._stop_btn, self._remove_btn],
-        )
-
-    def _on_remove(self, event: wx.CommandEvent) -> None:
-        container = self._selected_container()
-        if container is None or self._reload_pending:
-            return
-
-        force = container.is_running
-        prompt = (
-            f'Container "{container.names}" is currently running. Force remove it?'
-            if force
-            else f'Remove container "{container.names}"?'
-        )
+        else:
+            prompt = f"Remove {len(containers)} containers?"
+            if running:
+                prompt += (
+                    f"\n\n{len(running)} of them are currently running and will be force removed: "
+                    f'{", ".join(c.names for c in running)}.'
+                )
         confirm = wx.MessageBox(prompt, "Confirm remove", wx.YES_NO | wx.ICON_WARNING, self)
         if confirm != wx.YES:
             return
 
-        def on_error(exc: Exception) -> None:
-            wx.MessageBox(
-                f'Could not remove "{container.names}":\n\n{exc}',
-                "Remove failed",
-                wx.OK | wx.ICON_ERROR,
-                self,
-            )
-
-        self._async.run(
-            work=lambda: self._repository.remove(container.id, force=force),
-            on_success=lambda _result: self._apply_removed(container.id),
-            on_error=on_error,
-            disable=[self._stop_btn, self._remove_btn],
+        self._run_batch(
+            containers,
+            # Force only the running ones - same as the single-container
+            # behavior this replaced.
+            lambda c: self._repository.remove(c.id, force=c.is_running),
+            "remove",
+            self._apply_removed,
         )

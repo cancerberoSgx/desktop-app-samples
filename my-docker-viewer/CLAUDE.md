@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A wxPython desktop app for admin'ing local Docker containers: list every container
 (running and stopped) with its status, image, size, and live CPU/memory usage,
-filter the list by name/image/status, and stop or remove the selected one. A second,
+filter the list by name/image/status, and start, stop, or remove the selection
+(multi-select). A second,
 read-only screen (Containers Disk) shows real per-container disk usage - writable
 layer plus every volume/bind mount - to answer "what's actually eating my disk".
 Three more screens - Images, Volumes, Networks - each list one other docker
@@ -161,6 +162,24 @@ change is instantaneous. This is optimistic: it reflects what the user's
 `docker stop`/`docker rm` call is known to have just done, not a fresh read of
 docker's own state - the next manual refresh or auto-refresh tick reconciles
 it with docker's actual reporting (exact `Status` text, final size, etc.).
+
+### Containers list: multi-select
+
+The Containers list is multi-select (no `wx.LC_SINGLE_SEL`), same as Images/
+Volumes - ctrl/shift-click are wx.ListCtrl's native handling.
+`_selected_containers()` (plural) backs Start/Stop/Remove (and the Delete
+key); `_selected_container()` (singular, `None` unless exactly one row) backs
+Info. A mixed selection doesn't block an action: Start is enabled if *any*
+selected container isn't running and starts just those (already-running ones
+are left alone), Stop likewise for the running ones, and Remove takes the whole
+selection, force-removing only the running ones (one confirm for the batch).
+All three go through `_run_batch()`: one `AsyncTaskRunner` task, one docker
+call per container, continuing past an individual failure (same posture as
+`VolumesPage`'s multi-remove), applying successes in one re-render and
+reporting failures together. `_apply_started/_stopped/_removed` take a list of
+IDs for that reason. `_run_batch` recomputes button states via `on_done` +
+`wx.CallAfter`, because `AsyncTaskRunner` re-enables its `disable=[...]`
+widgets unconditionally after the task.
 
 ### Filtering
 
@@ -361,7 +380,7 @@ something actually creates/removes one).
   explanation naming the referencing containers *instead of* attempting a call
   that's guaranteed to fail - "explain before it fails" rather than
   round-tripping to docker's own less specific error.
-- **`VolumesPage`'s list is the one multi-select list in this app** -
+- **`VolumesPage`'s list is multi-select** (as are Images and Containers) -
   `wx.LC_REPORT` without `wx.LC_SINGLE_SEL`, so ctrl/shift-click and
   shift+Up/Down are wx.ListCtrl's own native selection handling, no custom
   code needed for that part. `_selected_volumes()` (plural, in list order)
