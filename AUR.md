@@ -1,14 +1,14 @@
 # AUR packaging
 
-Each of the five wxPython apps in this repo has an `aur/` directory with a
+Each of the six wxPython apps in this repo has an `aur/` directory with a
 PKGBUILD that installs it as a normal Arch Linux package - dynamically linked
 against the distro's own `python`/`python-wxpython`/etc, nothing bundled.
-All five are now **versioned packages**, sourced from a per-app release tag
+All six are now **versioned packages**, sourced from a per-app release tag
 rather than the rolling `main` branch (see "Per-app semver + versioned
 packages" below) - earlier revisions of these PKGBUILDs were `-git` (VCS)
 packages instead, back before any app had release tags; my-redis-viewer was
 the first to convert, and my-data-viewer/my-disk-viewer/my-docker-viewer/
-my-documents-viewer followed. Either way this is deliberately a different
+my-documents-viewer followed (my-ai-code-viewer was created versioned from the start). Either way this is deliberately a different
 distribution path from the PyInstaller builds in `.github/workflows/*.yml`:
 those target machines with no package manager guarantee (generic Linux,
 Windows, macOS) and so vendor a private copy of the interpreter and every
@@ -26,6 +26,7 @@ distributed via the PyInstaller builds only.
 | my-disk-viewer | `my-disk-viewer/aur/PKGBUILD` | `my-disk-viewer` | `mydiskviewer` | - |
 | my-docker-viewer | `my-docker-viewer/aur/PKGBUILD` | `my-docker-viewer` | `mydockerviewer` | optional `docker` (the CLI it shells out to) |
 | my-documents-viewer | `my-documents-viewer/aur/PKGBUILD` | `my-documents-viewer` | `mydocumentsviewer` | `python-fastembed`, `python-sqlite-vec` |
+| my-ai-code-viewer | `my-ai-code-viewer/aur/PKGBUILD` | `my-ai-code-viewer` | `myaicodeviewer` | - |
 | my-redis-viewer | `my-redis-viewer/aur/PKGBUILD` | `my-redis-viewer` | `myredisviewer` | `python-redis` |
 
 The `python-duckdb`, `python-sqlalchemy`, `python-psycopg2` and `python-redis`
@@ -79,10 +80,10 @@ A `workflow_dispatch` run (no tag) still works for ad hoc test builds - it
 falls back to the old `<binary>-build.<run number>` release naming instead
 of a semver one.
 
-## How install works (all five PKGBUILDs follow this same shape)
+## How install works (all six PKGBUILDs follow this same shape)
 
 Every app's top-level Python package is literally named `app` (see e.g.
-`my-docker-viewer/app/frame.py`). Installing five different `app` packages
+`my-docker-viewer/app/frame.py`). Installing six different `app` packages
 into Python's shared `site-packages` would collide, so `package()` instead
 vendors each app's `main.py` + `VERSION` + `app/` tree under its own private
 `/usr/lib/<binary>/` directory, and installs a thin launcher shell script

@@ -1,0 +1,17 @@
+pkgbase = my-ai-code-viewer
+	pkgdesc = Native wxWidgets desktop app for browsing Claude Code and OpenCode conversations
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://github.com/cancerberoSgx/desktop-app-samples
+	arch = any
+	license = MIT
+	makedepends = git
+	depends = python
+	depends = python-wxpython
+	provides = myaicodeviewer
+	conflicts = my-ai-code-viewer-git
+	conflicts = myaicodeviewer
+	source = my-ai-code-viewer::git+https://github.com/cancerberoSgx/desktop-app-samples.git#tag=my-ai-code-viewer-v1.0.0
+	sha256sums = SKIP
+
+pkgname = my-ai-code-viewer

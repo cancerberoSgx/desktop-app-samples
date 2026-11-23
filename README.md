@@ -4,7 +4,7 @@
 
 Each app in this monorepo is versioned independently, with its own semver
 counter and its own git tag namespace: `<app>-v<major>.<minor>.<patch>`
-(e.g. `my-redis-viewer-v1.0.1`). All six apps use this scheme; five of them
+(e.g. `my-redis-viewer-v1.0.1`). All seven apps use this scheme; six of them
 (everything but my-file-viewer) also have an AUR package that's versioned
 the same way - see `AUR.md` for the AUR-specific side of it.
 
@@ -18,7 +18,7 @@ For every app:
   `git describe`. Each app's `app/version.py::get_version()` reads it, and
   the Help > About menu item (plus a sidebar About page, for the apps that
   have one) displays it - `VERSION` is bundled alongside `main.py`/`app/`
-  in the PyInstaller spec's `datas`, and (for the five AUR-packaged apps)
+  in the PyInstaller spec's `datas`, and (for the six AUR-packaged apps)
   in the PKGBUILD's `package()` too, so it's there to read either way.
 - **`scripts/bump-app-version.py <app> ...`** bumps `VERSION` and, for an
   app that has an AUR package, the matching `pkgver=`/`pkgrel=` lines in
@@ -45,9 +45,9 @@ For every app:
 - The AUR side of this - the versioned-PKGBUILD scheme, publishing a
   package, and updating an already-published one - is documented in full
   in `AUR.md`.
-- **`docs/<app>/index.html`'s version label** (the four apps that have a
-  homepage - my-data-viewer, my-disk-viewer, my-docker-viewer,
-  my-redis-viewer) shows the current version next to the download buttons,
+- **`docs/<app>/index.html`'s version label** (the five apps that have a
+  homepage - my-ai-code-viewer, my-data-viewer, my-disk-viewer,
+  my-docker-viewer, my-redis-viewer) shows the current version next to the download buttons,
   e.g. `v1.0.1`, as a `<span id="version">` near the
   `downloads-note` div. The download buttons themselves keep pointing at
   the stable `<binary>-latest` release regardless - that release's own

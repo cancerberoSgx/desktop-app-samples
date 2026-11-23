@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>My AI Code Viewer</title>
+<meta name="description" content="A desktop app to browse every Claude Code and OpenCode project and conversation you've had, archived locally so nothing gets pruned." />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  body { --accent: #a855f7; }
+</style>
+</head>
+<body>
+
+<header class="topnav">
+  <div class="wrap">
+    <a class="brand" href="../index.html">Desktop Apps</a>
+    <nav>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-ai-code-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <div class="eyebrow">wxPython &middot; Linux / macOS / Windows</div>
+    <h1>My AI Code Viewer</h1>
+    <p class="tagline">
+      Every project and conversation you've had with Claude Code and
+      OpenCode, in one place: pick a folder, pick a conversation, read it.
+      Archived locally, so old sessions don't vanish when the CLI prunes them.
+    </p>
+
+    <div class="badges">
+      <span class="badge">wxPython</span>
+      <span class="badge">Claude Code</span>
+      <span class="badge">OpenCode</span>
+      <span class="badge">SQLite archive</span>
+      <span class="badge">Linux</span>
+      <span class="badge">macOS</span>
+      <span class="badge">Windows</span>
+    </div>
+
+    <!--
+      These point at the "myaicodeviewer-latest" rolling release, republished by
+      .github/workflows/my-ai-code-viewer-build.yml on every run (manual or tagged) - the
+      URLs are permanent and never need editing here, even as new versions
+      ship. The "vX.Y.Z" text below is stamped in by that same workflow's
+      release job whenever a my-ai-code-viewer-v* tag is pushed (see the root README.md's
+      "Versioning" section) - don't hand-edit it, it'll be overwritten by the
+      next release. For version history, see the repo's Releases page.
+    -->
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/myaicodeviewer-latest/myaicodeviewer-linux.zip">⬇ Download for Linux</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/myaicodeviewer-latest/myaicodeviewer-macos.zip">⬇ Download for macOS</a>
+      <a class="btn btn-primary" href="https://github.com/cancerberoSgx/desktop-app-samples/releases/download/myaicodeviewer-latest/myaicodeviewer-windows.zip">⬇ Download for Windows</a>
+    </div>
+    <div class="downloads-note">Prebuilt binaries via GitHub Releases &middot; unzip and run, no install &middot; <span id="version">v1.0.0</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="section-sub">Projects, their conversations, and a conversation open.</p>
+    <div class="gallery">
+
+      <!-- Replace with: <img src="media/hero.png" alt="Projects, conversations and a conversation open in My AI Code Viewer"> -->
+      <div class="shot wide">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Projects | Conversations | Conversation — main hero shot</div>
+          <div class="ph-file">media/hero.png</div>
+        </div>
+      </div>
+
+      <!-- Replace with: <img src="media/tools.png" alt="Tool calls expanded in a conversation"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Tool calls and results, collapsed to one line, click to expand</div>
+          <div class="ph-file">media/tools.png</div>
+        </div>
+        <div class="caption">Tool calls stay out of the way until you want them</div>
+      </div>
+
+      <!-- Replace with: <img src="media/preferences.png" alt="Preferences page"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Preferences — where each tool's data lives</div>
+          <div class="ph-file">media/preferences.png</div>
+        </div>
+        <div class="caption">Point it at any Claude Code / OpenCode data location</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Features</h2>
+    <div class="features">
+
+      <div class="feature">
+        <h3>Every project, every tool</h3>
+        <p>
+          Lists every folder you've run Claude Code or OpenCode in, with
+          conversation count and last activity. A folder used with both
+          tools shows up once, with both tools' conversations together.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Readable conversations</h3>
+        <p>
+          Your prompts and the assistant's replies as a chat; tool calls,
+          tool results and thinking collapsed to a one-line preview you can
+          click to expand. Subagent threads appear nested under the
+          conversation that spawned them.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Never loses history</h3>
+        <p>
+          Claude Code deletes transcripts after ~30 days by default. Every
+          conversation the app sees is archived into its own local SQLite
+          database, so it stays readable after the original is gone.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Per-conversation stats</h3>
+        <p>
+          Model, duration, prompt and tool-call counts, input/output/cache
+          tokens, cost, git branch and which tools were used, at the top of
+          every conversation and as sortable columns.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Jump back in</h3>
+        <p>
+          Copy a ready-to-paste <code>claude --resume</code> /
+          <code>opencode --session</code> command, open the project folder,
+          or open the raw transcript.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Live and incremental</h3>
+        <p>
+          Rescans in the background every minute, only re-reading
+          conversations that actually changed, so active sessions show up
+          without a restart.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p class="section-sub">Grab a binary above, or run it from source.</p>
+    <pre><code>git clone https://github.com/cancerberoSgx/desktop-app-samples.git
+cd desktop-app-samples/my-ai-code-viewer
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python3 main.py</code></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>Part of the <a href="../index.html">Desktop Apps</a> collection.</div>
+    <div class="footer-links">
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/tree/main/my-ai-code-viewer" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/cancerberoSgx/desktop-app-samples/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<div class="lightbox"><div class="lightbox-content"></div></div>
+<script src="../assets/site.js"></script>
+
+</body>
+</html>

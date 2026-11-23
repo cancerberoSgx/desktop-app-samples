@@ -45,6 +45,28 @@ how can we support versioning in docs/ so links to download points to the curren
 
 ---
 
+# code ai analyzer
+
+
+create a new project my-ai-code-viewer in folder ".my-ai-code-viewer" . Use ./my-redis-viewer project as a skeleton and design and copy all its features as sqlite db and migrations, preferences, .github/workflows/my-redis-viewer-build.yml . Dont' model profiles or datasources or anything else. 
+
+Application requirements:
+
+I want to have an application that displays all my claude-code and open-code projects and for each project analyze each conversations/threads I had.
+Let's start with claude-code but design generic to also support other cli tools such as open-code
+The app should display all folder names (projects) and if I click one display all the conversations. 
+If I click the conversation I should be able to access its content
+do you have any questions or UI design suggestions or blockers before start ? 
+
+answers:
+1. yes
+2. yes
+3. ok
+4. in some future I would like to have the ability to search for something in multiple projects
+5. will follow something you recommend here.
+6. ok nowhting else or now
+---
+
 
 # FUTURE
 

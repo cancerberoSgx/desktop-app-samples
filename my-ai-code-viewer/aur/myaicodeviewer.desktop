@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=My AI Code Viewer
+Comment=Browse Claude Code and OpenCode projects and conversations
+Exec=myaicodeviewer
+Terminal=false
+Categories=Utility;Development;
