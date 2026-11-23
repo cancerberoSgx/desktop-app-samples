@@ -4,6 +4,8 @@ wx.html is a small HTML 3.2-ish engine: no CSS, no JS, no wrapping inside
 <pre>. So: colours via table bgcolor/font color, collapsing via links
 (`toggle:<seq>`) that make ConversationView re-render, and prose rendered as
 escaped text with <br> so it wraps (only fenced code goes in <pre>).
+Assistant replies and thinking are rendered as full markdown when
+`render_markdown` is on (see markdown_html); user prompts stay plain text.
 """
 import html
 import json
@@ -11,6 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List, Set
 
+from app.markdown_html import markdown_available, markdown_to_wxhtml
 from app.formatting import format_cost, format_datetime, format_duration, format_tokens
 from app.models import Conversation, MessageBlock
 
@@ -74,6 +77,14 @@ def _prose_with_headings(text: str) -> str:
     return re.sub(r"(^|<br>)(#{1,6})&nbsp;?\s*([^<]*)", lambda m: f"{m.group(1)}<b>{m.group(3)}</b>", rendered)
 
 
+def _rich(text: str, pal: Palette, render_markdown: bool) -> str:
+    """Assistant/thinking text: full markdown when enabled (and the library is
+    installed), else the minimal fences+headings rendering."""
+    if render_markdown and markdown_available():
+        return markdown_to_wxhtml(text, pal.code_bg)
+    return _markdownish(text, pal)
+
+
 def _code(text: str, pal: Palette) -> str:
     return (f'<table width="100%" cellpadding="6" cellspacing="0"><tr><td bgcolor="{pal.code_bg}">'
             f"<pre>{_esc(text)}</pre></td></tr></table>")
@@ -130,7 +141,8 @@ def _header(conv: Conversation, project_path: str, provider_label: str, pal: Pal
 
 def render_conversation_html(conv: Conversation, blocks: Iterable[MessageBlock], *, project_path: str,
                              provider_label: str, expanded: Set[int], expand_tools: bool,
-                             expand_thinking: bool, pal: Palette = LIGHT) -> str:
+                             expand_thinking: bool, render_markdown: bool = True,
+                             pal: Palette = LIGHT) -> str:
     parts = [f'<html><body bgcolor="{pal.bg}" text="{pal.fg}" link="{pal.link}">',
              _header(conv, project_path, provider_label, pal)]
     last_role = None
@@ -150,7 +162,8 @@ def render_conversation_html(conv: Conversation, blocks: Iterable[MessageBlock],
 
         if b.kind == "text":
             bg = pal.user_bg if b.role == "user" else pal.assistant_bg
-            body = _prose(_clip_for_view(b.text)) if b.role == "user" else _markdownish(_clip_for_view(b.text), pal)
+            text = _clip_for_view(b.text)
+            body = _prose(text) if b.role == "user" else _rich(text, pal, render_markdown)
             parts.append(f'<table width="100%" cellpadding="8" cellspacing="0"><tr><td bgcolor="{bg}">'
                          f"{body}</td></tr></table>")
         elif b.kind == "error":
@@ -171,7 +184,7 @@ def render_conversation_html(conv: Conversation, blocks: Iterable[MessageBlock],
             content = ""
             if is_open:
                 content = ("<br>" + _code(_clip_for_view(b.text), pal)) if b.kind != "thinking" \
-                    else "<br>" + _prose(_clip_for_view(b.text))
+                    else "<br>" + _rich(_clip_for_view(b.text), pal, render_markdown)
             parts.append(f'<table width="100%" cellpadding="4" cellspacing="0"><tr><td bgcolor="{bg}">'
                          f"{head}{content}</td></tr></table>")
     if conv.message_count == 0:

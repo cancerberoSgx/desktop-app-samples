@@ -92,6 +92,14 @@ providers that share a path into one `ProjectGroup` for the UI.
   thinking are collapsed by default; the "Expand ..." checkboxes flip the
   default and a click flips one block. Large blocks are clipped for display
   (and at 200k chars when archived, `providers/_util.clip`).
+- `markdown_html.py` - the "Render markdown" toggle (setting `render_markdown`,
+  default on) renders assistant text + thinking via python-markdown; user
+  prompts stay plain. `_normalize` bends LLM-style markdown into what
+  python-markdown accepts (2/3-space nested lists, no blank line before
+  lists/tables, fences inside list items); output is rewritten for wx.html
+  (code -> bgcolor table, bordered tables, headings shifted down), raw HTML is
+  escaped and only http(s)/mailto links stay clickable. Off (or the library
+  missing) falls back to `_markdownish` (fences + headings only).
 - `preferences_page.py` - Claude projects dir + OpenCode DB path (stored in
   `settings`, defaults from each provider's `default_*()`).
 

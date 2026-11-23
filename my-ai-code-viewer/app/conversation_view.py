@@ -9,7 +9,8 @@ import wx.html
 from app.conversation_html import DARK, LIGHT, render_conversation_html
 from app.models import Conversation
 from app.providers import PROVIDER_LABELS
-from app.repositories import SHOW_THINKING_SETTING_KEY, SHOW_TOOLS_SETTING_KEY, IndexRepository, SettingsRepository
+from app.repositories import (RENDER_MARKDOWN_SETTING_KEY, SHOW_THINKING_SETTING_KEY, SHOW_TOOLS_SETTING_KEY,
+                              IndexRepository, SettingsRepository)
 
 RESUME_COMMANDS = {
     "claude-code": "claude --resume {id}",
@@ -46,11 +47,15 @@ class ConversationView(wx.Panel):
         self._expand_tools.SetValue(self._settings.get_bool(SHOW_TOOLS_SETTING_KEY))
         self._expand_thinking = wx.CheckBox(self, label="Expand thinking")
         self._expand_thinking.SetValue(self._settings.get_bool(SHOW_THINKING_SETTING_KEY))
+        self._render_markdown = wx.CheckBox(self, label="Render markdown")
+        self._render_markdown.SetValue(self._settings.get_bool(RENDER_MARKDOWN_SETTING_KEY, default=True))
+        self._render_markdown.SetToolTip("Render assistant replies and thinking as markdown "
+                                         "(off: plain text with code blocks)")
         self._copy_resume_btn = wx.Button(self, label="Copy resume cmd")
         self._copy_id_btn = wx.Button(self, label="Copy id")
         self._open_folder_btn = wx.Button(self, label="Open folder")
         self._open_source_btn = wx.Button(self, label="Open file")
-        for ctrl in (self._expand_tools, self._expand_thinking):
+        for ctrl in (self._expand_tools, self._expand_thinking, self._render_markdown):
             toolbar.Add(ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
         for btn in (self._copy_resume_btn, self._copy_id_btn, self._open_folder_btn, self._open_source_btn):
             toolbar.Add(btn, 0, wx.RIGHT | wx.BOTTOM, 4)
@@ -66,6 +71,7 @@ class ConversationView(wx.Panel):
 
         self._expand_tools.Bind(wx.EVT_CHECKBOX, self._on_toggle_defaults)
         self._expand_thinking.Bind(wx.EVT_CHECKBOX, self._on_toggle_defaults)
+        self._render_markdown.Bind(wx.EVT_CHECKBOX, self._on_toggle_markdown)
         self._copy_resume_btn.Bind(wx.EVT_BUTTON, self._on_copy_resume)
         self._copy_id_btn.Bind(wx.EVT_BUTTON, self._on_copy_id)
         self._open_folder_btn.Bind(wx.EVT_BUTTON, self._on_open_folder)
@@ -114,7 +120,8 @@ class ConversationView(wx.Panel):
             self._conversation, self._blocks, project_path=self._project_path,
             provider_label=PROVIDER_LABELS.get(self._conversation.provider, self._conversation.provider),
             expanded=self._expanded, expand_tools=self._expand_tools.GetValue(),
-            expand_thinking=self._expand_thinking.GetValue(), pal=self._palette(),
+            expand_thinking=self._expand_thinking.GetValue(),
+            render_markdown=self._render_markdown.GetValue(), pal=self._palette(),
         )
         self._html.Freeze()
         try:
@@ -143,6 +150,10 @@ class ConversationView(wx.Panel):
         self._settings.set_bool(SHOW_TOOLS_SETTING_KEY, self._expand_tools.GetValue())
         self._settings.set_bool(SHOW_THINKING_SETTING_KEY, self._expand_thinking.GetValue())
         self._expanded = set()
+        self._render(keep_scroll=True)
+
+    def _on_toggle_markdown(self, event: wx.CommandEvent) -> None:
+        self._settings.set_bool(RENDER_MARKDOWN_SETTING_KEY, self._render_markdown.GetValue())
         self._render(keep_scroll=True)
 
     def _copy(self, text: str) -> None:
