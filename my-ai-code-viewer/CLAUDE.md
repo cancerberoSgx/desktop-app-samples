@@ -82,10 +82,17 @@ providers that share a path into one `ProjectGroup` for the UI.
 - `frame.py` - composition root; sidebar (Projects / Preferences / About, order
   must match `SIDEBAR_ITEMS`), sync scheduling.
 - `projects_page.py` - splitters: projects `ListCtrl` | conversations
-  `TreeListCtrl` (subagents as children, numeric-aware sort comparator) |
-  `ConversationView`. Restores last project/conversation and sash positions
-  from settings; `refresh_after_sync()` keeps selection and only re-renders the
-  open conversation if it changed.
+  `TreeListCtrl` (subagents as children) | `ConversationView`. Restores last
+  project/conversation and sash positions from settings; `refresh_after_sync()`
+  keeps selection and only re-renders the open conversation if it changed.
+  Title filter + sorting live in wx-free `conversation_list.py` (`arrange`):
+  columns are *not* `COL_SORTABLE` because on wxGTK 3.2 a custom
+  `TreeListItemComparator` is never called - header clicks are caught on the
+  underlying DataViewCtrl and the tree is repopulated in order (arrow in the
+  header label). Esc unsplits the conversation view (list gets full width);
+  selecting/activating a row re-splits. `_hide_view` focuses the tree *before*
+  unselecting, under a `_hiding` guard: on GTK focusing the tree selects its
+  cursor row, which would immediately reopen the view.
 - `conversation_view.py` + `conversation_html.py` - rendering is a pure function
   producing HTML for `wx.html.HtmlWindow` (no CSS/JS: colours via table
   `bgcolor`; collapsing via `toggle:<seq>` links that re-render). Tool calls and

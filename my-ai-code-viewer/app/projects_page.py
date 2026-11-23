@@ -3,6 +3,8 @@ from typing import Callable, Dict, List, Optional
 import wx
 import wx.dataview as dv
 
+from app.conversation_list import (CONVERSATION_COLUMNS, LAST_ACTIVITY_COLUMN, arrange, default_ascending,
+                                   header_label, total_tokens)
 from app.conversation_view import ConversationView
 from app.formatting import format_cost, format_datetime, format_tokens
 from app.models import Conversation, ProjectGroup
@@ -18,56 +20,6 @@ from app.repositories import (
 PROJECT_SASH_SETTING_KEY = "projects_sash"
 CONVERSATION_SASH_SETTING_KEY = "conversations_sash"
 
-# (label, width, sortable numerically)
-CONVERSATION_COLUMNS = [
-    ("Conversation", 240, False),
-    ("Tool", 90, False),
-    ("Last activity", 125, False),
-    ("Prompts", 65, True),
-    ("Tool calls", 75, True),
-    ("Tokens", 70, True),
-    ("Cost", 65, True),
-]
-
-
-class _ConversationComparator(dv.TreeListItemComparator):
-    """Numeric-aware sorting for the conversations tree (the default
-    comparator sorts every column as text, so '9' > '10')."""
-
-    def __init__(self, page: "ProjectsPage") -> None:
-        super().__init__()
-        self._page = page
-
-    def Compare(self, treelist, first, second, column):  # noqa: N802 - wx override
-        a = self._page._conversation_for_item(first)
-        b = self._page._conversation_for_item(second)
-        if a is None or b is None:
-            return 0
-        key = _sort_key(a, column)
-        other = _sort_key(b, column)
-        return (key > other) - (key < other)
-
-
-def _sort_key(conv: Conversation, column: int):
-    if column == 0:
-        return conv.display_title.lower()
-    if column == 1:
-        return conv.provider
-    if column == 2:
-        return conv.updated_at or ""
-    if column == 3:
-        return conv.user_message_count
-    if column == 4:
-        return conv.tool_call_count
-    if column == 5:
-        return _total_tokens(conv)
-    return conv.cost_usd or 0.0
-
-
-def _total_tokens(conv: Conversation) -> int:
-    return conv.input_tokens + conv.output_tokens + conv.cache_read_tokens + conv.cache_write_tokens
-
-
 class ProjectsPage(wx.Panel):
     """Projects list | conversations tree | conversation view."""
 
@@ -82,24 +34,28 @@ class ProjectsPage(wx.Panel):
         self._groups: List[ProjectGroup] = []
         self._conversations: Dict[int, Conversation] = {}
         self._current_group: Optional[ProjectGroup] = None
+        self._sort_column = LAST_ACTIVITY_COLUMN
+        self._sort_ascending = False
+        self._hiding = False
 
         self._outer = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE | wx.SP_3DSASH)
         self._outer.SetMinimumPaneSize(160)
         left = self._build_projects_pane(self._outer)
         self._inner = wx.SplitterWindow(self._outer, style=wx.SP_LIVE_UPDATE | wx.SP_3DSASH)
         self._inner.SetMinimumPaneSize(200)
-        middle = self._build_conversations_pane(self._inner)
+        self._middle = self._build_conversations_pane(self._inner)
         self.view = ConversationView(self._inner, index_repository, settings_repository)
 
         self._outer.SplitVertically(left, self._inner, self._settings.get_int(PROJECT_SASH_SETTING_KEY) or 290)
-        self._inner.SplitVertically(middle, self.view,
-                                    self._settings.get_int(CONVERSATION_SASH_SETTING_KEY) or 440)
+        self._inner.SplitVertically(self._middle, self.view, self._conversation_sash())
         self._outer.Bind(wx.EVT_SPLITTER_SASH_POS_CHANGED, self._on_sash_changed)
         self._inner.Bind(wx.EVT_SPLITTER_SASH_POS_CHANGED, self._on_sash_changed)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(self._outer, 1, wx.EXPAND)
         self.SetSizer(sizer)
+        # Char hook sees keys before the focused child (tree, HTML view, ...).
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
 
     # ------------------------------------------------------------------ build
     def _build_projects_pane(self, parent: wx.Window) -> wx.Panel:
@@ -145,21 +101,31 @@ class ProjectsPage(wx.Panel):
         self._project_path = wx.StaticText(panel, label="", style=wx.ST_ELLIPSIZE_MIDDLE)
         self._project_path.SetForegroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT))
 
+        self._conv_filter = wx.SearchCtrl(panel)
+        self._conv_filter.SetDescriptiveText("Filter conversations by title")
+        self._conv_filter.ShowCancelButton(True)
+
         self._tree = dv.TreeListCtrl(panel, style=dv.TL_SINGLE)
+        # Not wx.COL_SORTABLE: we sort ourselves (see conversation_list) and
+        # handle header clicks on the underlying DataViewCtrl.
         for label, width, numeric in CONVERSATION_COLUMNS:
             align = wx.ALIGN_RIGHT if numeric else wx.ALIGN_LEFT
-            self._tree.AppendColumn(label, width, align, wx.COL_RESIZABLE | wx.COL_SORTABLE)
-        self._comparator = _ConversationComparator(self)
-        self._tree.SetItemComparator(self._comparator)
+            self._tree.AppendColumn(label, width, align, wx.COL_RESIZABLE)
+        self._update_headers()
         self._item_ids: Dict[int, dv.TreeListItem] = {}
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(self._project_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
         sizer.Add(self._project_path, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        sizer.Add(self._conv_filter, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         sizer.Add(self._tree, 1, wx.EXPAND)
         panel.SetSizer(sizer)
 
         self._tree.Bind(dv.EVT_TREELIST_SELECTION_CHANGED, self._on_conversation_selected)
+        self._tree.Bind(dv.EVT_TREELIST_ITEM_ACTIVATED, self._on_conversation_activated)
+        self._tree.GetDataView().Bind(dv.EVT_DATAVIEW_COLUMN_HEADER_CLICK, self._on_header_click)
+        self._conv_filter.Bind(wx.EVT_TEXT, lambda evt: self._populate_tree())
+        self._conv_filter.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, lambda evt: self._conv_filter.SetValue(""))
         return panel
 
     # ----------------------------------------------------------------- public
@@ -225,10 +191,6 @@ class ProjectsPage(wx.Panel):
                     self._current_group = g
                 return
 
-    def _conversation_for_item(self, item: dv.TreeListItem) -> Optional[Conversation]:
-        data = self._tree.GetItemData(item)
-        return self._conversations.get(data) if data is not None else None
-
     def _reload_conversations(self) -> None:
         g = self._current_group
         self._tree.DeleteAllItems()
@@ -243,26 +205,80 @@ class ProjectsPage(wx.Panel):
         self._project_path.SetToolTip(g.path)
         convs = self._index.list_conversations(g.project_ids)
         self._conversations = {c.id: c for c in convs}
-        by_external = {(c.provider, c.external_id): c for c in convs}
-        root = self._tree.GetRootItem()
-        # Parents first so subagent threads can be appended under them.
-        for c in sorted(convs, key=lambda c: c.parent_external_id is not None):
-            parent_conv = by_external.get((c.provider, c.parent_external_id)) if c.parent_external_id else None
-            parent_item = self._item_ids.get(parent_conv.id) if parent_conv else None
-            title = c.display_title
-            if c.parent_external_id:
-                title = f"↳ {title}"
-            if c.missing_from_source:
-                title = f"{title}  (archived)"
-            item = self._tree.AppendItem(parent_item or root, title)
-            self._tree.SetItemData(item, c.id)
-            self._tree.SetItemText(item, 1, PROVIDER_LABELS.get(c.provider, c.provider))
-            self._tree.SetItemText(item, 2, format_datetime(c.updated_at or c.started_at))
-            self._tree.SetItemText(item, 3, str(c.user_message_count))
-            self._tree.SetItemText(item, 4, str(c.tool_call_count))
-            self._tree.SetItemText(item, 5, format_tokens(_total_tokens(c)))
-            self._tree.SetItemText(item, 6, format_cost(c.cost_usd))
-            self._item_ids[c.id] = item
+        self._populate_tree()
+
+    def _populate_tree(self) -> None:
+        """(Re)fill the tree from self._conversations with the current
+        filter and sort, keeping the open conversation selected."""
+        query = self._conv_filter.GetValue()
+        rows = arrange(list(self._conversations.values()), query, self._sort_column, self._sort_ascending)
+        self._tree.Freeze()
+        try:
+            self._tree.DeleteAllItems()
+            self._item_ids = {}
+            root = self._tree.GetRootItem()
+            for top, kids in rows:
+                item = self._append_conversation(root, top)
+                for kid in kids:
+                    self._append_conversation(item, kid)
+                if kids and query.strip():
+                    self._tree.Expand(item)
+        finally:
+            self._tree.Thaw()
+        current = self.view.current_conversation_id()
+        if current is not None and current in self._item_ids:
+            self._select_item(current)
+        if query.strip():
+            shown = sum(1 + len(kids) for _, kids in rows)
+            self._on_status(f"{shown} of {len(self._conversations)} conversations match")
+
+    def _append_conversation(self, parent: dv.TreeListItem, c: Conversation) -> dv.TreeListItem:
+        title = c.display_title
+        if c.parent_external_id:
+            title = f"↳ {title}"
+        if c.missing_from_source:
+            title = f"{title}  (archived)"
+        item = self._tree.AppendItem(parent, title)
+        self._tree.SetItemData(item, c.id)
+        self._tree.SetItemText(item, 1, PROVIDER_LABELS.get(c.provider, c.provider))
+        self._tree.SetItemText(item, 2, format_datetime(c.updated_at or c.started_at))
+        self._tree.SetItemText(item, 3, str(c.user_message_count))
+        self._tree.SetItemText(item, 4, str(c.tool_call_count))
+        self._tree.SetItemText(item, 5, format_tokens(total_tokens(c)))
+        self._tree.SetItemText(item, 6, format_cost(c.cost_usd))
+        self._item_ids[c.id] = item
+        return item
+
+    def _update_headers(self) -> None:
+        dvc = self._tree.GetDataView()
+        for i in range(len(CONVERSATION_COLUMNS)):
+            dvc.GetColumn(i).SetTitle(header_label(i, self._sort_column, self._sort_ascending))
+
+    # ------------------------------------------------- conversation view pane
+    def _conversation_sash(self) -> int:
+        return self._settings.get_int(CONVERSATION_SASH_SETTING_KEY) or 440
+
+    def _view_shown(self) -> bool:
+        return self._inner.IsSplit()
+
+    def _hide_view(self) -> None:
+        """Esc: give the conversations list the full width."""
+        self._settings.set_int(CONVERSATION_SASH_SETTING_KEY, self._inner.GetSashPosition())
+        self._inner.Unsplit(self.view)
+        # Focus the tree, then unselect so clicking any row - including the
+        # one that was open - is a selection change and reopens the view.
+        # Order matters and selection events are ignored meanwhile: on GTK,
+        # focusing the tree selects its cursor row, which would reopen it.
+        self._hiding = True
+        try:
+            self._tree.SetFocus()
+            self._tree.UnselectAll()
+        finally:
+            wx.CallAfter(setattr, self, "_hiding", False)
+
+    def _ensure_view_shown(self) -> None:
+        if not self._view_shown():
+            self._inner.SplitVertically(self._middle, self.view, self._conversation_sash())
 
     def _select_item(self, conversation_id: int) -> None:
         item = self._item_ids.get(conversation_id)
@@ -282,6 +298,7 @@ class ProjectsPage(wx.Panel):
         conv = self._conversations.get(conversation_id)
         if conv is None:
             return
+        self._ensure_view_shown()
         self._settings.set_int(LAST_CONVERSATION_SETTING_KEY, conversation_id)
         self.view.show_conversation(conversation_id, self._current_group.path if self._current_group else "")
         self._on_status(f"{conv.display_title[:80]}")
@@ -306,13 +323,38 @@ class ProjectsPage(wx.Panel):
 
     def _on_conversation_selected(self, event: dv.TreeListEvent) -> None:
         item = self._tree.GetSelection()
-        if not item.IsOk():
+        if self._hiding or not item.IsOk():
             return
         conv_id = self._tree.GetItemData(item)
-        if conv_id is not None and conv_id != self.view.current_conversation_id():
+        if conv_id is not None and (conv_id != self.view.current_conversation_id() or not self._view_shown()):
             self._show(conv_id)
+
+    def _on_conversation_activated(self, event: dv.TreeListEvent) -> None:
+        """Enter / double-click: (re)open the conversation."""
+        conv_id = self._tree.GetItemData(event.GetItem())
+        if conv_id is not None:
+            self._show(conv_id)
+
+    def _on_header_click(self, event: dv.DataViewEvent) -> None:
+        column = event.GetColumn()
+        if not (0 <= column < len(CONVERSATION_COLUMNS)):
+            return
+        if column == self._sort_column:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_column = column
+            self._sort_ascending = default_ascending(column)
+        self._update_headers()
+        self._populate_tree()
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE and self._view_shown():
+            self._hide_view()
+        else:
+            event.Skip()
 
     def _on_sash_changed(self, event: wx.SplitterEvent) -> None:
         self._settings.set_int(PROJECT_SASH_SETTING_KEY, self._outer.GetSashPosition())
-        self._settings.set_int(CONVERSATION_SASH_SETTING_KEY, self._inner.GetSashPosition())
+        if self._view_shown():
+            self._settings.set_int(CONVERSATION_SASH_SETTING_KEY, self._inner.GetSashPosition())
         event.Skip()
