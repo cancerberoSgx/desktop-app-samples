@@ -1,15 +1,17 @@
 import shlex
 import subprocess
 import sys
-from typing import Callable, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 import wx
 import wx.html
 
-from app.conversation_html import DARK, LIGHT, render_conversation_html
+from app.conversation_html import DARK, LIGHT, outline_item_html, render_conversation_html
+from app.conversation_turns import Turn, split_turns
 from app.models import Conversation
 from app.providers import PROVIDER_LABELS
-from app.repositories import (RENDER_MARKDOWN_SETTING_KEY, SHOW_THINKING_SETTING_KEY, SHOW_TOOLS_SETTING_KEY,
+from app.repositories import (OUTLINE_SASH_SETTING_KEY, QA_ONLY_SETTING_KEY, RENDER_MARKDOWN_SETTING_KEY,
+                              SHOW_OUTLINE_SETTING_KEY, SHOW_THINKING_SETTING_KEY, SHOW_TOOLS_SETTING_KEY,
                               IndexRepository, SettingsRepository)
 
 RESUME_COMMANDS = {
@@ -41,6 +43,9 @@ class ConversationView(wx.Panel):
         self._project_path = ""
         self._blocks = []
         self._expanded: Set[int] = set()
+        self._turns: List[Turn] = []
+        # href ("turn:3" / "answer:3") -> y in page pixels; None = stale.
+        self._positions: Optional[Dict[str, int]] = None
 
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
         self._expand_tools = wx.CheckBox(self, label="Expand tool calls")
@@ -51,23 +56,51 @@ class ConversationView(wx.Panel):
         self._render_markdown.SetValue(self._settings.get_bool(RENDER_MARKDOWN_SETTING_KEY, default=True))
         self._render_markdown.SetToolTip("Render assistant replies and thinking as markdown "
                                          "(off: plain text with code blocks)")
+        self._show_outline = wx.CheckBox(self, label="Outline")
+        self._show_outline.SetValue(self._settings.get_bool(SHOW_OUTLINE_SETTING_KEY, default=True))
+        self._show_outline.SetToolTip("List of prompts and answers; click one to jump to it")
+        self._qa_only = wx.CheckBox(self, label="Q&&A only")
+        self._qa_only.SetValue(self._settings.get_bool(QA_ONLY_SETTING_KEY))
+        self._qa_only.SetToolTip("Show only each prompt and its final answer "
+                                 "(hide tool calls, thinking and intermediate replies)")
         self._copy_resume_btn = wx.Button(self, label="Copy resume cmd")
         self._copy_id_btn = wx.Button(self, label="Copy id")
         self._open_folder_btn = wx.Button(self, label="Open folder")
         self._open_source_btn = wx.Button(self, label="Open file")
-        for ctrl in (self._expand_tools, self._expand_thinking, self._render_markdown):
+        for ctrl in (self._show_outline, self._qa_only, self._expand_tools, self._expand_thinking,
+                     self._render_markdown):
             toolbar.Add(ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
         for btn in (self._copy_resume_btn, self._copy_id_btn, self._open_folder_btn, self._open_source_btn):
             toolbar.Add(btn, 0, wx.RIGHT | wx.BOTTOM, 4)
         self._copy_resume_btn.SetToolTip("Copy a shell command that reopens this conversation in its CLI")
         self._open_source_btn.SetToolTip("Open the raw transcript file / database")
 
-        self._html = _Html(self, self._on_link)
+        self._split = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE | wx.SP_3DSASH)
+        self._split.SetMinimumPaneSize(120)
+        self._outline = wx.html.SimpleHtmlListBox(self._split)
+        self._html = _Html(self._split, self._on_link)
+        self._split.SplitVertically(self._outline, self._html,
+                                    self._settings.get_int(OUTLINE_SASH_SETTING_KEY) or 260)
+        if not self._show_outline.GetValue():
+            self._split.Unsplit(self._outline)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(toolbar, 0, wx.EXPAND | wx.ALL, 6)
-        sizer.Add(self._html, 1, wx.EXPAND)
+        sizer.Add(self._split, 1, wx.EXPAND)
         self.SetSizer(sizer)
+
+        # Follow the reading position in the outline. Polling the scroll
+        # offset is the one signal that covers scrollbar, wheel and keys.
+        self._last_view_y = -1
+        self._follow_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_follow_timer, self._follow_timer)
+        self._follow_timer.Start(250)
+        self._html.Bind(wx.EVT_SIZE, self._on_html_size)
+        self._outline.Bind(wx.EVT_LISTBOX, self._on_outline_select)
+        self._outline.Bind(wx.html.EVT_HTML_LINK_CLICKED, self._on_outline_link)
+        self._split.Bind(wx.EVT_SPLITTER_SASH_POS_CHANGED, self._on_outline_sash)
+        self._show_outline.Bind(wx.EVT_CHECKBOX, self._on_toggle_outline)
+        self._qa_only.Bind(wx.EVT_CHECKBOX, self._on_toggle_qa)
 
         self._expand_tools.Bind(wx.EVT_CHECKBOX, self._on_toggle_defaults)
         self._expand_thinking.Bind(wx.EVT_CHECKBOX, self._on_toggle_defaults)
@@ -84,6 +117,9 @@ class ConversationView(wx.Panel):
         self._conversation = None
         self._blocks = []
         self._expanded = set()
+        self._turns = []
+        self._outline.Set([])
+        self._positions = {}
         pal = self._palette()
         self._html.SetPage(f'<html><body bgcolor="{pal.bg}" text="{pal.muted}"><p>{message}</p></body></html>')
         self._update_buttons()
@@ -101,6 +137,8 @@ class ConversationView(wx.Panel):
         self._conversation = conv
         self._project_path = project_path
         self._blocks = self._index.list_messages(conversation_id)
+        self._turns = split_turns(self._blocks)
+        self._fill_outline()
         self._render(keep_scroll=keep_scroll)
         self._update_buttons()
 
@@ -121,7 +159,8 @@ class ConversationView(wx.Panel):
             provider_label=PROVIDER_LABELS.get(self._conversation.provider, self._conversation.provider),
             expanded=self._expanded, expand_tools=self._expand_tools.GetValue(),
             expand_thinking=self._expand_thinking.GetValue(),
-            render_markdown=self._render_markdown.GetValue(), pal=self._palette(),
+            render_markdown=self._render_markdown.GetValue(), qa_only=self._qa_only.GetValue(),
+            pal=self._palette(),
         )
         self._html.Freeze()
         try:
@@ -129,6 +168,125 @@ class ConversationView(wx.Panel):
             self._html.Scroll(*scroll)
         finally:
             self._html.Thaw()
+        self._positions = None
+        self._last_view_y = -1
+
+    # ------------------------------------------------------------- outline
+    def _fill_outline(self) -> None:
+        pal = self._palette()
+        selected = self._outline.GetSelection()
+        self._outline.Freeze()
+        try:
+            # Set(), not Clear()+Append(): Clear() resolves to VListBox's,
+            # which drops the row count but keeps the old strings.
+            self._outline.Set([outline_item_html(t, pal) for t in self._turns])
+            if 0 <= selected < len(self._turns):
+                self._outline.SetSelection(selected)
+        finally:
+            self._outline.Thaw()
+
+    def _anchor_positions(self) -> Dict[str, int]:
+        """Page y of each turn:/answer: link. wx.html has no public anchor
+        lookup, so walk the laid-out cells summing relative offsets."""
+        if self._positions is None:
+            found: Dict[str, int] = {}
+            stack = [(self._html.GetInternalRepresentation(), 0)]
+            while stack:
+                cell, offset = stack.pop()
+                while cell is not None:
+                    y = offset + cell.GetPosY()
+                    link = cell.GetLink()
+                    if link is not None:
+                        href = link.GetHref()
+                        if href.startswith(("turn:", "answer:")) and href not in found:
+                            found[href] = y
+                    child = cell.GetFirstChild()
+                    if child is not None:
+                        stack.append((child, y))
+                    cell = cell.GetNext()
+            self._positions = found
+        return self._positions
+
+    def _scroll_to(self, href: str) -> None:
+        y = self._anchor_positions().get(href)
+        if y is None:
+            return
+        _, ppu = self._html.GetScrollPixelsPerUnit()
+        self._html.Scroll(-1, max(0, y - 30) // max(ppu, 1))
+
+    def _current_turn_index(self) -> int:
+        _, ppu = self._html.GetScrollPixelsPerUnit()
+        top = self._html.GetViewStart()[1] * max(ppu, 1)
+        positions = self._anchor_positions()
+        current = 0
+        for i, turn in enumerate(self._turns):
+            y = positions.get(f"turn:{turn.number}")
+            if y is not None and y <= top + 60:
+                current = i
+        return current
+
+    def _on_follow_timer(self, event: wx.TimerEvent) -> None:
+        if not self._turns or not self._split.IsSplit() or not self.IsShownOnScreen():
+            return
+        view_y = self._html.GetViewStart()[1]
+        if view_y == self._last_view_y:
+            return
+        self._last_view_y = view_y
+        index = self._current_turn_index()
+        if index != self._outline.GetSelection():
+            self._outline.SetSelection(index)
+            if not self._outline.IsRowVisible(index):
+                self._outline.ScrollToRow(index)
+
+    def _on_html_size(self, event: wx.SizeEvent) -> None:
+        self._positions = None  # text re-wraps on resize
+        self._last_view_y = -1
+        event.Skip()
+
+    def _on_outline_select(self, event: wx.CommandEvent) -> None:
+        index = self._outline.GetSelection()
+        if 0 <= index < len(self._turns):
+            self._scroll_to(f"turn:{self._turns[index].number}")
+            self._last_view_y = self._html.GetViewStart()[1]
+
+    def _on_outline_link(self, event: wx.html.HtmlLinkEvent) -> None:
+        href = event.GetLinkInfo().GetHref()
+        # After the row's own selection handling, so the answer wins.
+        wx.CallAfter(self._jump_to_answer, href)
+
+    def _jump_to_answer(self, href: str) -> None:
+        self._scroll_to(href)
+        self._last_view_y = self._html.GetViewStart()[1]
+
+    def _select_outline_turn(self, number: int) -> None:
+        index = number - 1
+        if 0 <= index < len(self._turns) and self._split.IsSplit():
+            self._outline.SetSelection(index)
+            if not self._outline.IsRowVisible(index):
+                self._outline.ScrollToRow(index)
+
+    def _on_toggle_outline(self, event: wx.CommandEvent) -> None:
+        show = self._show_outline.GetValue()
+        self._settings.set_bool(SHOW_OUTLINE_SETTING_KEY, show)
+        if show and not self._split.IsSplit():
+            self._split.SplitVertically(self._outline, self._html,
+                                        self._settings.get_int(OUTLINE_SASH_SETTING_KEY) or 260)
+            self._last_view_y = -1
+        elif not show and self._split.IsSplit():
+            self._split.Unsplit(self._outline)
+
+    def _on_toggle_qa(self, event: wx.CommandEvent) -> None:
+        self._settings.set_bool(QA_ONLY_SETTING_KEY, self._qa_only.GetValue())
+        # Keep the reader on the same turn across the switch.
+        index = self._current_turn_index() if self._turns else -1
+        self._render()
+        if 0 <= index < len(self._turns):
+            self._scroll_to(f"turn:{self._turns[index].number}")
+
+    def _on_outline_sash(self, event: wx.SplitterEvent) -> None:
+        if self._split.IsSplit():
+            self._settings.set_int(OUTLINE_SASH_SETTING_KEY, self._split.GetSashPosition())
+        event.Skip()
 
     def _update_buttons(self) -> None:
         conv = self._conversation
@@ -143,6 +301,8 @@ class ConversationView(wx.Panel):
             seq = int(href.split(":", 1)[1])
             self._expanded ^= {seq}
             self._render(keep_scroll=True)
+        elif href.startswith(("turn:", "answer:")):
+            self._select_outline_turn(int(href.split(":", 1)[1]))
         else:
             wx.LaunchDefaultBrowser(href)
 

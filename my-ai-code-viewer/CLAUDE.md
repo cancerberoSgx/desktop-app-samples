@@ -99,6 +99,17 @@ providers that share a path into one `ProjectGroup` for the UI.
   thinking are collapsed by default; the "Expand ..." checkboxes flip the
   default and a click flips one block. Large blocks are clipped for display
   (and at 200k chars when archived, `providers/_util.clip`).
+- Outline + "Q&A only": `conversation_turns.split_turns` cuts blocks into turns
+  (prompt = user text block, consecutive ones merged, "[Request interrupted"
+  excluded; answer = last assistant text of the turn; outline label skips
+  `<command-name>` markup blocks). The renderer emits `turn:N` / `answer:N`
+  links; `ConversationView` finds their page y by walking the laid-out
+  `wx.html` cells summing `GetPosY()` (no public anchor lookup, `GetAbsPos` is
+  private in wxPython), uses that to scroll on outline clicks, and a 250ms
+  timer polls the scroll offset to highlight the current turn. The outline is
+  a `SimpleHtmlListBox` - refill it with `Set()`, since `Clear()` resolves to
+  VListBox's and leaves stale strings. `qa_only` drops every block except
+  prompts and final answers.
 - `markdown_html.py` - the "Render markdown" toggle (setting `render_markdown`,
   default on) renders assistant text + thinking via python-markdown; user
   prompts stay plain. `_normalize` bends LLM-style markdown into what

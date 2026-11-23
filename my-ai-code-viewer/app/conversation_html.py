@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List, Set
 
+from app.conversation_turns import Turn, first_line, split_turns
 from app.markdown_html import markdown_available, markdown_to_wxhtml
 from app.formatting import format_cost, format_datetime, format_duration, format_tokens
 from app.models import Conversation, MessageBlock
@@ -139,10 +140,32 @@ def _header(conv: Conversation, project_path: str, provider_label: str, pal: Pal
             f'<table cellpadding="2" cellspacing="0">{body}</table><hr>')
 
 
+def outline_item_html(turn: Turn, pal: Palette) -> str:
+    """One row of the outline pane: prompt preview + a link to the answer."""
+    prompt = _esc(first_line(turn.label_text)) or "<i>(empty prompt)</i>"
+    if turn.answer_seq is not None:
+        answer = (f'<a href="answer:{turn.number}"><font color="{pal.link}">'
+                  f'{_esc(first_line(turn.answer_text, 120)) or "answer"}</font></a>')
+    else:
+        answer = "<i>no answer</i>"
+    return (f'<font color="{pal.muted}">#{turn.number}</font> <b>{prompt}</b><br>'
+            f'<font size="-1" color="{pal.muted}">&#8627; {answer}</font>')
+
+
 def render_conversation_html(conv: Conversation, blocks: Iterable[MessageBlock], *, project_path: str,
                              provider_label: str, expanded: Set[int], expand_tools: bool,
-                             expand_thinking: bool, render_markdown: bool = True,
+                             expand_thinking: bool, render_markdown: bool = True, qa_only: bool = False,
                              pal: Palette = LIGHT) -> str:
+    """`qa_only` keeps just each turn's prompt and final answer. Prompts get a
+    `turn:N` link and answers an `answer:N` marker - ConversationView finds
+    their positions in the laid-out page to drive the outline pane."""
+    blocks = list(blocks)
+    turns = split_turns(blocks)
+    prompt_start = {t.first_seq: t.number for t in turns}
+    answer_of = {t.answer_seq: t.number for t in turns if t.answer_seq is not None}
+    if qa_only:
+        keep = {seq for t in turns for seq in t.prompt_seqs} | set(answer_of)
+        blocks = [b for b in blocks if b.seq in keep]
     parts = [f'<html><body bgcolor="{pal.bg}" text="{pal.fg}" link="{pal.link}">',
              _header(conv, project_path, provider_label, pal)]
     last_role = None
@@ -154,10 +177,19 @@ def render_conversation_html(conv: Conversation, blocks: Iterable[MessageBlock],
         else:
             is_open = True
 
-        if b.role != last_role and not (b.kind == "tool_result" and last_role == "assistant"):
+        turn_no = prompt_start.get(b.seq)
+        answer_no = answer_of.get(b.seq)
+        answer_mark = (f'<font size="-1" color="{pal.muted}">Answer to '
+                       f'<a href="answer:{answer_no}">#{answer_no}</a></font>') if answer_no is not None else ""
+        if turn_no is not None or (b.role != last_role and not (b.kind == "tool_result" and last_role == "assistant")):
             label = ROLE_LABELS.get(b.role, b.role)
             when = format_datetime(b.timestamp)
-            parts.append(f'<p><b>{_esc(label)}</b> <font color="{pal.muted}" size="-1">{_esc(when)}</font></p>')
+            number = f'<a href="turn:{turn_no}">#{turn_no}</a> ' if turn_no is not None else ""
+            sep = f' <font color="{pal.muted}" size="-1">&middot;</font> ' if answer_mark else ""
+            parts.append(f'<p>{number}<b>{_esc(label)}</b> '
+                         f'<font color="{pal.muted}" size="-1">{_esc(when)}</font>{sep}{answer_mark}</p>')
+        elif answer_mark:
+            parts.append(f"<p>{answer_mark}</p>")
         last_role = "assistant" if b.kind == "tool_result" else b.role
 
         if b.kind == "text":

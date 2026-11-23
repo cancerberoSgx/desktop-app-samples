@@ -39,6 +39,16 @@ in the conversatoins list:
 When the conversation details screen is open, if I press ESC key it't closed so I can see the conversation list table with full width.
 do you have any questions before start?
 
+# conversation details TOC
+in the conversation details, there are many questions, each question with a sub-assistant and answer. Currently there's no way of see a sumary of all the conversatoin. I would like to see something like a table of contents with an item for each question and its answer. When clicking the table of contents items it shuold take me to the scrolling position of that question or answer
+Do you see any better way of summarizing the content of a conversation with many q&a another way than a toc ? do you have any questions or alterinative proposals for accomplishing the goal before writing code ? 
+
+side bar 
+delete the sidebar. 
+put the preferences in a file->preferences dialog
+put the "About contents" in a help->about dialog
+
+
 
 # per projects used tokens and cost columns calculation
 

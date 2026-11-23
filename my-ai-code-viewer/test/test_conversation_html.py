@@ -52,3 +52,41 @@ def test_markdown_toggle_affects_assistant_and_thinking_not_user(index_repo, cla
     assert "<strong>pondering</strong>" in on and "<strong>reply</strong>" in on
     off = render_conversation_html(conv, blocks, render_markdown=False, **opts)
     assert "<strong>" not in off and "**reply**" in off
+
+
+def _render_blocks(index_repo, claude_root, blocks, **kwargs):
+    sync(index_repo, [ClaudeCodeProvider(claude_root)])
+    group = index_repo.list_project_groups()[0]
+    conv = next(c for c in index_repo.list_conversations(group.project_ids) if c.external_id == "s1")
+    opts = dict(project_path=group.path, provider_label="Claude Code", expanded=set(),
+                expand_tools=True, expand_thinking=True)
+    opts.update(kwargs)
+    return render_conversation_html(conv, blocks, **opts)
+
+
+QA_BLOCKS = [MessageBlock("user", "text", "first question", seq=0),
+             MessageBlock("assistant", "text", "let me check", seq=1),
+             MessageBlock("assistant", "tool_use", '{"command": "ls"}', tool_name="Bash", seq=2),
+             MessageBlock("assistant", "text", "final answer one", seq=3),
+             MessageBlock("user", "text", "second question", seq=4)]
+
+
+def test_turn_and_answer_links(index_repo, claude_root):
+    page = _render_blocks(index_repo, claude_root, QA_BLOCKS)
+    assert 'href="turn:1"' in page and 'href="turn:2"' in page
+    assert page.count('href="answer:1"') == 1 and "answer:2" not in page
+    assert "let me check" in page and "Tool: Bash" in page
+
+
+def test_qa_only_keeps_prompts_and_final_answers(index_repo, claude_root):
+    page = _render_blocks(index_repo, claude_root, QA_BLOCKS, qa_only=True)
+    assert "first question" in page and "final answer one" in page and "second question" in page
+    assert "let me check" not in page and "Tool: Bash" not in page
+
+
+def test_outline_item_html():
+    from app.conversation_html import LIGHT, outline_item_html
+    from app.conversation_turns import split_turns
+    t1, t2 = split_turns(QA_BLOCKS)
+    assert "first question" in outline_item_html(t1, LIGHT) and 'href="answer:1"' in outline_item_html(t1, LIGHT)
+    assert "no answer" in outline_item_html(t2, LIGHT)
