@@ -160,9 +160,30 @@ providers that share a path into one `ProjectGroup` for the UI.
   `IsDark()` reports the forced theme, so `system_is_dark` asks the
   freedesktop portal (`gdbus`) instead. Exports default to the app's theme
   (`ExportOptions.theme`) unless the reader picked one in the page.
+- Stats: File > Stats... (Ctrl+I) opens `stats_frame.StatsFrame`, a separate
+  non-modal window (one instance; reloaded after each sync that changed data,
+  re-themed with the view). Range + agent filters (saved as `stats_range` /
+  `stats_provider`, last tab `stats_tab`), KPI tiles, notebook tabs Agents /
+  Projects / Conversations / Activity / Tools = chart over a click-to-sort
+  `StatsTable`. Double-click a project/conversation -> `MainFrame._reveal` ->
+  `ProjectsPage.reveal` (clears list filters that would hide it). Numbers come
+  from wx-free `stats.load_stats` (tested): subagents roll into their parent
+  (tokens/tools/thinking, never prompts); prompts = turn starts computed in SQL
+  with `LAG()` (same rule as `split_turns`); tool names merge
+  case-insensitively (Claude `Bash` + OpenCode `bash`). The range keeps
+  conversations *active* in it with whole-conversation totals (tokens/cost
+  aren't stored per message); activity charts use exact prompt timestamps.
+  Claude cost is NULL without a `cost-state` line -> counted as
+  `cost_unknown` and flagged `*`. Charts are drawn by hand in
+  `stats_charts.py` (wx.GraphicsContext, no plotting dependency) with their
+  own LIGHT/DARK `ChartTheme`; a provider's colour is its slot in
+  `PROVIDER_LABELS`, never its rank.
 - `about_dialog.py` - Help > About.
 
 ### Not done yet (ideas the user has expressed)
 
 - Cross-project search over conversation content (the `messages` table was
   shaped for an FTS5 index).
+- Stats phase 2/3: store per-conversation counters at index time, estimate
+  missing Claude cost from tokens, and a per-message usage table (timestamp,
+  model, tokens, cost) for exact cost/tokens over time and by model.

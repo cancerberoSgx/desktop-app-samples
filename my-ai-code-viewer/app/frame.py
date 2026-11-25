@@ -15,6 +15,7 @@ from app.preferences_dialog import PreferencesDialog, claude_projects_dir, openc
 from app.projects_page import ProjectsPage
 from app.providers import build_providers
 from app.repositories import IndexRepository, SettingsRepository
+from app.stats_frame import StatsFrame
 
 AUTO_SYNC_INTERVAL_MS = 60_000
 DEFAULT_SIZE = (1400, 820)
@@ -44,6 +45,8 @@ class MainFrame(wx.Frame):
         self.settings_repository = SettingsRepository(conn)
         self.index_repository = IndexRepository(conn)
         self._sync_runner = AsyncTaskRunner(self)
+        self._conn = conn
+        self._stats_frame: Optional[StatsFrame] = None
         self._restore_geometry()
 
         self.CreateStatusBar(2)
@@ -135,6 +138,8 @@ class MainFrame(wx.Frame):
     def _on_sync_done(self, result: SyncResult, quiet: bool) -> None:
         if result.updated or result.missing or not quiet:
             self.projects_page.refresh_after_sync()
+            if self._stats_frame:
+                self._stats_frame.reload()
         text = f"{result.scanned} conversations, {result.updated} updated"
         if result.errors:
             text += f", {len(result.errors)} errors"
@@ -143,14 +148,20 @@ class MainFrame(wx.Frame):
 
     def _on_timer(self, event: wx.TimerEvent) -> None:
         self.projects_page.view.refresh_theme()
+        if self._stats_frame:
+            self._stats_frame.refresh_theme()
         self.start_sync(quiet=True)
 
     def _on_sys_colour_changed(self, event: wx.SysColourChangedEvent) -> None:
         event.Skip()
         wx.CallAfter(self.projects_page.view.refresh_theme)
+        if self._stats_frame:
+            wx.CallAfter(self._stats_frame.refresh_theme)
 
     def _on_prefs_saved(self, sources_changed: bool) -> None:
         self.projects_page.view.apply_settings()
+        if self._stats_frame:
+            self._stats_frame.refresh_theme()
         if sources_changed:
             self.start_sync()
         self.SetStatusText("Preferences saved", 0)
@@ -184,6 +195,8 @@ class MainFrame(wx.Frame):
         file_menu = wx.Menu()
         rescan_id = wx.NewIdRef()
         file_menu.Append(rescan_id, "Rescan\tF5")
+        stats_id = wx.NewIdRef()
+        file_menu.Append(stats_id, "Stats...\tCtrl+I", "Usage statistics: agents, projects, conversations, tools")
         file_menu.Append(wx.ID_PREFERENCES, "Preferences...\tCtrl+,")
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
@@ -206,6 +219,7 @@ class MainFrame(wx.Frame):
         self.SetMenuBar(menu_bar)
 
         self.Bind(wx.EVT_MENU, lambda evt: self.start_sync(), id=rescan_id)
+        self.Bind(wx.EVT_MENU, self._on_stats, id=stats_id)
         self.Bind(wx.EVT_MENU, lambda evt: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, self._on_preferences, id=wx.ID_PREFERENCES)
@@ -217,6 +231,27 @@ class MainFrame(wx.Frame):
         self._timer.Stop()
         self._save_geometry()
         self.Destroy()
+
+    def _on_stats(self, event: wx.CommandEvent) -> None:
+        if self._stats_frame:
+            self._stats_frame.Raise()
+            return
+        self._stats_frame = StatsFrame(self, self._conn, self.settings_repository,
+                                       on_open_project=self._reveal, on_open_conversation=self._reveal)
+        self._stats_frame.Bind(wx.EVT_WINDOW_DESTROY, self._on_stats_destroyed)
+        self._stats_frame.Show()
+
+    def _on_stats_destroyed(self, event: wx.WindowDestroyEvent) -> None:
+        event.Skip()
+        if event.GetEventObject() is self._stats_frame:
+            self._stats_frame = None
+
+    def _reveal(self, project_id: int, conversation_id: Optional[int] = None) -> None:
+        """From the Stats window: show a project / conversation here."""
+        self.projects_page.reveal(project_id, conversation_id)
+        if self.IsIconized():
+            self.Iconize(False)
+        self.Raise()
 
     def _on_about(self, event: wx.CommandEvent) -> None:
         with AboutDialog(self) as dialog:

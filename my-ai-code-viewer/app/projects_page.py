@@ -175,6 +175,24 @@ class ProjectsPage(wx.Panel):
             self._projects.Thaw()
         self._on_status(f"{len(self._groups)} projects")
 
+    def reveal(self, project_id: int, conversation_id: Optional[int] = None) -> None:
+        """Select a project (and open one of its conversations), clearing any
+        list filter that would hide it - used by the Stats window."""
+        if not any(project_id in g.project_ids for g in self._groups):
+            self._provider_choice.SetSelection(0)
+            self._settings.set(PROVIDER_FILTER_SETTING_KEY, None)
+            self._filter.ChangeValue("")
+            self.reload_projects()
+        self._select_group_containing(project_id)
+        self._settings.set_int(LAST_PROJECT_SETTING_KEY, project_id)
+        if conversation_id is None:
+            return
+        if conversation_id not in self._item_ids and self._conv_filter.GetValue():
+            self._conv_filter.ChangeValue("")
+            self._populate_tree()
+        if conversation_id in self._conversations:
+            self._select_conversation(conversation_id)
+
     # ---------------------------------------------------------------- helpers
     def _select_group_containing(self, project_id: int, show: bool = True) -> None:
         for i, g in enumerate(self._groups):

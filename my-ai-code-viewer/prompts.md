@@ -84,10 +84,16 @@ i want to add dark/light theme for the app - in preferences -> visual -> theme -
 # docs
 ../docs/my-ai-code-viewer page
 
-# conversation stats
-stats charts of conversation length (qa), number of conversations per project
+#  stats report
+As a user that uses claude-code, opencode a lot I would like to see stats regarding of tools, projects and conversations in a friendly UI
 
-question: explain how this project saves / update the data into mysqlite db, is it at startup ? can we be  sure that when the app starts all the project conversations are updated or when that happens
+ideas: 
+ * how much i use different agents (claude, open, etc)
+ * which are my top projects in terms of money, tokens, conversations, etc
+ * conversation stats such as number of q & A, numbers of reasoning, etc breakdown like
+I expect some charts and data tables for each
+
+Do you understand motivation?, do you have any more stats ideas that can be interesting of ia tools users ? do you have any design suggestions ? 
 
 # tags
 being able to tag a conversatoin or a particular question or answer in a conversation. Objective: after reading, I can tag something as important or "performance" and quickly locate it in the future.
