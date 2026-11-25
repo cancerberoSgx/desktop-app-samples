@@ -75,14 +75,6 @@ do you have any questions ?
 in conversation details, instead of having actions buttons, move them to a single dropdown / menu "actions". 
 Also add a "Conversation" menu where user have this actions too
 
-# future
-
-
-# theme
-i want to add dark/light theme for the app - in preferences -> visual -> theme - but first a question. Do you know if is it possible to read the system's preference for dark / light desktop theme in the current project ? so we can consider that also in our theme functionality
-
-# docs
-../docs/my-ai-code-viewer page
 
 #  stats report
 As a user that uses claude-code, opencode a lot I would like to see stats regarding of tools, projects and conversations in a friendly UI
@@ -94,6 +86,16 @@ ideas:
 I expect some charts and data tables for each
 
 Do you understand motivation?, do you have any more stats ideas that can be interesting of ia tools users ? do you have any design suggestions ? 
+
+
+# future
+
+
+# theme
+i want to add dark/light theme for the app - in preferences -> visual -> theme - but first a question. Do you know if is it possible to read the system's preference for dark / light desktop theme in the current project ? so we can consider that also in our theme functionality
+
+# docs
+add documentation for this project in ../docs/my-ai-code-viewer like the rest of projects have. You can leave screenshots placeholders for me to generate
 
 # tags
 being able to tag a conversatoin or a particular question or answer in a conversation. Objective: after reading, I can tag something as important or "performance" and quickly locate it in the future.

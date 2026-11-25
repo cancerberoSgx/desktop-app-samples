@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <title>My AI Code Viewer</title>
-<meta name="description" content="A desktop app to browse every Claude Code and OpenCode project and conversation you've had, archived locally so nothing gets pruned." />
+<meta name="description" content="A desktop app to browse every Claude Code and OpenCode project and conversation you've had, archived locally so nothing gets pruned, with usage stats per agent, project and tool." />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="../assets/style.css" />
 <style>
@@ -29,7 +29,8 @@
     <p class="tagline">
       Every project and conversation you've had with Claude Code and
       OpenCode, in one place: pick a folder, pick a conversation, read it.
-      Archived locally, so old sessions don't vanish when the CLI prunes them.
+      Archived locally, so old sessions don't vanish when the CLI prunes them,
+      with stats on how much you use each agent, project and tool.
     </p>
 
     <div class="badges">
@@ -37,6 +38,7 @@
       <span class="badge">Claude Code</span>
       <span class="badge">OpenCode</span>
       <span class="badge">SQLite archive</span>
+      <span class="badge">Usage stats</span>
       <span class="badge">Linux</span>
       <span class="badge">macOS</span>
       <span class="badge">Windows</span>
@@ -66,33 +68,112 @@
     <p class="section-sub">Projects, their conversations, and a conversation open.</p>
     <div class="gallery">
 
-      <!-- Replace with: <img src="media/hero.png" alt="Projects, conversations and a conversation open in My AI Code Viewer"> -->
+      <!-- Replace with: <img src="media/hero.png" alt="Projects, conversations and a conversation with its outline in My AI Code Viewer"> -->
       <div class="shot wide">
         <div class="media-placeholder">
           <div class="ph-icon">📸</div>
-          <div class="ph-label">Projects | Conversations | Conversation — main hero shot</div>
+          <div class="ph-label">Projects | Conversations | Conversation, with the outline open — main hero shot</div>
           <div class="ph-file">media/hero.png</div>
         </div>
       </div>
 
-      <!-- Replace with: <img src="media/tools.png" alt="Tool calls expanded in a conversation"> -->
+      <!-- Replace with: <img src="media/outline-qa.png" alt="Conversation outline and Q&A only view"> -->
       <div class="shot">
         <div class="media-placeholder">
           <div class="ph-icon">📸</div>
-          <div class="ph-label">Tool calls and results, collapsed to one line, click to expand</div>
+          <div class="ph-label">Outline of prompts on the side, &quot;Q&amp;A only&quot; ticked: just your prompts and the final answers</div>
+          <div class="ph-file">media/outline-qa.png</div>
+        </div>
+        <div class="caption">Skim a long session as questions and answers</div>
+      </div>
+
+      <!-- Replace with: <img src="media/tools.png" alt="Tool calls and thinking collapsed in a conversation"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Tool calls and thinking collapsed to one line, one of them expanded</div>
           <div class="ph-file">media/tools.png</div>
         </div>
         <div class="caption">Tool calls stay out of the way until you want them</div>
       </div>
 
-      <!-- Replace with: <img src="media/preferences.png" alt="Preferences page"> -->
+      <!-- Replace with: <img src="media/actions.png" alt="Conversation actions menu"> -->
       <div class="shot">
         <div class="media-placeholder">
           <div class="ph-icon">📸</div>
-          <div class="ph-label">Preferences — where each tool's data lives</div>
-          <div class="ph-file">media/preferences.png</div>
+          <div class="ph-label">The Actions ▾ menu: copy resume command, copy session id, open folder, open transcript, export</div>
+          <div class="ph-file">media/actions.png</div>
         </div>
-        <div class="caption">Point it at any Claude Code / OpenCode data location</div>
+        <div class="caption">Resume the session in your terminal in one paste</div>
+      </div>
+
+      <!-- Replace with: <img src="media/export.png" alt="Conversation exported as a self-contained HTML page"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">An exported conversation open in a browser: outline, search, toggles, dark theme</div>
+          <div class="ph-file">media/export.png</div>
+        </div>
+        <div class="caption">Share or keep a conversation as one offline HTML file</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Stats</h2>
+    <p class="section-sub">How you use your AI coding tools: agents, projects, conversations, activity and tools.</p>
+    <div class="gallery">
+
+      <!-- Replace with: <img src="media/stats.png" alt="Stats window with top projects by cost"> -->
+      <div class="shot wide">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Stats window — KPI tiles and the Projects tab (top projects chart + table)</div>
+          <div class="ph-file">media/stats.png</div>
+        </div>
+      </div>
+
+      <!-- Replace with: <img src="media/stats-activity.png" alt="Prompts per day and weekday by hour heatmap"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Stats > Activity — prompts per day and the weekday × hour heatmap</div>
+          <div class="ph-file">media/stats-activity.png</div>
+        </div>
+        <div class="caption">When you actually code with AI</div>
+      </div>
+
+      <!-- Replace with: <img src="media/stats-conversations.png" alt="Conversation length histogram"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Stats > Conversations — conversation-length histogram and longest conversations</div>
+          <div class="ph-file">media/stats-conversations.png</div>
+        </div>
+        <div class="caption">How long your sessions really are</div>
+      </div>
+
+      <!-- Replace with: <img src="media/stats-tools.png" alt="Most used tools chart"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">Stats > Tools — most used tools with error rates per agent</div>
+          <div class="ph-file">media/stats-tools.png</div>
+        </div>
+        <div class="caption">Which tools the agents lean on, and how often they fail</div>
+      </div>
+
+      <!-- Replace with: <img src="media/dark.png" alt="My AI Code Viewer in dark theme"> -->
+      <div class="shot">
+        <div class="media-placeholder">
+          <div class="ph-icon">📸</div>
+          <div class="ph-label">The whole app in the dark theme (Preferences > Visual)</div>
+          <div class="ph-file">media/dark.png</div>
+        </div>
+        <div class="caption">System, light or dark theme</div>
       </div>
 
     </div>
@@ -108,18 +189,42 @@
         <h3>Every project, every tool</h3>
         <p>
           Lists every folder you've run Claude Code or OpenCode in, with
-          conversation count and last activity. A folder used with both
-          tools shows up once, with both tools' conversations together.
+          conversation count and last activity, filterable by tool or name. A
+          folder used with both tools shows up once, with both tools'
+          conversations together.
         </p>
       </div>
 
       <div class="feature">
         <h3>Readable conversations</h3>
         <p>
-          Your prompts and the assistant's replies as a chat; tool calls,
-          tool results and thinking collapsed to a one-line preview you can
-          click to expand. Subagent threads appear nested under the
+          Your prompts and the assistant's replies as a chat, with replies
+          rendered as markdown (code blocks, tables, lists). Tool calls, tool
+          results and thinking are collapsed to a one-line preview you can
+          click to expand, and subagent threads appear nested under the
           conversation that spawned them.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Outline and Q&amp;A only</h3>
+        <p>
+          An outline of every prompt jumps straight to it and highlights where
+          you are as you scroll. &quot;Q&amp;A only&quot; hides everything except
+          your prompts and the final answer of each turn, so a three-hour session
+          reads in a minute.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Usage stats</h3>
+        <p>
+          File &gt; Stats opens charts and sortable tables: how much you use each
+          agent, your top projects by cost, tokens, conversations or prompts,
+          conversation length, thinking and tool-call counts, the most used tools
+          and their error rates, and when in the week you prompt. Filter by
+          date range and agent; double-click any project or conversation to
+          open it.
         </p>
       </div>
 
@@ -128,16 +233,17 @@
         <p>
           Claude Code deletes transcripts after ~30 days by default. Every
           conversation the app sees is archived into its own local SQLite
-          database, so it stays readable after the original is gone.
+          database, so it stays readable (and counted in the stats) after the
+          original is gone.
         </p>
       </div>
 
       <div class="feature">
-        <h3>Per-conversation stats</h3>
+        <h3>Per-conversation details</h3>
         <p>
           Model, duration, prompt and tool-call counts, input/output/cache
           tokens, cost, git branch and which tools were used, at the top of
-          every conversation and as sortable columns.
+          every conversation and as sortable columns in the list.
         </p>
       </div>
 
@@ -145,17 +251,28 @@
         <h3>Jump back in</h3>
         <p>
           Copy a ready-to-paste <code>claude --resume</code> /
-          <code>opencode --session</code> command, open the project folder,
-          or open the raw transcript.
+          <code>opencode --session</code> command or the session id, open the
+          project folder, or open the raw transcript, from the Actions menu or
+          the Conversation menu.
         </p>
       </div>
 
       <div class="feature">
-        <h3>Live and incremental</h3>
+        <h3>Export as HTML</h3>
         <p>
-          Rescans in the background every minute, only re-reading
-          conversations that actually changed, so active sessions show up
-          without a restart.
+          Save a conversation and its subagents as one self-contained HTML page
+          that works offline: outline, search, light/dark theme, copy buttons on
+          code, and the same Q&amp;A / expand / markdown toggles, flipped in the
+          browser.
+        </p>
+      </div>
+
+      <div class="feature">
+        <h3>Live, incremental, themed</h3>
+        <p>
+          Rescans in the background every minute, only re-reading conversations
+          that changed, so active sessions show up without a restart. Follows
+          your desktop's light/dark preference, or force either one.
         </p>
       </div>
 
