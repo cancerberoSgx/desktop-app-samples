@@ -40,6 +40,9 @@ class ExportOptions:
     expand_tools: bool = False
     expand_thinking: bool = False
     render_markdown: bool = True
+    # The app's theme ("system" | "light" | "dark") - the page's default until
+    # the reader picks one with its theme button ("system" = auto).
+    theme: str = "system"
 
 
 def _esc(text: str) -> str:
@@ -188,6 +191,10 @@ _TOGGLES = (
 )
 
 
+def _page_theme(app_theme: str) -> str:
+    return app_theme if app_theme in ("light", "dark") else "auto"
+
+
 def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, project_path: str,
                        provider_label: str, options: ExportOptions, expanded: Optional[Set[int]] = None,
                        subagents: Sequence[Tuple[Conversation, List[MessageBlock]]] = (),
@@ -236,7 +243,7 @@ def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, pr
 <title>{title}</title>
 <style>{_CSS}</style>
 </head>
-<body class="{" ".join(body_cls)}">
+<body class="{" ".join(body_cls)}" data-default-theme="{_esc(_page_theme(options.theme))}">
 <header id="bar">
   <div class="bar-title" title="{title}">{title}</div>
   <div class="bar-opts">{"".join(toggles)}</div>
@@ -411,8 +418,8 @@ _JS = r"""
     themeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
       + 'stroke-linecap="round" stroke-linejoin="round">' + ICONS[t] + '</svg>';
   }
-  var theme = 'auto';
-  try { theme = localStorage.getItem('aicv-theme') || 'auto'; } catch (e) {}
+  var theme = body.getAttribute('data-default-theme') || 'auto';
+  try { theme = localStorage.getItem('aicv-theme') || theme; } catch (e) {}
   if (themes.indexOf(theme) < 0) theme = 'auto';
   applyTheme(theme);
   themeBtn.addEventListener('click', function () {

@@ -1,5 +1,10 @@
+import os
+import sys
+from typing import Optional
+
 import wx
 
+from app import theme
 from app.async_task import AsyncTaskRunner
 from app.db.connection import get_connection
 from app.db.migrator import run_migrations
@@ -14,6 +19,20 @@ from app.repositories import IndexRepository, SettingsRepository
 AUTO_SYNC_INTERVAL_MS = 60_000
 DEFAULT_SIZE = (1400, 820)
 MIN_SIZE = (400, 300)
+
+
+def read_setting_before_app(key: str) -> Optional[str]:
+    """One setting, read before wx.App exists (the theme must be known
+    before the toolkit starts). Never fails start-up."""
+    try:
+        conn = get_connection()
+        try:
+            run_migrations(conn, migrations_dir())
+            return SettingsRepository(conn).get(key)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - a broken DB is reported later by the frame
+        return None
 
 
 class MainFrame(wx.Frame):
@@ -39,6 +58,9 @@ class MainFrame(wx.Frame):
         self._build_menu_bar()
 
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        # "System" theme: follow the desktop switching light/dark. GTK doesn't
+        # always send this event, so the sync timer re-checks too.
+        self.Bind(wx.EVT_SYS_COLOUR_CHANGED, self._on_sys_colour_changed)
 
         # Show whatever is already archived immediately, then refresh from
         # the tools' live data in the background.
@@ -46,7 +68,7 @@ class MainFrame(wx.Frame):
         self.start_sync()
 
         self._timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, lambda evt: self.start_sync(quiet=True), self._timer)
+        self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
         self._timer.Start(AUTO_SYNC_INTERVAL_MS)
 
     # ------------------------------------------------------------------
@@ -119,11 +141,39 @@ class MainFrame(wx.Frame):
             self.SetStatusText("Scan errors: " + "; ".join(result.errors[:3]), 0)
         self.SetStatusText(text, 1)
 
+    def _on_timer(self, event: wx.TimerEvent) -> None:
+        self.projects_page.view.refresh_theme()
+        self.start_sync(quiet=True)
+
+    def _on_sys_colour_changed(self, event: wx.SysColourChangedEvent) -> None:
+        event.Skip()
+        wx.CallAfter(self.projects_page.view.refresh_theme)
+
     def _on_prefs_saved(self, sources_changed: bool) -> None:
         self.projects_page.view.apply_settings()
         if sources_changed:
             self.start_sync()
         self.SetStatusText("Preferences saved", 0)
+        if theme.needs_restart(self.settings_repository.get(theme.THEME_SETTING_KEY)):
+            answer = wx.MessageBox(
+                "The conversation view uses the new theme already. Menus, lists and dialogs "
+                "switch after a restart.\n\nRestart now?",
+                "Theme", wx.YES_NO | wx.ICON_QUESTION, self)
+            if answer == wx.YES:
+                self._restart()
+
+    def _restart(self) -> None:
+        self._timer.Stop()
+        self._save_geometry()
+        if getattr(sys, "frozen", False):  # PyInstaller binary
+            argv = [sys.executable] + sys.argv[1:]
+        else:
+            argv = [sys.executable] + sys.argv
+        try:
+            os.execv(sys.executable, argv)
+        except OSError as exc:
+            wx.MessageBox(f"Couldn't restart: {exc}\nPlease restart the app manually.",
+                          "Theme", wx.OK | wx.ICON_ERROR, self)
 
     # ------------------------------------------------------------------
     # Menu bar

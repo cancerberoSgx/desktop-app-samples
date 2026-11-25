@@ -140,14 +140,27 @@ providers that share a path into one `ProjectGroup` for the UI.
   (`<mark>` highlighting, which opens collapsed ancestors), a theme switch
   (auto/light/dark, localStorage) and copy buttons are JS-only. The last export folder is
   saved as setting `export_dir`.
-- `preferences_dialog.py` - modal File > Preferences, two notebook tabs.
+- `preferences_dialog.py` - modal File > Preferences, three notebook tabs.
   Sources: Claude projects dir + OpenCode DB path (stored in `settings`,
   defaults from each provider's `default_*()`); Save rescans only if a path
   changed. Conversation: the viewer toggles, driven by
   `conversation_view.CONVERSATION_OPTIONS` (same keys as the toolbar
   checkboxes); on save the frame calls `ConversationView.apply_settings()`.
+  Visual: Theme (System / Light / Dark, setting `theme`).
   Window size/position/maximized are saved on close (`frame._save_geometry`).
-  `about_dialog.py` - Help > About.
+- `theme.py` - wx 3.2 can't re-theme native widgets at runtime, so two
+  layers: the palettes we draw (`conversation_html.LIGHT/DARK`, outline +
+  html window background) follow the setting immediately via
+  `ConversationView.refresh_theme()` (also called on EVT_SYS_COLOUR_CHANGED
+  and the 60s timer, so "System" tracks the desktop); native widgets get
+  `GTK_THEME=Adwaita[:dark]`, set in `main.py` *before* `wx.App` (the setting
+  is read early via `frame.read_setting_before_app`) and removed from the env
+  right after so launched programs keep the user's theme. A user-exported
+  `GTK_THEME` wins. Changing it offers a restart (`os.execv`). While forced,
+  `IsDark()` reports the forced theme, so `system_is_dark` asks the
+  freedesktop portal (`gdbus`) instead. Exports default to the app's theme
+  (`ExportOptions.theme`) unless the reader picked one in the page.
+- `about_dialog.py` - Help > About.
 
 ### Not done yet (ideas the user has expressed)
 

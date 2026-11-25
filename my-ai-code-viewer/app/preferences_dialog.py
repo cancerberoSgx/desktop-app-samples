@@ -1,8 +1,10 @@
+import os
 from pathlib import Path
 from typing import Callable, Dict
 
 import wx
 
+from app import theme
 from app.conversation_view import CONVERSATION_OPTIONS
 from app.db.paths import db_path
 from app.providers.claude_code import default_root
@@ -33,6 +35,7 @@ class PreferencesDialog(wx.Dialog):
         notebook = wx.Notebook(self)
         notebook.AddPage(self._build_sources_page(notebook), "Sources")
         notebook.AddPage(self._build_conversation_page(notebook), "Conversation")
+        notebook.AddPage(self._build_visual_page(notebook), "Visual")
 
         reset = wx.Button(self, label="Reset to defaults")
         save = wx.Button(self, wx.ID_OK, label="Save")
@@ -122,11 +125,47 @@ class PreferencesDialog(wx.Dialog):
         page.SetSizer(sizer)
         return page
 
+    def _build_visual_page(self, parent: wx.Window) -> wx.Panel:
+        page = wx.Panel(parent)
+        grey = wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
+        system = "dark" if theme.system_is_dark() else "light"
+        labels = [f"{label} (currently {system})" if key == theme.SYSTEM else label
+                  for key, label in theme.THEMES]
+        self._theme = wx.RadioBox(page, label="Theme", choices=labels, majorDimension=1,
+                                  style=wx.RA_SPECIFY_COLS)
+        hint = wx.StaticText(page, label=(
+            "System follows the desktop's light/dark setting. The conversation view switches "
+            "immediately; menus, lists and dialogs switch after a restart."
+        ))
+        hint.Wrap(600)
+        hint.SetForegroundColour(grey)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self._theme, 0, wx.ALL, 12)
+        sizer.Add(hint, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        if "GTK_THEME" in os.environ:
+            note = wx.StaticText(page, label=(
+                f"GTK_THEME={os.environ['GTK_THEME']} is set in the environment, so menus, lists "
+                "and dialogs keep that theme."
+            ))
+            note.Wrap(600)
+            note.SetForegroundColour(grey)
+            sizer.Add(note, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        page.SetSizer(sizer)
+        return page
+
+    def _theme_key(self) -> str:
+        return theme.THEMES[self._theme.GetSelection()][0]
+
+    def _select_theme(self, value: str) -> None:
+        keys = [key for key, _label in theme.THEMES]
+        self._theme.SetSelection(keys.index(theme.normalize(value)))
+
     def load(self) -> None:
         self._claude_dir.SetPath(str(claude_projects_dir(self._settings)))
         self._opencode_db.SetPath(str(opencode_db_path(self._settings)))
         for key, _label, default, _tooltip in CONVERSATION_OPTIONS:
             self._option_boxes[key].SetValue(self._settings.get_bool(key, default=default))
+        self._select_theme(self._settings.get(theme.THEME_SETTING_KEY))
         self._update_status()
 
     def _update_status(self) -> None:
@@ -142,6 +181,7 @@ class PreferencesDialog(wx.Dialog):
         self._settings.set(OPENCODE_DB_PATH_SETTING_KEY, self._opencode_db.GetPath().strip() or None)
         for key, box in self._option_boxes.items():
             self._settings.set_bool(key, box.GetValue())
+        self._settings.set(theme.THEME_SETTING_KEY, self._theme_key())
         after = (claude_projects_dir(self._settings), opencode_db_path(self._settings))
         self.EndModal(wx.ID_OK)
         self._on_saved(before != after)
@@ -151,4 +191,5 @@ class PreferencesDialog(wx.Dialog):
         self._opencode_db.SetPath(str(default_db_path()))
         for key, _label, default, _tooltip in CONVERSATION_OPTIONS:
             self._option_boxes[key].SetValue(default)
+        self._select_theme(theme.DEFAULT_THEME)
         self._update_status()

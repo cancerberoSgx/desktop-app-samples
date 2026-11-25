@@ -11,7 +11,8 @@ import wx
 import wx.html
 
 from app.conversation_export import ExportOptions, render_export_html
-from app.conversation_html import DARK, LIGHT, outline_item_html, render_conversation_html
+from app import theme
+from app.conversation_html import DARK, LIGHT, Palette, outline_item_html, render_conversation_html
 from app.conversation_turns import Turn, split_turns
 from app.models import Conversation
 from app.providers import PROVIDER_LABELS
@@ -80,6 +81,7 @@ class ConversationView(wx.Panel):
         self._turns: List[Turn] = []
         # href ("turn:3" / "answer:3") -> y in page pixels; None = stale.
         self._positions: Optional[Dict[str, int]] = None
+        self._dark = self._want_dark()
 
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
         self._option_boxes: Dict[str, wx.CheckBox] = {}
@@ -104,6 +106,7 @@ class ConversationView(wx.Panel):
         self._split.SetMinimumPaneSize(120)
         self._outline = wx.html.SimpleHtmlListBox(self._split)
         self._html = _Html(self._split, self._on_link)
+        self._apply_widget_colours()
         self._split.SplitVertically(self._outline, self._html,
                                     self._settings.get_int(OUTLINE_SASH_SETTING_KEY) or 260)
         if not self._show_outline.GetValue():
@@ -165,12 +168,35 @@ class ConversationView(wx.Panel):
         self._update_buttons()
 
     # ------------------------------------------------------------------
-    def _palette(self):
-        try:
-            dark = wx.SystemSettings.GetAppearance().IsDark()
-        except AttributeError:
-            dark = False
-        return DARK if dark else LIGHT
+    def _want_dark(self) -> bool:
+        value = theme.normalize(self._settings.get(theme.THEME_SETTING_KEY))
+        return theme.resolve_dark(value, theme.system_is_dark() if value == theme.SYSTEM else False)
+
+    def _palette(self) -> Palette:
+        return DARK if self._dark else LIGHT
+
+    def _apply_widget_colours(self) -> None:
+        # The outline's own background is native; match it to the palette so
+        # a forced theme (before the restart that themes native widgets)
+        # doesn't put dark-palette text on a light list or vice versa.
+        pal = self._palette()
+        for ctrl in (self._outline, self._html):
+            ctrl.SetBackgroundColour(wx.Colour(pal.bg))
+            ctrl.Refresh()
+
+    def refresh_theme(self) -> None:
+        """Re-render if the effective theme changed (setting saved, or the
+        desktop switched light/dark while on "System")."""
+        dark = self._want_dark()
+        if dark == self._dark:
+            return
+        self._dark = dark
+        self._apply_widget_colours()
+        if self._conversation is None:
+            self.clear()
+            return
+        self._fill_outline()
+        self._render(keep_scroll=True)
 
     def _render(self, keep_scroll: bool = False) -> None:
         if self._conversation is None:
@@ -290,6 +316,7 @@ class ConversationView(wx.Panel):
     def apply_settings(self) -> None:
         """Re-read the viewer options from settings (after File > Preferences
         changed them) and update the toolbar + rendering to match."""
+        self.refresh_theme()
         changed = False
         for key, _label, default, _tooltip in CONVERSATION_OPTIONS:
             box = self._option_boxes[key]
@@ -437,6 +464,7 @@ class ConversationView(wx.Panel):
             show_outline=self._show_outline.GetValue(), qa_only=self._qa_only.GetValue(),
             expand_tools=self._expand_tools.GetValue(), expand_thinking=self._expand_thinking.GetValue(),
             render_markdown=self._render_markdown.GetValue(),
+            theme=theme.normalize(self._settings.get(theme.THEME_SETTING_KEY)),
         )
         try:
             with wx.BusyCursor():

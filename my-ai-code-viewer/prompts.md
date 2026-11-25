@@ -71,14 +71,15 @@ user can export (save as) a conversation into good looking and interactive stati
 The html have options to set/unset each setting
 do you have any questions ? 
 
-# future
-
 # collapse actions
 in conversation details, instead of having actions buttons, move them to a single dropdown / menu "actions". 
 Also add a "Conversation" menu where user have this actions too
 
+# future
+
+
 # theme
-dark/light theme for the app - in preferences -> visual -> theme
+i want to add dark/light theme for the app - in preferences -> visual -> theme - but first a question. Do you know if is it possible to read the system's preference for dark / light desktop theme in the current project ? so we can consider that also in our theme functionality
 
 # docs
 ../docs/my-ai-code-viewer page
@@ -87,3 +88,6 @@ dark/light theme for the app - in preferences -> visual -> theme
 stats charts of conversation length (qa), number of conversations per project
 
 question: explain how this project saves / update the data into mysqlite db, is it at startup ? can we be  sure that when the app starts all the project conversations are updated or when that happens
+
+# tags
+being able to tag a conversatoin or a particular question or answer in a conversation. Objective: after reading, I can tag something as important or "performance" and quickly locate it in the future.
