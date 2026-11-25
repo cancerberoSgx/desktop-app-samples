@@ -12,10 +12,16 @@ AI coding CLIs - currently **Claude Code** and **OpenCode**.
   one-line preview - click to expand, or tick "Expand tool calls" / "Expand
   thinking". Buttons copy a `claude --resume` / `opencode --session` command,
   the session id, or open the project folder / raw transcript.
+- **Export** (File > Export conversation as HTML, Ctrl+S, or the "Export
+  HTML..." button): saves the conversation and its subagents as one
+  self-contained HTML page that works offline. It opens with the viewer's current options, and they can
+  be flipped in the browser (outline, Q&A only, expand tool calls/thinking,
+  render markdown). The page also has search, a light/dark theme and copy buttons on
+  code.
 - **Archive**: every conversation is copied into `~/.my-ai-code-viewer/`
   (SQLite), so it stays readable after Claude Code prunes old transcripts
   (~30 days by default). Rescans run every minute and are incremental.
-- **Preferences**: where to find `~/.claude/projects` and
+- **File > Preferences**: where to find `~/.claude/projects` and
   `~/.local/share/opencode/opencode.db`.
 
 ## Run

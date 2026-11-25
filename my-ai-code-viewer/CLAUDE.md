@@ -10,7 +10,7 @@ each conversation. Click a project -> its conversations; click a conversation ->
 its content (prompts, replies, tool calls/results, thinking).
 
 Templated from the sibling `my-redis-viewer` app: same composition root,
-repository pattern, `.sql` migrations, settings table, collapsible sidebar,
+repository pattern, `.sql` migrations, settings table,
 `AsyncTaskRunner`, VERSION/PyInstaller/AUR/workflow setup. Profiles and
 datasources were deliberately **not** carried over (explicit product decision).
 
@@ -79,8 +79,9 @@ providers that share a path into one `ProjectGroup` for the UI.
 
 ### UI
 
-- `frame.py` - composition root; sidebar (Projects / Preferences / About, order
-  must match `SIDEBAR_ITEMS`), sync scheduling.
+- `frame.py` - composition root; hosts `ProjectsPage` directly (no sidebar -
+  removed on purpose, unlike the sibling apps), menus (File > Rescan F5 / Export
+  conversation as HTML Ctrl+S / Preferences Ctrl+, / Exit, Help > About), sync scheduling.
 - `projects_page.py` - splitters: projects `ListCtrl` | conversations
   `TreeListCtrl` (subagents as children) | `ConversationView`. Restores last
   project/conversation and sash positions from settings; `refresh_after_sync()`
@@ -118,8 +119,28 @@ providers that share a path into one `ProjectGroup` for the UI.
   (code -> bgcolor table, bordered tables, headings shifted down), raw HTML is
   escaped and only http(s)/mailto links stay clickable. Off (or the library
   missing) falls back to `_markdownish` (fences + headings only).
-- `preferences_page.py` - Claude projects dir + OpenCode DB path (stored in
-  `settings`, defaults from each provider's `default_*()`).
+- `conversation_export.py` - File > Export conversation as HTML (Ctrl+S) /
+  the "Export HTML..." button (`ConversationView.export_html`). It is a pure renderer
+  separate from `conversation_html` because it targets a real browser: one
+  self-contained file (inline CSS/JS, no CDN, works offline), rendered once
+  with every block present, and the toggles are flipped client-side. Q&A only =
+  `.nonqa` blocks hidden by `body.qa-only`. Role headers are computed for
+  both modes (`.h-full`/`.h-qa`). Markdown blocks are embedded twice (`.md`
+  via `markdown_html.markdown_to_html` + `.alt-plain`) and switched by
+  `body.md-off`. Collapsibles are `<details>`. Initial state = the app's
+  current toggles + individually flipped blocks. Subagents are appended as
+  collapsible sections with `s<N>-` id prefixes. Outline scroll-spy, search
+  (`<mark>` highlighting, which opens collapsed ancestors), a theme switch
+  (auto/light/dark, localStorage) and copy buttons are JS-only. The last export folder is
+  saved as setting `export_dir`.
+- `preferences_dialog.py` - modal File > Preferences, two notebook tabs.
+  Sources: Claude projects dir + OpenCode DB path (stored in `settings`,
+  defaults from each provider's `default_*()`); Save rescans only if a path
+  changed. Conversation: the viewer toggles, driven by
+  `conversation_view.CONVERSATION_OPTIONS` (same keys as the toolbar
+  checkboxes); on save the frame calls `ConversationView.apply_settings()`.
+  Window size/position/maximized are saved on close (`frame._save_geometry`).
+  `about_dialog.py` - Help > About.
 
 ### Not done yet (ideas the user has expressed)
 

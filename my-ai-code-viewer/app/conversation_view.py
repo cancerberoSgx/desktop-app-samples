@@ -1,18 +1,38 @@
+import os
+import re
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set
 
 import wx
 import wx.html
 
+from app.conversation_export import ExportOptions, render_export_html
 from app.conversation_html import DARK, LIGHT, outline_item_html, render_conversation_html
 from app.conversation_turns import Turn, split_turns
 from app.models import Conversation
 from app.providers import PROVIDER_LABELS
-from app.repositories import (OUTLINE_SASH_SETTING_KEY, QA_ONLY_SETTING_KEY, RENDER_MARKDOWN_SETTING_KEY,
+from app.version import get_version
+from app.repositories import (EXPORT_DIR_SETTING_KEY, OUTLINE_SASH_SETTING_KEY, QA_ONLY_SETTING_KEY, RENDER_MARKDOWN_SETTING_KEY,
                               SHOW_OUTLINE_SETTING_KEY, SHOW_THINKING_SETTING_KEY, SHOW_TOOLS_SETTING_KEY,
                               IndexRepository, SettingsRepository)
+
+# Viewer options: (setting key, label, default, tooltip). Shown both as
+# toolbar checkboxes and on the Conversation tab of File > Preferences.
+CONVERSATION_OPTIONS = (
+    (SHOW_OUTLINE_SETTING_KEY, "Outline", False,
+     "List of prompts and answers; click one to jump to it"),
+    (QA_ONLY_SETTING_KEY, "Q&A only", True,
+     "Show only each prompt and its final answer (hide tool calls, thinking and intermediate replies)"),
+    (SHOW_TOOLS_SETTING_KEY, "Expand tool calls", False,
+     "Show tool calls and results expanded instead of collapsed"),
+    (SHOW_THINKING_SETTING_KEY, "Expand thinking", False,
+     "Show thinking blocks expanded instead of collapsed"),
+    (RENDER_MARKDOWN_SETTING_KEY, "Render markdown", True,
+     "Render assistant replies and thinking as markdown (off: plain text with code blocks)"),
+)
 
 RESUME_COMMANDS = {
     "claude-code": "claude --resume {id}",
@@ -48,32 +68,30 @@ class ConversationView(wx.Panel):
         self._positions: Optional[Dict[str, int]] = None
 
         toolbar = wx.WrapSizer(wx.HORIZONTAL)
-        self._expand_tools = wx.CheckBox(self, label="Expand tool calls")
-        self._expand_tools.SetValue(self._settings.get_bool(SHOW_TOOLS_SETTING_KEY))
-        self._expand_thinking = wx.CheckBox(self, label="Expand thinking")
-        self._expand_thinking.SetValue(self._settings.get_bool(SHOW_THINKING_SETTING_KEY))
-        self._render_markdown = wx.CheckBox(self, label="Render markdown")
-        self._render_markdown.SetValue(self._settings.get_bool(RENDER_MARKDOWN_SETTING_KEY, default=True))
-        self._render_markdown.SetToolTip("Render assistant replies and thinking as markdown "
-                                         "(off: plain text with code blocks)")
-        self._show_outline = wx.CheckBox(self, label="Outline")
-        self._show_outline.SetValue(self._settings.get_bool(SHOW_OUTLINE_SETTING_KEY, default=True))
-        self._show_outline.SetToolTip("List of prompts and answers; click one to jump to it")
-        self._qa_only = wx.CheckBox(self, label="Q&&A only")
-        self._qa_only.SetValue(self._settings.get_bool(QA_ONLY_SETTING_KEY))
-        self._qa_only.SetToolTip("Show only each prompt and its final answer "
-                                 "(hide tool calls, thinking and intermediate replies)")
+        self._option_boxes: Dict[str, wx.CheckBox] = {}
+        for key, label, default, tooltip in CONVERSATION_OPTIONS:
+            box = wx.CheckBox(self, label=label.replace("&", "&&"))
+            box.SetValue(self._settings.get_bool(key, default=default))
+            box.SetToolTip(tooltip)
+            self._option_boxes[key] = box
+        self._show_outline = self._option_boxes[SHOW_OUTLINE_SETTING_KEY]
+        self._qa_only = self._option_boxes[QA_ONLY_SETTING_KEY]
+        self._expand_tools = self._option_boxes[SHOW_TOOLS_SETTING_KEY]
+        self._expand_thinking = self._option_boxes[SHOW_THINKING_SETTING_KEY]
+        self._render_markdown = self._option_boxes[RENDER_MARKDOWN_SETTING_KEY]
         self._copy_resume_btn = wx.Button(self, label="Copy resume cmd")
         self._copy_id_btn = wx.Button(self, label="Copy id")
         self._open_folder_btn = wx.Button(self, label="Open folder")
         self._open_source_btn = wx.Button(self, label="Open file")
-        for ctrl in (self._show_outline, self._qa_only, self._expand_tools, self._expand_thinking,
-                     self._render_markdown):
+        self._export_btn = wx.Button(self, label="Export HTML...")
+        for ctrl in self._option_boxes.values():
             toolbar.Add(ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
-        for btn in (self._copy_resume_btn, self._copy_id_btn, self._open_folder_btn, self._open_source_btn):
+        for btn in (self._copy_resume_btn, self._copy_id_btn, self._open_folder_btn, self._open_source_btn,
+                    self._export_btn):
             toolbar.Add(btn, 0, wx.RIGHT | wx.BOTTOM, 4)
         self._copy_resume_btn.SetToolTip("Copy a shell command that reopens this conversation in its CLI")
         self._open_source_btn.SetToolTip("Open the raw transcript file / database")
+        self._export_btn.SetToolTip("Save this conversation as an interactive, self-contained HTML page")
 
         self._split = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE | wx.SP_3DSASH)
         self._split.SetMinimumPaneSize(120)
@@ -109,6 +127,7 @@ class ConversationView(wx.Panel):
         self._copy_id_btn.Bind(wx.EVT_BUTTON, self._on_copy_id)
         self._open_folder_btn.Bind(wx.EVT_BUTTON, self._on_open_folder)
         self._open_source_btn.Bind(wx.EVT_BUTTON, self._on_open_source)
+        self._export_btn.Bind(wx.EVT_BUTTON, lambda evt: self.export_html())
 
         self.clear()
 
@@ -265,9 +284,31 @@ class ConversationView(wx.Panel):
             if not self._outline.IsRowVisible(index):
                 self._outline.ScrollToRow(index)
 
+    def apply_settings(self) -> None:
+        """Re-read the viewer options from settings (after File > Preferences
+        changed them) and update the toolbar + rendering to match."""
+        changed = False
+        for key, _label, default, _tooltip in CONVERSATION_OPTIONS:
+            box = self._option_boxes[key]
+            value = self._settings.get_bool(key, default=default)
+            if box.GetValue() != value:
+                box.SetValue(value)
+                changed = True
+        if not changed:
+            return
+        self._apply_outline_visibility()
+        self._expanded = set()
+        index = self._current_turn_index() if self._turns else -1
+        self._render()
+        if 0 <= index < len(self._turns):
+            self._scroll_to(f"turn:{self._turns[index].number}")
+
     def _on_toggle_outline(self, event: wx.CommandEvent) -> None:
+        self._settings.set_bool(SHOW_OUTLINE_SETTING_KEY, self._show_outline.GetValue())
+        self._apply_outline_visibility()
+
+    def _apply_outline_visibility(self) -> None:
         show = self._show_outline.GetValue()
-        self._settings.set_bool(SHOW_OUTLINE_SETTING_KEY, show)
         if show and not self._split.IsSplit():
             self._split.SplitVertically(self._outline, self._html,
                                         self._settings.get_int(OUTLINE_SASH_SETTING_KEY) or 260)
@@ -295,6 +336,7 @@ class ConversationView(wx.Panel):
         self._copy_id_btn.Enable(has)
         self._open_folder_btn.Enable(has and bool(self._project_path))
         self._open_source_btn.Enable(has and bool(conv.source_path) and not conv.missing_from_source)
+        self._export_btn.Enable(has)
 
     def _on_link(self, href: str) -> None:
         if href.startswith("toggle:"):
@@ -336,12 +378,65 @@ class ConversationView(wx.Panel):
         if self._conversation:
             self._copy(self._conversation.external_id)
 
+    # ------------------------------------------------------------- export
+    def export_html(self) -> None:
+        """Save the open conversation (plus its subagents) as a standalone
+        HTML page that starts with the viewer's current toggles."""
+        conv = self._conversation
+        if conv is None:
+            return
+        start_dir = self._settings.get(EXPORT_DIR_SETTING_KEY) or ""
+        with wx.FileDialog(self, "Export conversation as HTML", defaultDir=start_dir,
+                           defaultFile=export_filename(conv.display_title), wildcard="HTML files (*.html)|*.html",
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = dialog.GetPath()
+        if not path.lower().endswith((".html", ".htm")):
+            path += ".html"
+        subagents = [] if conv.parent_external_id else [
+            (c, self._index.list_messages(c.id))
+            for c in sorted(self._index.list_conversations([conv.project_id]),
+                            key=lambda c: c.started_at or "")
+            if c.parent_external_id == conv.external_id and c.provider == conv.provider
+        ]
+        options = ExportOptions(
+            show_outline=self._show_outline.GetValue(), qa_only=self._qa_only.GetValue(),
+            expand_tools=self._expand_tools.GetValue(), expand_thinking=self._expand_thinking.GetValue(),
+            render_markdown=self._render_markdown.GetValue(),
+        )
+        try:
+            with wx.BusyCursor():
+                page = render_export_html(
+                    conv, self._blocks, project_path=self._project_path,
+                    provider_label=PROVIDER_LABELS.get(conv.provider, conv.provider), options=options,
+                    expanded=self._expanded, subagents=subagents, app_version=get_version(),
+                )
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(page)
+        except OSError as exc:
+            wx.MessageBox(f"Couldn't write {path}:\n{exc}", "Export", wx.OK | wx.ICON_ERROR)
+            return
+        self._settings.set(EXPORT_DIR_SETTING_KEY, os.path.dirname(path))
+        top = self.GetTopLevelParent()
+        if isinstance(top, wx.Frame) and top.GetStatusBar():
+            top.SetStatusText(f"Exported to {path}", 0)
+        if wx.MessageBox(f"Exported to\n{path}\n\nOpen it in the browser?", "Export",
+                         wx.YES_NO | wx.ICON_INFORMATION, self) == wx.YES:
+            wx.LaunchDefaultBrowser(Path(path).resolve().as_uri())
+
     def _on_open_folder(self, event: wx.CommandEvent) -> None:
         _open_path(self._project_path)
 
     def _on_open_source(self, event: wx.CommandEvent) -> None:
         if self._conversation and self._conversation.source_path:
             _open_path(self._conversation.source_path)
+
+
+def export_filename(title: str) -> str:
+    """A filesystem-safe default file name for an exported conversation."""
+    slug = re.sub(r"[^\w.-]+", "-", title.strip()).strip("-.")[:80].rstrip("-.")
+    return f"{slug or 'conversation'}.html"
 
 
 def _shell_quote(path: str) -> str:

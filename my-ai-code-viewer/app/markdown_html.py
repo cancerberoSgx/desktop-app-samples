@@ -113,12 +113,16 @@ _IMG = re.compile(r'<img alt="([^"]*)" src="([^"]*)"[^>]*/?>')
 _UNSAFE_HREF = re.compile(r'href="(?!https?:|mailto:)[^"]*"')
 
 
+def _convert(text: str) -> str:
+    md = _converter()
+    md.reset()
+    return md.convert(_normalize(text))
+
+
 @lru_cache(maxsize=4096)
 def markdown_to_wxhtml(text: str, code_bg: str) -> str:
     """Render `text` as markdown; `code_bg` is the code-block background."""
-    md = _converter()
-    md.reset()
-    out = md.convert(_normalize(text))
+    out = _convert(text)
     out = _PRE.sub(lambda m: (f'<table width="100%" cellpadding="6" cellspacing="0"><tr>'
                               f'<td bgcolor="{code_bg}"><pre>{m.group(1).rstrip()}</pre></td></tr></table>'), out)
     # h1 is huge in wx.html; shift down so the biggest is h3.
@@ -129,3 +133,15 @@ def markdown_to_wxhtml(text: str, code_bg: str) -> str:
     # Only web links are clickable; anything else (relative paths, toggle:) is inert.
     out = _UNSAFE_HREF.sub("", out)
     return out
+
+
+@lru_cache(maxsize=4096)
+def markdown_to_html(text: str) -> str:
+    """Render `text` as markdown for a real browser (the HTML export):
+    python-markdown's output kept as is (styled by the page's CSS), with the
+    same safety rewrites - raw HTML escaped, only web links clickable, images
+    shown as links instead of being fetched."""
+    out = _convert(text)
+    out = _IMG.sub(lambda m: f'<a href="{m.group(2)}">[image: {m.group(1) or m.group(2)}]</a>', out)
+    out = _UNSAFE_HREF.sub("", out)
+    return out.replace("<a href=", '<a target="_blank" rel="noopener noreferrer" href=')

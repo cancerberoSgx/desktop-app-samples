@@ -22,9 +22,3 @@ def test_bool_and_int_helpers(settings_repo: SettingsRepository):
     assert settings_repo.get_int("n") == 7
     settings_repo.set("n", "garbage")
     assert settings_repo.get_int("n") is None
-
-
-def test_sidebar_collapsed_roundtrip(settings_repo: SettingsRepository):
-    assert settings_repo.get_sidebar_collapsed() is False
-    settings_repo.set_sidebar_collapsed(True)
-    assert settings_repo.get_sidebar_collapsed() is True

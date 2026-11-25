@@ -54,3 +54,26 @@ put the "About contents" in a help->about dialog
 
 # copy conversation 
 in the conversation details, user is able to copy conversation both full including agents/reasoning or simple (default) , only question and answer
+
+# remember window size
+when users resize the app window or  maximize , this should be rememberd in settings so next time they open the app is of that size
+
+# conversation settings
+
+all the conversation options like outline, q&a only, etc must be also configurable in file->settings, "conversation" section or tab
+the default conversation settings are: 
+q&a only = true
+render markdown = true
+and the rest in false
+
+# export conversation as html
+user can export (save as) a conversation into good looking and interactive static html
+The html have options to set/unset each setting
+do you have any questions ? 
+
+# future
+
+in conversation details, instead of having actions buttons, move them to a single dropdown / menu "actions". 
+
+dark/light theme for the app - in preferences -> visual -> theme
+

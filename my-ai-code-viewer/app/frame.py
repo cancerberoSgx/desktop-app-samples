@@ -5,59 +5,38 @@ from app.db.connection import get_connection
 from app.db.migrator import run_migrations
 from app.db.paths import db_path, migrations_dir
 from app.indexer import SyncResult, sync_in_new_connection
-from app.pages import AboutPage
-from app.preferences_page import PreferencesPage, claude_projects_dir, opencode_db_path
+from app.about_dialog import AboutDialog
+from app.preferences_dialog import PreferencesDialog, claude_projects_dir, opencode_db_path
 from app.projects_page import ProjectsPage
 from app.providers import build_providers
 from app.repositories import IndexRepository, SettingsRepository
-from app.sidebar import SIDEBAR_ITEMS, Sidebar
-from app.version import get_version
 
 AUTO_SYNC_INTERVAL_MS = 60_000
+DEFAULT_SIZE = (1400, 820)
+MIN_SIZE = (400, 300)
 
 
 class MainFrame(wx.Frame):
     def __init__(self) -> None:
-        super().__init__(None, title="My AI Code Viewer", size=(1400, 820))
+        super().__init__(None, title="My AI Code Viewer", size=DEFAULT_SIZE)
 
         conn = get_connection()
         run_migrations(conn, migrations_dir())
         self.settings_repository = SettingsRepository(conn)
         self.index_repository = IndexRepository(conn)
         self._sync_runner = AsyncTaskRunner(self)
+        self._restore_geometry()
 
         self._build_menu_bar()
         self.CreateStatusBar(2)
         self.SetStatusWidths([-1, 320])
         self.SetStatusText("Ready", 0)
 
-        root_panel = wx.Panel(self)
-        root_sizer = wx.BoxSizer(wx.HORIZONTAL)
-
-        self.sidebar = Sidebar(
-            root_panel,
-            on_select=self._on_sidebar_select,
-            on_toggle_collapsed=self._on_sidebar_toggle_collapsed,
-        )
-        root_sizer.Add(self.sidebar, 0, wx.EXPAND)
-
-        # Page order must match SIDEBAR_ITEMS.
-        self.book = wx.Simplebook(root_panel)
         self.projects_page = ProjectsPage(
-            self.book, self.index_repository, self.settings_repository,
+            self, self.index_repository, self.settings_repository,
             on_rescan=self.start_sync, on_status=lambda text: self.SetStatusText(text, 0),
         )
-        self.preferences_page = PreferencesPage(self.book, self.settings_repository, on_saved=self._on_prefs_saved)
-        self.book.AddPage(self.projects_page, "Projects")
-        self.book.AddPage(self.preferences_page, "Preferences")
-        self.book.AddPage(AboutPage(self.book), "About")
-        root_sizer.Add(self.book, 1, wx.EXPAND)
-        root_panel.SetSizer(root_sizer)
 
-        if self.settings_repository.get_sidebar_collapsed():
-            self.sidebar.set_collapsed(True)
-
-        self.Centre()
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
         # Show whatever is already archived immediately, then refresh from
@@ -68,6 +47,41 @@ class MainFrame(wx.Frame):
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, lambda evt: self.start_sync(quiet=True), self._timer)
         self._timer.Start(AUTO_SYNC_INTERVAL_MS)
+
+    # ------------------------------------------------------------------
+    # Window geometry (remembered across runs)
+    # ------------------------------------------------------------------
+    def _restore_geometry(self) -> None:
+        s = self.settings_repository
+        width, height = s.get_int("window_width"), s.get_int("window_height")
+        x, y = s.get_int("window_x"), s.get_int("window_y")
+        if width and height:
+            self.SetSize(max(width, MIN_SIZE[0]), max(height, MIN_SIZE[1]))
+        # Only reuse the position if it still lands on a connected display.
+        if x is not None and y is not None and wx.Display.GetFromPoint(wx.Point(x + 40, y + 40)) != wx.NOT_FOUND:
+            self.SetPosition(wx.Point(x, y))
+        else:
+            self.Centre()
+        # The un-maximized rect, tracked so un-maximizing next run restores it.
+        self._normal_rect = self.GetRect()
+        if s.get_bool("window_maximized"):
+            self.Maximize()
+        self.Bind(wx.EVT_SIZE, self._on_geometry_changed)
+        self.Bind(wx.EVT_MOVE, self._on_geometry_changed)
+
+    def _on_geometry_changed(self, event: wx.Event) -> None:
+        event.Skip()
+        if not self.IsMaximized() and not self.IsIconized() and not self.IsFullScreen():
+            self._normal_rect = self.GetRect()
+
+    def _save_geometry(self) -> None:
+        s = self.settings_repository
+        rect = self._normal_rect
+        s.set_int("window_x", rect.x)
+        s.set_int("window_y", rect.y)
+        s.set_int("window_width", rect.width)
+        s.set_int("window_height", rect.height)
+        s.set_bool("window_maximized", self.IsMaximized())
 
     # ------------------------------------------------------------------
     # Sync
@@ -104,8 +118,10 @@ class MainFrame(wx.Frame):
             self.SetStatusText("Scan errors: " + "; ".join(result.errors[:3]), 0)
         self.SetStatusText(text, 1)
 
-    def _on_prefs_saved(self) -> None:
-        self.start_sync()
+    def _on_prefs_saved(self, sources_changed: bool) -> None:
+        self.projects_page.view.apply_settings()
+        if sources_changed:
+            self.start_sync()
         self.SetStatusText("Preferences saved", 0)
 
     # ------------------------------------------------------------------
@@ -117,6 +133,9 @@ class MainFrame(wx.Frame):
         file_menu = wx.Menu()
         rescan_id = wx.NewIdRef()
         file_menu.Append(rescan_id, "Rescan\tF5")
+        export_id = wx.NewIdRef()
+        file_menu.Append(export_id, "Export conversation as HTML...\tCtrl+S")
+        file_menu.Append(wx.ID_PREFERENCES, "Preferences...\tCtrl+,")
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
 
@@ -128,28 +147,26 @@ class MainFrame(wx.Frame):
         self.SetMenuBar(menu_bar)
 
         self.Bind(wx.EVT_MENU, lambda evt: self.start_sync(), id=rescan_id)
+        self.Bind(wx.EVT_MENU, lambda evt: self.projects_page.view.export_html(), id=export_id)
+        self.Bind(wx.EVT_UPDATE_UI, lambda evt: evt.Enable(
+            hasattr(self, "projects_page") and self.projects_page.view.current_conversation_id() is not None),
+            id=export_id)
         self.Bind(wx.EVT_MENU, lambda evt: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
+        self.Bind(wx.EVT_MENU, self._on_preferences, id=wx.ID_PREFERENCES)
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
-    def _on_sidebar_select(self, index: int) -> None:
-        self.book.ChangeSelection(index)
-        self.SetStatusText(f"Viewing: {SIDEBAR_ITEMS[index][0]}", 0)
-
-    def _on_sidebar_toggle_collapsed(self, collapsed: bool) -> None:
-        self.settings_repository.set_sidebar_collapsed(collapsed)
-
     def _on_close(self, event: wx.CloseEvent) -> None:
         self._timer.Stop()
+        self._save_geometry()
         self.Destroy()
 
     def _on_about(self, event: wx.CommandEvent) -> None:
-        wx.MessageBox(
-            f"My AI Code Viewer {get_version()}\n\n"
-            "Browse your Claude Code and OpenCode projects and conversations.",
-            "About My AI Code Viewer",
-            wx.OK | wx.ICON_INFORMATION,
-            self,
-        )
+        with AboutDialog(self) as dialog:
+            dialog.ShowModal()
+
+    def _on_preferences(self, event: wx.CommandEvent) -> None:
+        with PreferencesDialog(self, self.settings_repository, on_saved=self._on_prefs_saved) as dialog:
+            dialog.ShowModal()

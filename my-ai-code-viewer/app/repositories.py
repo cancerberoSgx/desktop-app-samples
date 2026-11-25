@@ -4,7 +4,6 @@ from typing import Dict, Iterable, List, Optional
 
 from app.models import Conversation, MessageBlock, ParsedConversation, Project, ProjectGroup
 
-SIDEBAR_COLLAPSED_SETTING_KEY = "sidebar_collapsed"
 CLAUDE_PROJECTS_DIR_SETTING_KEY = "claude_projects_dir"
 OPENCODE_DB_PATH_SETTING_KEY = "opencode_db_path"
 SHOW_TOOLS_SETTING_KEY = "show_tool_calls"
@@ -13,6 +12,7 @@ RENDER_MARKDOWN_SETTING_KEY = "render_markdown"
 QA_ONLY_SETTING_KEY = "qa_only"
 SHOW_OUTLINE_SETTING_KEY = "show_outline"
 OUTLINE_SASH_SETTING_KEY = "outline_sash"
+EXPORT_DIR_SETTING_KEY = "export_dir"
 LAST_PROJECT_SETTING_KEY = "last_project_id"
 LAST_CONVERSATION_SETTING_KEY = "last_conversation_id"
 PROVIDER_FILTER_SETTING_KEY = "provider_filter"
@@ -20,7 +20,7 @@ PROVIDER_FILTER_SETTING_KEY = "provider_filter"
 
 class SettingsRepository:
     """Key/value app settings (pure SQL against SQLite) - backs both the
-    Preferences page and the "restore where I left off" bits (sidebar state,
+    Preferences dialog and the "restore where I left off" bits (sash positions,
     last project/conversation, viewer toggles)."""
 
     def __init__(self, conn: sqlite3.Connection):
@@ -55,11 +55,6 @@ class SettingsRepository:
     def set_int(self, key: str, value: Optional[int]) -> None:
         self.set(key, str(value) if value is not None else None)
 
-    def get_sidebar_collapsed(self) -> bool:
-        return self.get_bool(SIDEBAR_COLLAPSED_SETTING_KEY)
-
-    def set_sidebar_collapsed(self, collapsed: bool) -> None:
-        self.set_bool(SIDEBAR_COLLAPSED_SETTING_KEY, collapsed)
 
 
 def _conversation_from_row(row: sqlite3.Row) -> Conversation:

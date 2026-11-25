@@ -11,7 +11,7 @@ import html
 import json
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Set
+from typing import Iterable, List, Set, Tuple
 
 from app.conversation_turns import Turn, first_line, split_turns
 from app.markdown_html import markdown_available, markdown_to_wxhtml
@@ -114,7 +114,8 @@ def tool_summary(block: MessageBlock) -> str:
     return first[:140] + ("..." if len(first) > 140 else "")
 
 
-def _header(conv: Conversation, project_path: str, provider_label: str, pal: Palette) -> str:
+def header_rows(conv: Conversation, project_path: str, provider_label: str) -> List[Tuple[str, str]]:
+    """The conversation's metadata as (label, value) rows; empty values dropped."""
     rows = [
         ("Project", project_path),
         ("Source", provider_label + ("  (archived - no longer on disk)" if conv.missing_from_source else "")),
@@ -132,9 +133,13 @@ def _header(conv: Conversation, project_path: str, provider_label: str, pal: Pal
         ("Branch", conv.git_branch or ""),
         ("Tools", ", ".join(f"{k} x{v}" for k, v in sorted(conv.tools_used.items(), key=lambda kv: -kv[1]))),
     ]
+    return [(k, v) for k, v in rows if v]
+
+
+def _header(conv: Conversation, project_path: str, provider_label: str, pal: Palette) -> str:
     body = "".join(
         f'<tr><td valign="top"><font color="{pal.muted}">{_esc(k)}</font></td><td>{_esc(v)}</td></tr>'
-        for k, v in rows if v
+        for k, v in header_rows(conv, project_path, provider_label)
     )
     return (f'<h3>{_esc(conv.display_title)}</h3>'
             f'<table cellpadding="2" cellspacing="0">{body}</table><hr>')
