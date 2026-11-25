@@ -73,7 +73,17 @@ do you have any questions ?
 
 # future
 
+# collapse actions
 in conversation details, instead of having actions buttons, move them to a single dropdown / menu "actions". 
+Also add a "Conversation" menu where user have this actions too
 
+# theme
 dark/light theme for the app - in preferences -> visual -> theme
 
+# docs
+../docs/my-ai-code-viewer page
+
+# conversation stats
+stats charts of conversation length (qa), number of conversations per project
+
+question: explain how this project saves / update the data into mysqlite db, is it at startup ? can we be  sure that when the app starts all the project conversations are updated or when that happens

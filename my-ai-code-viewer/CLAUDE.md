@@ -80,8 +80,15 @@ providers that share a path into one `ProjectGroup` for the UI.
 ### UI
 
 - `frame.py` - composition root; hosts `ProjectsPage` directly (no sidebar -
-  removed on purpose, unlike the sibling apps), menus (File > Rescan F5 / Export
-  conversation as HTML Ctrl+S / Preferences Ctrl+, / Exit, Help > About), sync scheduling.
+  removed on purpose, unlike the sibling apps), menus (File > Rescan F5 /
+  Preferences Ctrl+, / Exit; Conversation > the view's actions; Help > About),
+  sync scheduling. The menu bar is built after `ProjectsPage` because the
+  Conversation menu is generated from `ConversationView.actions`.
+- Conversation actions (copy resume command, copy id, open project folder,
+  open source file, export HTML Ctrl+S) are `ConversationAction`s defined once
+  in `ConversationView._build_actions` and shown in two places: the view's
+  "Actions ▾" dropdown button (popup menu, enabled state evaluated on open) and
+  the frame's Conversation menu (enabled via `EVT_UPDATE_UI`).
 - `projects_page.py` - splitters: projects `ListCtrl` | conversations
   `TreeListCtrl` (subagents as children) | `ConversationView`. Restores last
   project/conversation and sash positions from settings; `refresh_after_sync()`
@@ -119,8 +126,8 @@ providers that share a path into one `ProjectGroup` for the UI.
   (code -> bgcolor table, bordered tables, headings shifted down), raw HTML is
   escaped and only http(s)/mailto links stay clickable. Off (or the library
   missing) falls back to `_markdownish` (fences + headings only).
-- `conversation_export.py` - File > Export conversation as HTML (Ctrl+S) /
-  the "Export HTML..." button (`ConversationView.export_html`). It is a pure renderer
+- `conversation_export.py` - Conversation > Export as HTML (Ctrl+S) /
+  Actions > Export as HTML... (`ConversationView.export_html`). It is a pure renderer
   separate from `conversation_html` because it targets a real browser: one
   self-contained file (inline CSS/JS, no CDN, works offline), rendered once
   with every block present, and the toggles are flipped client-side. Q&A only =

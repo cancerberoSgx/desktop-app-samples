@@ -27,7 +27,6 @@ class MainFrame(wx.Frame):
         self._sync_runner = AsyncTaskRunner(self)
         self._restore_geometry()
 
-        self._build_menu_bar()
         self.CreateStatusBar(2)
         self.SetStatusWidths([-1, 320])
         self.SetStatusText("Ready", 0)
@@ -36,6 +35,8 @@ class MainFrame(wx.Frame):
             self, self.index_repository, self.settings_repository,
             on_rescan=self.start_sync, on_status=lambda text: self.SetStatusText(text, 0),
         )
+        # After the page: the Conversation menu mirrors the view's actions.
+        self._build_menu_bar()
 
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
@@ -133,24 +134,28 @@ class MainFrame(wx.Frame):
         file_menu = wx.Menu()
         rescan_id = wx.NewIdRef()
         file_menu.Append(rescan_id, "Rescan\tF5")
-        export_id = wx.NewIdRef()
-        file_menu.Append(export_id, "Export conversation as HTML...\tCtrl+S")
         file_menu.Append(wx.ID_PREFERENCES, "Preferences...\tCtrl+,")
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Exit\tAlt+F4")
+
+        view = self.projects_page.view
+        conversation_menu = wx.Menu()
+        for action in view.actions:
+            if action.separator_before and conversation_menu.GetMenuItemCount():
+                conversation_menu.AppendSeparator()
+            item = conversation_menu.Append(wx.ID_ANY, action.label, action.help)
+            self.Bind(wx.EVT_MENU, lambda evt, a=action: a.run(), item)
+            self.Bind(wx.EVT_UPDATE_UI, lambda evt, a=action: evt.Enable(a.enabled()), item)
 
         help_menu = wx.Menu()
         help_menu.Append(wx.ID_ABOUT, "About...")
 
         menu_bar.Append(file_menu, "&File")
+        menu_bar.Append(conversation_menu, "&Conversation")
         menu_bar.Append(help_menu, "&Help")
         self.SetMenuBar(menu_bar)
 
         self.Bind(wx.EVT_MENU, lambda evt: self.start_sync(), id=rescan_id)
-        self.Bind(wx.EVT_MENU, lambda evt: self.projects_page.view.export_html(), id=export_id)
-        self.Bind(wx.EVT_UPDATE_UI, lambda evt: evt.Enable(
-            hasattr(self, "projects_page") and self.projects_page.view.current_conversation_id() is not None),
-            id=export_id)
         self.Bind(wx.EVT_MENU, lambda evt: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, self._on_preferences, id=wx.ID_PREFERENCES)

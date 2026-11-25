@@ -3,6 +3,7 @@ import re
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set
 
@@ -33,6 +34,19 @@ CONVERSATION_OPTIONS = (
     (RENDER_MARKDOWN_SETTING_KEY, "Render markdown", True,
      "Render assistant replies and thinking as markdown (off: plain text with code blocks)"),
 )
+
+
+
+@dataclass(frozen=True)
+class ConversationAction:
+    """One action on the open conversation - shown in the view's "Actions"
+    dropdown and in the frame's Conversation menu."""
+    label: str           # menu label (may include "\tAccel")
+    help: str
+    run: Callable[[], None]
+    enabled: Callable[[], bool]
+    separator_before: bool = False
+
 
 RESUME_COMMANDS = {
     "claude-code": "claude --resume {id}",
@@ -79,19 +93,12 @@ class ConversationView(wx.Panel):
         self._expand_tools = self._option_boxes[SHOW_TOOLS_SETTING_KEY]
         self._expand_thinking = self._option_boxes[SHOW_THINKING_SETTING_KEY]
         self._render_markdown = self._option_boxes[RENDER_MARKDOWN_SETTING_KEY]
-        self._copy_resume_btn = wx.Button(self, label="Copy resume cmd")
-        self._copy_id_btn = wx.Button(self, label="Copy id")
-        self._open_folder_btn = wx.Button(self, label="Open folder")
-        self._open_source_btn = wx.Button(self, label="Open file")
-        self._export_btn = wx.Button(self, label="Export HTML...")
+        self.actions: List[ConversationAction] = self._build_actions()
+        self._actions_btn = wx.Button(self, label="Actions \u25be")
+        self._actions_btn.SetToolTip("Actions on this conversation (also in the Conversation menu)")
         for ctrl in self._option_boxes.values():
             toolbar.Add(ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
-        for btn in (self._copy_resume_btn, self._copy_id_btn, self._open_folder_btn, self._open_source_btn,
-                    self._export_btn):
-            toolbar.Add(btn, 0, wx.RIGHT | wx.BOTTOM, 4)
-        self._copy_resume_btn.SetToolTip("Copy a shell command that reopens this conversation in its CLI")
-        self._open_source_btn.SetToolTip("Open the raw transcript file / database")
-        self._export_btn.SetToolTip("Save this conversation as an interactive, self-contained HTML page")
+        toolbar.Add(self._actions_btn, 0, wx.RIGHT | wx.BOTTOM, 4)
 
         self._split = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE | wx.SP_3DSASH)
         self._split.SetMinimumPaneSize(120)
@@ -123,11 +130,7 @@ class ConversationView(wx.Panel):
         self._expand_tools.Bind(wx.EVT_CHECKBOX, self._on_toggle_defaults)
         self._expand_thinking.Bind(wx.EVT_CHECKBOX, self._on_toggle_defaults)
         self._render_markdown.Bind(wx.EVT_CHECKBOX, self._on_toggle_markdown)
-        self._copy_resume_btn.Bind(wx.EVT_BUTTON, self._on_copy_resume)
-        self._copy_id_btn.Bind(wx.EVT_BUTTON, self._on_copy_id)
-        self._open_folder_btn.Bind(wx.EVT_BUTTON, self._on_open_folder)
-        self._open_source_btn.Bind(wx.EVT_BUTTON, self._on_open_source)
-        self._export_btn.Bind(wx.EVT_BUTTON, lambda evt: self.export_html())
+        self._actions_btn.Bind(wx.EVT_BUTTON, self._on_actions_button)
 
         self.clear()
 
@@ -329,14 +332,44 @@ class ConversationView(wx.Panel):
             self._settings.set_int(OUTLINE_SASH_SETTING_KEY, self._split.GetSashPosition())
         event.Skip()
 
+    # ------------------------------------------------------------ actions
+    def _build_actions(self) -> List[ConversationAction]:
+        def conv() -> Optional[Conversation]:
+            return self._conversation
+
+        return [
+            ConversationAction(
+                "Copy resume command", "Copy a shell command that reopens this conversation in its CLI",
+                self.copy_resume_command,
+                lambda: conv() is not None and conv().provider in RESUME_COMMANDS and not conv().parent_external_id),
+            ConversationAction("Copy id", "Copy the conversation's session id",
+                               self.copy_id, lambda: conv() is not None),
+            ConversationAction("Open project folder", "Open the project folder in the file manager",
+                               self.open_folder, lambda: conv() is not None and bool(self._project_path),
+                               separator_before=True),
+            ConversationAction("Open source file", "Open the raw transcript file / database",
+                               self.open_source,
+                               lambda: conv() is not None and bool(conv().source_path)
+                               and not conv().missing_from_source),
+            ConversationAction("Export as HTML...\tCtrl+S",
+                               "Save this conversation as an interactive, self-contained HTML page",
+                               self.export_html, lambda: conv() is not None, separator_before=True),
+        ]
+
     def _update_buttons(self) -> None:
-        conv = self._conversation
-        has = conv is not None
-        self._copy_resume_btn.Enable(has and conv.provider in RESUME_COMMANDS and not conv.parent_external_id)
-        self._copy_id_btn.Enable(has)
-        self._open_folder_btn.Enable(has and bool(self._project_path))
-        self._open_source_btn.Enable(has and bool(conv.source_path) and not conv.missing_from_source)
-        self._export_btn.Enable(has)
+        self._actions_btn.Enable(self._conversation is not None)
+
+    def _on_actions_button(self, event: wx.CommandEvent) -> None:
+        menu = wx.Menu()
+        for action in self.actions:
+            if action.separator_before and menu.GetMenuItemCount():
+                menu.AppendSeparator()
+            item = menu.Append(wx.ID_ANY, action.label.split("\t", 1)[0], action.help)
+            item.Enable(action.enabled())
+            menu.Bind(wx.EVT_MENU, lambda evt, a=action: a.run(), item)
+        btn = self._actions_btn
+        btn.PopupMenu(menu, wx.Point(0, btn.GetSize().height))
+        menu.Destroy()
 
     def _on_link(self, href: str) -> None:
         if href.startswith("toggle:"):
@@ -368,13 +401,13 @@ class ConversationView(wx.Panel):
         if isinstance(top, wx.Frame) and top.GetStatusBar():
             top.SetStatusText(f"Copied: {text}", 0)
 
-    def _on_copy_resume(self, event: wx.CommandEvent) -> None:
+    def copy_resume_command(self) -> None:
         conv = self._conversation
         if conv:
             cmd = RESUME_COMMANDS[conv.provider].format(id=conv.external_id)
             self._copy(f"cd {_shell_quote(self._project_path)} && {cmd}" if self._project_path else cmd)
 
-    def _on_copy_id(self, event: wx.CommandEvent) -> None:
+    def copy_id(self) -> None:
         if self._conversation:
             self._copy(self._conversation.external_id)
 
@@ -425,10 +458,10 @@ class ConversationView(wx.Panel):
                          wx.YES_NO | wx.ICON_INFORMATION, self) == wx.YES:
             wx.LaunchDefaultBrowser(Path(path).resolve().as_uri())
 
-    def _on_open_folder(self, event: wx.CommandEvent) -> None:
+    def open_folder(self) -> None:
         _open_path(self._project_path)
 
-    def _on_open_source(self, event: wx.CommandEvent) -> None:
+    def open_source(self) -> None:
         if self._conversation and self._conversation.source_path:
             _open_path(self._conversation.source_path)
 
