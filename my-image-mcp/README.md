@@ -165,6 +165,12 @@ list with descriptions.
 RGB strings (`"#ff0000"`, `"red"`, `"255,0,0"`), which avoids the classic BGR
 mix-up. Coordinates are pixels, origin top-left.
 
+Drawing tools also return a new image, so several drawings have to be
+chained (each call takes the previous output) or done in one `run_pipeline`.
+If two drawing calls start from the same handle, for example because a model
+ran them in parallel, each result has only its own shape. The second result
+then carries a `warning` naming the handle the model probably meant.
+
 ### The generic bridge: `cv_call`
 
 Anything without a curated tool (feature detectors, Hough transforms, optical

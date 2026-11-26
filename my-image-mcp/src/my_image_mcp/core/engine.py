@@ -56,6 +56,10 @@ class Engine:
         self.store = Store(self.settings.max_store_mb * 1024 * 1024)
         self.history: list[Step] = []
         self.producer: dict[str, int] = {}  # handle -> index of the step that created it
+        # image handle -> index of the last drawing step that took it as input.
+        # Drawing ops return a new image, so a second drawing on the same input
+        # silently drops the first one; we warn the model when that happens.
+        self.drawn_on: dict[str, int] = {}
 
     # ------------------------------------------------------------ handles
 
@@ -127,12 +131,35 @@ class Engine:
             h = self.store.put(kind, value)
             handles.append(h)
             outputs.append({"handle": h, "kind": kind, **describe(kind, value)})
+        warning = self._redraw_warning(spec, canonical)
         self._record(spec.name, canonical, inputs, handles)
+        if spec.module == "drawing" and isinstance(canonical.get("image"), str):
+            self.drawn_on[canonical["image"]] = self.history[-1].index
         response: dict[str, Any] = {}
         if outputs:
             response["outputs"] = outputs
         response.update(result.data)
+        if warning:
+            response["warning"] = warning
         return response
+
+    def _redraw_warning(self, spec: OpSpec, canonical: dict[str, Any]) -> str | None:
+        """Warn when a drawing op is applied to an image another drawing op
+        already used as input: the new result won't contain that drawing (the
+        usual cause is parallel drawing calls on the same handle)."""
+        if spec.module != "drawing":
+            return None
+        image = canonical.get("image")
+        prev = self.drawn_on.get(image) if isinstance(image, str) else None
+        if prev is None:
+            return None
+        step = self.history[prev]
+        drawn = step.outputs[0] if step.outputs else "?"
+        return (
+            f"{image} was already drawn on by {step.op} (-> {drawn}); this result does NOT include that drawing. "
+            f"If you meant to add to it, draw on {drawn} instead: chain drawing calls one after another "
+            f'(never in parallel on the same handle), or use run_pipeline with "$prev".'
+        )
 
     def _execute_cv_call(self, args: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
         function = args.get("function")

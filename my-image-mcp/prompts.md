@@ -27,7 +27,11 @@ can you start now ?
 add a how can I build this app locally (in linux) section in readme
 
 
+when I've executed this with claude-code works but claude said : 
 
+Something I noticed about my-image-mcp: every drawing tool returns a new image and leaves its input unchanged, so drawing calls on the same image can't run in parallel. When I drew two ellipses at once, each landed on a separate copy and neither copy had both. I redrew one ellipse in order, and the saved file has all five shapes. To do several drawings in one call, run_pipeline is the safer option.
+
+is this something we should take care about ? maybe by default working on the same image but also yesallowing current behavior with a flag ? what do you think ? 
 
 
 ---

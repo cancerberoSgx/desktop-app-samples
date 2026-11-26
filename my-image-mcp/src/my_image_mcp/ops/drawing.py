@@ -11,7 +11,7 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from ..core.registry import op
+from ..core.registry import REGISTRY, op
 from ..core.types import Contours, Img, Result
 from ._util import channels, ensure_color_for, parse_color
 
@@ -245,3 +245,15 @@ def draw_markers(
             mt = getattr(cv2, f"MARKER_{marker.upper()}")
             cv2.drawMarker(out, (int(x), int(y)), c, mt, size, thickness, cv2.LINE_AA)
     return Result([out], {"count": len(points)})
+
+
+# Appended to every drawing tool's description, because models tend to fire
+# several drawing calls on the same image in parallel and lose all but one.
+_CHAIN_NOTE = (
+    "Returns a NEW image handle; the input is unchanged. To draw several things, pass each "
+    "call's output to the next call (sequentially, never in parallel on the same handle), "
+    'or do them all in one run_pipeline call using "$prev".'
+)
+for _spec in REGISTRY.values():
+    if _spec.module == "drawing":
+        _spec.description = f"{_spec.description}\n\n{_CHAIN_NOTE}"

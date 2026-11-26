@@ -80,3 +80,24 @@ def test_cv_call_constants_and_tuple_results(engine, img):
     assert isinstance(res[0], float) and res[1]["kind"] == "image"
     m = engine.execute("cv_call", {"function": "getRotationMatrix2D", "args": [[10, 10], 45, 1.0]})["result"]
     assert np.array(m).shape == (2, 3)
+
+
+def test_redraw_on_same_input_warns(engine, img):
+    first = engine.execute("draw_circle", {"image": img, "cx": 50, "cy": 50, "radius": 10})
+    assert "warning" not in first
+    drawn = first["outputs"][0]["handle"]
+    # Drawing on the original again (e.g. a parallel call) drops the circle: warn.
+    second = engine.execute("draw_ellipse", {"image": img, "cx": 90, "cy": 90, "axis_x": 20, "axis_y": 10})
+    assert drawn in second["warning"] and "draw_circle" in second["warning"]
+    # Chaining on the drawn output is the intended pattern: no warning.
+    third = engine.execute("draw_line", {"image": drawn, "x1": 0, "y1": 0, "x2": 10, "y2": 10})
+    assert "warning" not in third
+    # Non-drawing ops on an already-drawn input are fine.
+    assert "warning" not in engine.execute("blur", {"image": img, "ksize": 3})
+
+
+def test_drawing_descriptions_explain_chaining():
+    from my_image_mcp.core.registry import REGISTRY
+
+    drawing = [s for s in REGISTRY.values() if s.module == "drawing"]
+    assert drawing and all("NEW image handle" in s.description for s in drawing)
