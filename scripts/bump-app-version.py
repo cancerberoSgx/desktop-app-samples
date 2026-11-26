@@ -94,6 +94,22 @@ def main() -> None:
     version_file.write_text(f"{new_version}\n")
     updated_files = [version_file]
 
+    # Python-packaged apps (e.g. my-image-mcp) also carry the version in
+    # pyproject.toml's [project] table; CI checks the two agree.
+    pyproject_file = app_dir / "pyproject.toml"
+    if pyproject_file.is_file():
+        text = pyproject_file.read_text()
+        new_text = re.sub(r'(?m)^version = "[^"]*"$', f'version = "{new_version}"', text, count=1)
+        if new_text != text:
+            pyproject_file.write_text(new_text)
+            updated_files.append(pyproject_file)
+            # uv.lock records the project's own version; CI runs `uv sync --locked`.
+            if (app_dir / "uv.lock").is_file():
+                result = subprocess.run(["uv", "lock"], cwd=app_dir, capture_output=True, text=True)
+                if result.returncode != 0:
+                    fail(f"uv lock failed:\n{result.stderr}")
+                updated_files.append(app_dir / "uv.lock")
+
     if has_aur:
         pkgbuild_text = re.sub(r"^pkgver=.*$", f"pkgver={new_version}", pkgbuild_text, flags=re.MULTILINE)
         pkgbuild_text = re.sub(r"^pkgrel=.*$", f"pkgrel={new_pkgrel}", pkgbuild_text, flags=re.MULTILINE)

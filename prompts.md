@@ -58,6 +58,7 @@ should I use flatpack, snap or snapcraft or other alternatives ? can you summari
 
 # FUTURE
 
+
 # other linux packages 
 .deb, .rpm
 

@@ -1,0 +1,171 @@
+name: my-image-mcp build
+
+# Unlike the PyInstaller desktop apps, my-image-mcp is a pure-Python package:
+# one wheel works on every OS (OpenCV/numpy come as prebuilt wheels from
+# PyPI at install time). So CI here means: lint + test on a Linux/Windows/
+# macOS x oldest/newest-Python matrix, build the wheel + sdist once, smoke-
+# test that wheel on every OS, and attach it to a GitHub Release on tag push.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'my-image-mcp/**'
+      - '.github/workflows/my-image-mcp-build.yml'
+    tags:
+      - 'my-image-mcp-v*'
+  pull_request:
+    paths:
+      - 'my-image-mcp/**'
+      - '.github/workflows/my-image-mcp-build.yml'
+
+defaults:
+  run:
+    working-directory: my-image-mcp
+
+jobs:
+  # VERSION is the repo-wide source of truth (see root README "Versioning");
+  # pyproject.toml must agree with it (scripts/bump-app-version.py updates
+  # both), and on a tag push the tag must agree too.
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version and verify VERSION / pyproject.toml / tag agree
+        id: version
+        run: |
+          file_version="$(cat VERSION)"
+          py_version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [ "$file_version" != "$py_version" ]; then
+            echo "::error::VERSION ($file_version) doesn't match pyproject.toml ($py_version)"
+            exit 1
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#my-image-mcp-v}"
+            if [ "$tag_version" != "$file_version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME (version $tag_version) doesn't match my-image-mcp/VERSION ($file_version)"
+              exit 1
+            fi
+          fi
+          echo "value=$file_version" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.10', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+          cache-dependency-glob: my-image-mcp/uv.lock
+
+      # --locked: fail if uv.lock is out of date with pyproject.toml, so CI
+      # always tests exactly the pinned OpenCV/numpy/mcp versions.
+      - name: Install
+        run: uv sync --locked
+
+      - name: Lint
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Test
+        run: uv run pytest -q
+
+  # Early warning for dependency upgrades: re-resolve OpenCV, numpy and the
+  # MCP SDK to their newest allowed versions (within pyproject.toml's ranges)
+  # and run the suite. Non-blocking; if it fails, the locked build is still
+  # fine but `uv lock --upgrade-package ...` isn't safe yet.
+  latest-deps:
+    needs: check-version
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - name: Upgrade and test
+        run: |
+          uv lock --upgrade-package opencv-contrib-python-headless --upgrade-package numpy --upgrade-package mcp
+          uv sync
+          uv run python -c "import cv2, numpy, importlib.metadata as m; print('opencv', cv2.__version__, 'numpy', numpy.__version__, 'mcp', m.version('mcp'))"
+          uv run pytest -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build wheel and sdist
+        run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: my-image-mcp-dist
+          path: my-image-mcp/dist/*
+
+  # Installs the built wheel (not the source tree) into a clean environment
+  # on each OS and lists the tools - catches packaging mistakes (missing
+  # modules, broken entry point) that the in-tree tests can't see.
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: my-image-mcp-dist
+          path: dist
+      - name: Run installed wheel
+        shell: bash
+        working-directory: .
+        run: |
+          wheel="$(ls dist/*.whl)"
+          uvx --from "$wheel" my-image-mcp --version
+          uvx --from "$wheel" my-image-mcp tools | tee tools.txt
+          grep -q '^load_image' tools.txt
+          grep -q '^cv_call' tools.txt
+
+  # On a my-image-mcp-v* tag: publish a GitHub Release with the wheel and
+  # sdist. (To also publish on PyPI, add a job using
+  # pypa/gh-action-pypi-publish with trusted publishing.)
+  release:
+    if: github.ref_type == 'tag'
+    needs: [smoke, check-version]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: my-image-mcp-dist
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "My Image MCP ${{ needs.check-version.outputs.version }}" \
+            --notes "Built from commit ${{ github.sha }}. Install: \`uv tool install ./my_image_mcp-${{ needs.check-version.outputs.version }}-py3-none-any.whl\`"

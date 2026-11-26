@@ -1,0 +1,46 @@
+[project]
+name = "my-image-mcp"
+version = "0.1.0"
+description = "Headless MCP server exposing OpenCV image operations to LLM agents"
+readme = "README.md"
+authors = [
+    { name = "@sebastigurin", email = "sebastigurin@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=2.3,<3",
+    "numpy>=1.26",
+    "opencv-contrib-python-headless>=4.10,<5",
+]
+
+license = "MIT"
+keywords = ["mcp", "opencv", "image-processing", "llm", "model-context-protocol"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+[project.scripts]
+my-image-mcp = "my_image_mcp.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E741", "B008", "B905", "UP007", "UP045"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
