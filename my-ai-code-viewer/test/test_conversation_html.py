@@ -88,5 +88,6 @@ def test_outline_item_html():
     from app.conversation_html import LIGHT, outline_item_html
     from app.conversation_turns import split_turns
     t1, t2 = split_turns(QA_BLOCKS)
-    assert "first question" in outline_item_html(t1, LIGHT) and 'href="answer:1"' in outline_item_html(t1, LIGHT)
+    row = outline_item_html(t1, LIGHT)
+    assert "first question" in row and "<a " not in row and LIGHT.outline_muted in row
     assert "no answer" in outline_item_html(t2, LIGHT)

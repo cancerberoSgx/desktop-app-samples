@@ -55,6 +55,15 @@ RESUME_COMMANDS = {
 }
 
 
+class _Outline(wx.html.SimpleHtmlListBox):
+    """Keeps the rows' own gray text colours when selected (the default
+    repaints every selected row in the system highlight text colour); the
+    selected background is the palette's `outline_sel_bg`."""
+
+    def GetSelectedTextColour(self, colFg):
+        return colFg
+
+
 class _Html(wx.html.HtmlWindow):
     def __init__(self, parent: wx.Window, on_link: Callable[[str], None]) -> None:
         super().__init__(parent, style=wx.html.HW_SCROLLBAR_AUTO)
@@ -104,7 +113,8 @@ class ConversationView(wx.Panel):
 
         self._split = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE | wx.SP_3DSASH)
         self._split.SetMinimumPaneSize(120)
-        self._outline = wx.html.SimpleHtmlListBox(self._split)
+        self._outline = _Outline(self._split)
+        self._outline.SetMargins(4, 4)
         self._html = _Html(self._split, self._on_link)
         self._apply_widget_colours()
         self._split.SplitVertically(self._outline, self._html,
@@ -125,7 +135,6 @@ class ConversationView(wx.Panel):
         self._follow_timer.Start(250)
         self._html.Bind(wx.EVT_SIZE, self._on_html_size)
         self._outline.Bind(wx.EVT_LISTBOX, self._on_outline_select)
-        self._outline.Bind(wx.html.EVT_HTML_LINK_CLICKED, self._on_outline_link)
         self._split.Bind(wx.EVT_SPLITTER_SASH_POS_CHANGED, self._on_outline_sash)
         self._show_outline.Bind(wx.EVT_CHECKBOX, self._on_toggle_outline)
         self._qa_only.Bind(wx.EVT_CHECKBOX, self._on_toggle_qa)
@@ -180,6 +189,7 @@ class ConversationView(wx.Panel):
         # a forced theme (before the restart that themes native widgets)
         # doesn't put dark-palette text on a light list or vice versa.
         pal = self._palette()
+        self._outline.SetSelectionBackground(wx.Colour(pal.outline_sel_bg))
         for ctrl in (self._outline, self._html):
             ctrl.SetBackgroundColour(wx.Colour(pal.bg))
             ctrl.Refresh()
@@ -296,15 +306,6 @@ class ConversationView(wx.Panel):
         if 0 <= index < len(self._turns):
             self._scroll_to(f"turn:{self._turns[index].number}")
             self._last_view_y = self._html.GetViewStart()[1]
-
-    def _on_outline_link(self, event: wx.html.HtmlLinkEvent) -> None:
-        href = event.GetLinkInfo().GetHref()
-        # After the row's own selection handling, so the answer wins.
-        wx.CallAfter(self._jump_to_answer, href)
-
-    def _jump_to_answer(self, href: str) -> None:
-        self._scroll_to(href)
-        self._last_view_y = self._html.GetViewStart()[1]
 
     def _select_outline_turn(self, number: int) -> None:
         index = number - 1

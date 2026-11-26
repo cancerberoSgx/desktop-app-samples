@@ -34,12 +34,18 @@ class Palette:
     error_bg: str
     link: str
     code_bg: str
+    # Outline pane: prompt (gray 1), answer + number (gray 2), selected row.
+    outline_fg: str
+    outline_muted: str
+    outline_sel_bg: str
 
 
 LIGHT = Palette(bg="#ffffff", fg="#1f2328", muted="#6e7781", user_bg="#ddf4ff", assistant_bg="#f6f8fa",
-                tool_bg="#fff8e6", thinking_bg="#f3eefc", error_bg="#ffebe9", link="#0969da", code_bg="#eaeef2")
+                tool_bg="#fff8e6", thinking_bg="#f3eefc", error_bg="#ffebe9", link="#0969da", code_bg="#eaeef2",
+                outline_fg="#3d444d", outline_muted="#8c959f", outline_sel_bg="#e6ebf1")
 DARK = Palette(bg="#1e2228", fg="#e6edf3", muted="#8b949e", user_bg="#12324a", assistant_bg="#262c36",
-               tool_bg="#3a3220", thinking_bg="#2e2640", error_bg="#4a1f22", link="#58a6ff", code_bg="#161b22")
+               tool_bg="#3a3220", thinking_bg="#2e2640", error_bg="#4a1f22", link="#58a6ff", code_bg="#161b22",
+               outline_fg="#c9d1d9", outline_muted="#7d8590", outline_sel_bg="#2d333b")
 
 ROLE_LABELS = {"user": "You", "assistant": "Assistant", "system": "System"}
 
@@ -146,15 +152,17 @@ def _header(conv: Conversation, project_path: str, provider_label: str, pal: Pal
 
 
 def outline_item_html(turn: Turn, pal: Palette) -> str:
-    """One row of the outline pane: prompt preview + a link to the answer."""
+    """One row of the outline pane: prompt preview (gray 1) + answer preview
+    (gray 2), both small. No <a>: wx.html always underlines links; clicking
+    the row jumps to the turn."""
     prompt = _esc(first_line(turn.label_text)) or "<i>(empty prompt)</i>"
     if turn.answer_seq is not None:
-        answer = (f'<a href="answer:{turn.number}"><font color="{pal.link}">'
-                  f'{_esc(first_line(turn.answer_text, 120)) or "answer"}</font></a>')
+        answer = _esc(first_line(turn.answer_text, 120)) or "answer"
     else:
         answer = "<i>no answer</i>"
-    return (f'<font color="{pal.muted}">#{turn.number}</font> <b>{prompt}</b><br>'
-            f'<font size="-1" color="{pal.muted}">&#8627; {answer}</font>')
+    return (f'<font size="-1"><font color="{pal.outline_muted}">#{turn.number}</font> '
+            f'<font color="{pal.outline_fg}"><b>{prompt}</b></font><br>'
+            f'<font color="{pal.outline_muted}">&#8627; {answer}</font></font>')
 
 
 def render_conversation_html(conv: Conversation, blocks: Iterable[MessageBlock], *, project_path: str,

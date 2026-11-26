@@ -8,6 +8,8 @@ from app.conversation_list import (CONVERSATION_COLUMNS, LAST_ACTIVITY_COLUMN, a
 from app.conversation_view import ConversationView
 from app.formatting import format_cost, format_datetime, format_tokens
 from app.models import Conversation, ProjectGroup
+from app.project_list import (PROJECT_COLUMNS, PROJECT_LAST_ACTIVITY_COLUMN, project_default_ascending,
+                              project_header_label, sort_projects)
 from app.providers import PROVIDER_LABELS
 from app.repositories import (
     LAST_CONVERSATION_SETTING_KEY,
@@ -36,6 +38,8 @@ class ProjectsPage(wx.Panel):
         self._current_group: Optional[ProjectGroup] = None
         self._sort_column = LAST_ACTIVITY_COLUMN
         self._sort_ascending = False
+        self._project_sort_column = PROJECT_LAST_ACTIVITY_COLUMN
+        self._project_sort_ascending = False
         self._hiding = False
 
         self._outer = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE | wx.SP_3DSASH)
@@ -71,10 +75,9 @@ class ProjectsPage(wx.Panel):
         rescan.SetToolTip("Re-read Claude Code / OpenCode data now (F5)")
 
         self._projects = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        self._projects.InsertColumn(0, "Project", width=150)
-        self._projects.InsertColumn(1, "Conv.", wx.LIST_FORMAT_RIGHT, width=50)
-        self._projects.InsertColumn(2, "Last activity", width=125)
-        self._projects.InsertColumn(3, "Tools", width=140)
+        for i, (label, width, numeric) in enumerate(PROJECT_COLUMNS):
+            self._projects.InsertColumn(i, label, wx.LIST_FORMAT_RIGHT if numeric else wx.LIST_FORMAT_LEFT, width)
+        self._update_project_headers()
 
         top = wx.BoxSizer(wx.HORIZONTAL)
         top.Add(self._provider_choice, 1, wx.RIGHT, 4)
@@ -90,6 +93,7 @@ class ProjectsPage(wx.Panel):
         self._filter.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, lambda evt: self._filter.SetValue(""))
         rescan.Bind(wx.EVT_BUTTON, lambda evt: self._on_rescan())
         self._projects.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_project_selected)
+        self._projects.Bind(wx.EVT_LIST_COL_CLICK, self._on_project_header_click)
         return panel
 
     def _build_conversations_pane(self, parent: wx.Window) -> wx.Panel:
@@ -160,7 +164,8 @@ class ProjectsPage(wx.Panel):
         selected_path = self._current_group.path if self._current_group else None
         sel = self._provider_choice.GetSelection()
         provider = list(PROVIDER_LABELS)[sel - 1] if sel > 0 else None
-        self._groups = self._index.list_project_groups(provider, self._filter.GetValue().strip())
+        self._groups = sort_projects(self._index.list_project_groups(provider, self._filter.GetValue().strip()),
+                                     self._project_sort_column, self._project_sort_ascending)
         self._projects.Freeze()
         try:
             self._projects.DeleteAllItems()
@@ -273,6 +278,12 @@ class ProjectsPage(wx.Panel):
             dvc.GetColumn(i).SetTitle(header_label(i, self._sort_column, self._sort_ascending))
 
     # ------------------------------------------------- conversation view pane
+    def _update_project_headers(self) -> None:
+        for i in range(len(PROJECT_COLUMNS)):
+            col = self._projects.GetColumn(i)
+            col.SetText(project_header_label(i, self._project_sort_column, self._project_sort_ascending))
+            self._projects.SetColumn(i, col)
+
     def _conversation_sash(self) -> int:
         return self._settings.get_int(CONVERSATION_SASH_SETTING_KEY) or 440
 
@@ -364,6 +375,21 @@ class ProjectsPage(wx.Panel):
             self._sort_ascending = default_ascending(column)
         self._update_headers()
         self._populate_tree()
+
+    def _on_project_header_click(self, event: wx.ListEvent) -> None:
+        column = event.GetColumn()
+        if not (0 <= column < len(PROJECT_COLUMNS)):
+            return
+        if column == self._project_sort_column:
+            self._project_sort_ascending = not self._project_sort_ascending
+        else:
+            self._project_sort_column = column
+            self._project_sort_ascending = project_default_ascending(column)
+        self._update_project_headers()
+        self.reload_projects()
+        selected = self._projects.GetFirstSelected()
+        if selected >= 0:
+            self._projects.EnsureVisible(selected)
 
     def _on_char_hook(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_ESCAPE and self._view_shown():

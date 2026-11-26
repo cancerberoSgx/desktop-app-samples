@@ -88,14 +88,26 @@ I expect some charts and data tables for each
 Do you understand motivation?, do you have any more stats ideas that can be interesting of ia tools users ? do you have any design suggestions ? 
 
 
-# future
-
 
 # theme
 i want to add dark/light theme for the app - in preferences -> visual -> theme - but first a question. Do you know if is it possible to read the system's preference for dark / light desktop theme in the current project ? so we can consider that also in our theme functionality
 
 # docs
 add documentation for this project in ../docs/my-ai-code-viewer like the rest of projects have. You can leave screenshots placeholders for me to generate
+
+# outline ui
+look how the outline view (toc) looks like now (very ugly). Please correct the colors and set the same small fontsize for both q&a. Also use similar colors gray1 and gray2 
+
+# projects sorting
+
+in the projects list, user can sort by projects, conversation and last activity 
+
+
+---
+
+# future
+
+
 
 # tags
 being able to tag a conversatoin or a particular question or answer in a conversation. Objective: after reading, I can tag something as important or "performance" and quickly locate it in the future.

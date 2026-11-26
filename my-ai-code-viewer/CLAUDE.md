@@ -90,7 +90,9 @@ providers that share a path into one `ProjectGroup` for the UI.
   "Actions ▾" dropdown button (popup menu, enabled state evaluated on open) and
   the frame's Conversation menu (enabled via `EVT_UPDATE_UI`).
 - `projects_page.py` - splitters: projects `ListCtrl` | conversations
-  `TreeListCtrl` (subagents as children) | `ConversationView`. Restores last
+  `TreeListCtrl` (subagents as children) | `ConversationView`. Projects
+  columns sort on header click (wx-free `project_list.sort_projects`, arrow
+  in the label; default Last activity, newest first). Restores last
   project/conversation and sash positions from settings; `refresh_after_sync()`
   keeps selection and only re-renders the open conversation if it changed.
   Title filter + sorting live in wx-free `conversation_list.py` (`arrange`):
