@@ -150,20 +150,25 @@ list with descriptions.
 |---|---|
 | io | `load_image`, `save_image`, `create_image` |
 | color | `convert_color`, `split_channels`, `merge_channels`, `brightness_contrast`, `gamma_correction`, `equalize_histogram`, `histogram`, `in_range`, `invert`, `normalize` |
-| filters | `blur`, `sharpen`, `denoise`, `canny`, `gradient`, `convolve` |
+| filters | `blur`, `sharpen`, `denoise`, `canny`, `gradient`, `inpaint`, `convolve` |
 | threshold | `threshold`, `adaptive_threshold` |
 | morphology | `morphology`, `distance_transform`, `connected_components`, `skeletonize`, `fill_holes` |
 | contours | `find_contours`, `contour_properties`, `filter_contours`, `approximate_contours`, `convex_hulls`, `contour_mask` |
-| geometry | `resize`, `crop`, `rotate`, `flip`, `pad`, `warp_affine`, `warp_perspective` |
+| geometry | `resize`, `crop`, `rotate`, `flip`, `pad`, `warp_affine`, `warp_perspective`, `stitch_images` |
 | drawing | `draw_line`, `draw_rectangle`, `draw_circle`, `draw_ellipse`, `draw_polygon`, `draw_text`, `draw_contours`, `draw_boxes`, `draw_markers` |
 | composite | `blend`, `bitwise`, `apply_mask`, `difference`, `overlay` |
+| features | `detect_corners`, `detect_keypoints`, `match_features`, `align_images`, `match_template` |
+| detection | `hough_lines`, `hough_circles`, `detect_haar`, `detect_people`, `detect_codes`, `detect_markers`, `create_marker` |
+| segmentation | `kmeans_colors`, `flood_fill`, `watershed`, `grabcut`, `superpixels`, `mean_shift` |
 | session | `list_images`, `image_info`, `preview`, `delete_images`, `opencv_info` |
 | pipeline | `history`, `export_pipeline`, `run_pipeline` |
 | generic | `cv_call`, `cv_search`, `cv_doc` |
 
 **Conventions.** Pixel data is BGR (OpenCV's order). Color *parameters* are
 RGB strings (`"#ff0000"`, `"red"`, `"255,0,0"`), which avoids the classic BGR
-mix-up. Coordinates are pixels, origin top-left.
+mix-up. Coordinates are pixels, origin top-left. Detections are returned as
+JSON with boxes as `[x, y, width, height]`, the format `draw_boxes` and
+`crop` take. Pass `annotate=true` to also get a marked-up copy of the image.
 
 Drawing tools also return a new image, so several drawings have to be
 chained (each call takes the previous output) or done in one `run_pipeline`.
@@ -173,19 +178,21 @@ then carries a `warning` naming the handle the model probably meant.
 
 ### The generic bridge: `cv_call`
 
-Anything without a curated tool (feature detectors, Hough transforms, optical
-flow, ximgproc, ...) is reachable through `cv_call`. The model can discover it
-with `cv_search("hough")` and `cv_doc("HoughCircles")`, then call it:
+Anything without a curated tool (optical flow, ximgproc filters, photo
+effects, calibration, ...) is reachable through `cv_call`. The model can
+discover it with `cv_search("binarization")` and
+`cv_doc("ximgproc.niBlackThreshold")`, then call it:
 
 ```json
-{"function": "HoughCircles",
- "args": ["img_2", "cv2.HOUGH_GRADIENT", 1.2, 20],
- "kwargs": {"param1": 100, "param2": 30, "minRadius": 5}}
+{"function": "ximgproc.niBlackThreshold",
+ "args": ["img_2", 255, "cv2.THRESH_BINARY", 31, -0.2],
+ "kwargs": {"binarizationMethod": "cv2.ximgproc.BINARIZATION_SAUVOLA"}}
 ```
 
 - Handle strings resolve to stored values. They are copied first, so
   in-place cv2 functions never mutate stored images.
-- `"cv2.NAME"` or `"cv2.A | cv2.B"` resolve to constants.
+- `"cv2.NAME"`, `"cv2.A | cv2.B"` and submodule constants such as
+  `"cv2.ximgproc.BINARIZATION_SAUVOLA"` resolve to their values.
 - `{"$array": [[...]], "dtype": "float32"}` becomes a numpy array, and
   `{"$tuple": [...]}` becomes a tuple.
 - Return values that look like images become new handles. Small arrays and

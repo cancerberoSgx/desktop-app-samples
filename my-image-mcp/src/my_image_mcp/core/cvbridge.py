@@ -73,7 +73,9 @@ _DENY_EXACT = {
 _DENY_PREFIX = ("imread", "imwrite", "read", "write", "save", "load", "open", "dump")
 _DENY_MODULES = {"utils", "samples", "videoio_registry", "Error", "cuda"}
 
-CONST_RE = re.compile(r"^\s*(?:cv2?\.)?([A-Z][A-Z0-9_]*(?:\.[A-Z][A-Z0-9_]*)?)\s*$")
+# Optional lowercase submodules (ximgproc., aruco., ml.), then a name starting
+# uppercase (THRESH_BINARY, Stitcher_PANORAMA), optionally Class.CONSTANT.
+CONST_RE = re.compile(r"^\s*(?:cv2?\.)?((?:[a-z][a-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)?)\s*$")
 
 
 def _denied(name: str) -> bool:

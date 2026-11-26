@@ -70,6 +70,10 @@ def test_every_op_runs(engine, img, name):
     spec = REGISTRY[name]
     if name == "resize":
         res = engine.execute(name, {"image": img, "scale": 0.5})
+    elif name == "create_marker":
+        res = engine.execute(name, {"text": "hello"})
+    elif name == "stitch_images":
+        res = engine.execute(name, {"images": [img, img]})
     else:
         res = engine.execute(name, _args_for(engine, spec, img, cnt))
     assert isinstance(res, dict)

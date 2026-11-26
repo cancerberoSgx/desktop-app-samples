@@ -9,7 +9,7 @@ import numpy as np
 
 from ..core.registry import op
 from ..core.types import Img, Result
-from ._util import border, channels, interp, parse_color
+from ._util import border, channels, interp, parse_color, to_bgr, to_uint8
 
 Interp = Literal["auto", "nearest", "linear", "cubic", "area", "lanczos"]
 
@@ -171,3 +171,28 @@ def warp_perspective(
     flag = cv2.INTER_LINEAR if interpolation == "auto" else interp(interpolation)
     out = cv2.warpPerspective(image, m, (int(width), int(height)), flags=flag)
     return Result([out], {"matrix": m.tolist()})
+
+
+_STITCH_ERRORS = {
+    cv2.Stitcher_ERR_NEED_MORE_IMGS: "not enough overlap/features to connect the images",
+    cv2.Stitcher_ERR_HOMOGRAPHY_EST_FAIL: "could not estimate the transform between images (too little overlap?)",
+    cv2.Stitcher_ERR_CAMERA_PARAMS_ADJUST_FAIL: "camera parameter adjustment failed",
+}
+
+
+@op("geometry")
+def stitch_images(images: list[Img], mode: Literal["panorama", "scans"] = "panorama", trim: bool = True) -> Result:
+    """Stitch overlapping images into one. panorama: photos taken by rotating the camera;
+    scans: flat documents/maps shifted under the camera (affine). Images need roughly 20-50% overlap,
+    order doesn't matter. trim=True cuts the empty margins around the result."""
+    if len(images) < 2:
+        raise ValueError("need at least 2 images")
+    st = cv2.Stitcher_create(cv2.Stitcher_PANORAMA if mode == "panorama" else cv2.Stitcher_SCANS)
+    status, pano = st.stitch([to_bgr(to_uint8(i)) for i in images])
+    if status != cv2.Stitcher_OK:
+        raise ValueError(f"stitching failed: {_STITCH_ERRORS.get(status, f'status {status}')}")
+    if trim:
+        ys, xs = np.nonzero(cv2.cvtColor(pano, cv2.COLOR_BGR2GRAY))
+        if len(xs):
+            pano = pano[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1].copy()
+    return Result([pano], {"width": int(pano.shape[1]), "height": int(pano.shape[0])})

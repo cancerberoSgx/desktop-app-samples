@@ -61,7 +61,7 @@ uv run my-image-mcp run pipeline.json    # replay an exported pipeline
 
 ## Planned (not done)
 
-Feature detection / matching, object & face detection, DNN models (ONNX
-from opencv_zoo with a model cache and a path-checked loader), video
-frames, image resources (`image://` MCP resources), auth for HTTP, a visual
-UI.
+DNN models (ONNX from opencv_zoo with a model cache and a path-checked
+loader; would replace the classic Haar/HOG detectors in `ops/detection.py`
+for faces, people and objects), video frames, image resources (`image://`
+MCP resources), auth for HTTP, a visual UI.

@@ -9,7 +9,20 @@ from importlib import import_module
 
 from ..core.registry import REGISTRY
 
-MODULE_NAMES = ["io", "color", "filters", "threshold", "morphology", "contours", "geometry", "drawing", "composite"]
+MODULE_NAMES = [
+    "io",
+    "color",
+    "filters",
+    "threshold",
+    "morphology",
+    "contours",
+    "geometry",
+    "drawing",
+    "composite",
+    "features",
+    "detection",
+    "segmentation",
+]
 for _m in MODULE_NAMES:
     import_module(f"{__name__}.{_m}")
 

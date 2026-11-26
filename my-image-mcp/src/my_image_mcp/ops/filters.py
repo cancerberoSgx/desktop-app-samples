@@ -113,6 +113,19 @@ def gradient(
 
 
 @op("filters")
+def inpaint(image: Img, mask: Img, radius: int = 5, method: Literal["telea", "navier_stokes"] = "telea") -> Result:
+    """Remove/repair the masked regions (non-zero in mask) by filling them from their surroundings:
+    scratches, dust, text, watermarks, small unwanted objects. Dilate the mask slightly for best
+    results. Works best on thin or small regions; large areas get smeared."""
+    if mask.shape[:2] != image.shape[:2]:
+        raise ValueError("mask must have the same size as image")
+    m = np.where(to_gray(mask) > 0, 255, 0).astype(np.uint8)
+    flag = cv2.INPAINT_TELEA if method == "telea" else cv2.INPAINT_NS
+    out = cv2.inpaint(image, m, radius, flag)
+    return Result([out], {"inpainted_pixels": int(np.count_nonzero(m))})
+
+
+@op("filters")
 def convolve(image: Img, kernel: list[list[float]], normalize_kernel: bool = False, delta: float = 0.0) -> Result:
     """Apply a custom 2D convolution kernel (cv2.filter2D), e.g. [[0,-1,0],[-1,5,-1],[0,-1,0]] to sharpen.
     normalize_kernel divides by the kernel sum."""

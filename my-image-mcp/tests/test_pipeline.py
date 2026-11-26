@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 
+import cv2
 import numpy as np
 import pytest
 
@@ -101,3 +102,14 @@ def test_drawing_descriptions_explain_chaining():
 
     drawing = [s for s in REGISTRY.values() if s.module == "drawing"]
     assert drawing and all("NEW image handle" in s.description for s in drawing)
+
+
+def test_cv_call_resolves_submodule_and_mixed_case_constants():
+    from my_image_mcp.core.cvbridge import resolve_constant
+
+    assert resolve_constant("cv2.ximgproc.BINARIZATION_SAUVOLA") == cv2.ximgproc.BINARIZATION_SAUVOLA
+    assert resolve_constant("cv2.aruco.DICT_5X5_100") == cv2.aruco.DICT_5X5_100
+    assert resolve_constant("cv2.Stitcher_SCANS") == cv2.Stitcher_SCANS
+    assert resolve_constant("cv2.THRESH_BINARY | cv2.THRESH_OTSU") == cv2.THRESH_BINARY | cv2.THRESH_OTSU
+    assert resolve_constant("cv2.KeyPoint") is None  # a class, not a constant
+    assert resolve_constant("cv2.ximgproc") is None
