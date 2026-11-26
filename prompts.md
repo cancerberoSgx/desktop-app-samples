@@ -54,10 +54,12 @@ I want to deliver universal linux packs for these apps
 should I use flatpack, snap or snapcraft or other alternatives ? can you summarize pros and cons on each and comparision table ?
 
 
+---
 
 # FUTURE
 
 # other linux packages 
+.deb, .rpm
 
 # docs
 in /docs, remove any mention to wxPython - just mention "lightweight"

@@ -4,8 +4,8 @@
 
 Each app in this monorepo is versioned independently, with its own semver
 counter and its own git tag namespace: `<app>-v<major>.<minor>.<patch>`
-(e.g. `my-redis-viewer-v1.0.1`). All seven apps use this scheme; six of them
-(everything but my-file-viewer) also have an AUR package that's versioned
+(e.g. `my-redis-viewer-v1.0.1`). All eight apps use this scheme; six of them
+(everything but my-file-viewer and my-image-editor) also have an AUR package that's versioned
 the same way - see `AUR.md` for the AUR-specific side of it.
 
 For every app:
@@ -23,7 +23,7 @@ For every app:
 - **`scripts/bump-app-version.py <app> ...`** bumps `VERSION` and, for an
   app that has an AUR package, the matching `pkgver=`/`pkgrel=` lines in
   `<app>/aur/PKGBUILD` together (and regenerates `.SRCINFO`), so the files
-  can't drift out of sync - for my-file-viewer (no AUR package) it only
+  can't drift out of sync - for my-file-viewer and my-image-editor (no AUR package) it only
   touches `VERSION`:
   - `scripts/bump-app-version.py my-redis-viewer 1.1.0` - set an explicit version.
   - `scripts/bump-app-version.py my-redis-viewer --patch` - bump just the patch number (e.g. `1.0.1` -> `1.0.2`).
