@@ -11,7 +11,7 @@ from app.db.migrator import run_migrations
 from app.db.paths import db_path, migrations_dir
 from app.indexer import SyncResult, sync_in_new_connection
 from app.about_dialog import AboutDialog
-from app.preferences_dialog import PreferencesDialog, claude_projects_dir, opencode_db_path
+from app.preferences_dialog import PreferencesDialog, claude_projects_dir, codex_home, opencode_db_path
 from app.projects_page import ProjectsPage
 from app.providers import build_providers
 from app.repositories import IndexRepository, SettingsRepository
@@ -116,7 +116,8 @@ class MainFrame(wx.Frame):
         if self._sync_runner.is_busy():
             return
         providers = build_providers(claude_projects_dir(self.settings_repository),
-                                    opencode_db_path(self.settings_repository))
+                                    opencode_db_path(self.settings_repository),
+                                    codex_home(self.settings_repository))
         if not quiet:
             self.SetStatusText("Scanning...", 1)
 

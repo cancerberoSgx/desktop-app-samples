@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A wxPython desktop app that lists every project (folder) the user has run an AI
-coding CLI in - currently **Claude Code** and **OpenCode** - and lets them read
+coding CLI in - currently **Claude Code**, **OpenCode** and **Codex** - and lets them read
 each conversation. Click a project -> its conversations; click a conversation ->
 its content (prompts, replies, tool calls/results, thinking).
 
@@ -55,6 +55,20 @@ schema or UI is provider-specific.
   `session.directory` (not OpenCode's `project` table, which is the git root) to
   match Claude Code's per-launch-folder grouping. Placeholder titles
   (`New session - ...`) are dropped so the first prompt is shown instead.
+- **codex.py** - `$CODEX_HOME` (default `~/.codex`, setting `codex_home`):
+  one `sessions/YYYY/MM/DD/rollout-*.jsonl` per thread (+ `archived_sessions/`),
+  lines `{timestamp, type, payload}`. `session_meta` (first line) gives id/cwd/
+  git; `response_item` holds assistant messages, reasoning (summaries only -
+  the rest is encrypted), `function_call`/`custom_tool_call` + `*_output`
+  (matched by `call_id`; error = non-zero exit code); user prompts come from
+  `event_msg` `user_message` (or `item_completed` UserMessage in newer CLIs),
+  because user-role `response_item`s include injected context - only rollouts
+  without such events fall back to them, filtered by prefix. Tokens = last
+  `token_count.total_token_usage` (input includes cached); no cost recorded.
+  `state_<N>.sqlite` (read-only, optional) supplies user-set thread names
+  (folded into the fingerprint) and subagent links (`thread_spawn_edges`, or
+  `session_meta.source.subagent.thread_spawn`). Legacy 2025 `rollout-*.json`
+  files (TypeScript CLI) have no cwd and are skipped.
 
 ### Archive (`app/indexer.py`, `app/repositories.py`, migrations)
 
@@ -155,7 +169,7 @@ providers that share a path into one `ProjectGroup` for the UI.
   conversation (per-conversation match counts, Enter jumps across them) and
   `#c<N>-...` hashes switch conversation.
 - `preferences_dialog.py` - modal File > Preferences, three notebook tabs.
-  Sources: Claude projects dir + OpenCode DB path (stored in `settings`,
+  Sources: Claude projects dir + OpenCode DB path + Codex home (stored in `settings`,
   defaults from each provider's `default_*()`); Save rescans only if a path
   changed. Conversation: the viewer toggles, driven by
   `conversation_view.CONVERSATION_OPTIONS` (same keys as the toolbar

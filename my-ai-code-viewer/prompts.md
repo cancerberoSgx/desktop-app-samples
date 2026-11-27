@@ -115,6 +115,8 @@ Currently users are able to export one conversation. We want to implement them t
 
 # future
 
+codex
+can we also implement codex to see projects and conversations that it use ? do you know how to do it ? do you need me to create some codex threads to test before ? 
 
 
 # tags

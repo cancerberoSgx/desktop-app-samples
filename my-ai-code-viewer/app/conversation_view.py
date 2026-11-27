@@ -52,6 +52,7 @@ class ConversationAction:
 RESUME_COMMANDS = {
     "claude-code": "claude --resume {id}",
     "opencode": "opencode --session {id}",
+    "codex": "codex resume {id}",
 }
 
 

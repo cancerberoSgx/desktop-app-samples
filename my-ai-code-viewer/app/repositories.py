@@ -6,6 +6,7 @@ from app.models import Conversation, MessageBlock, ParsedConversation, Project, 
 
 CLAUDE_PROJECTS_DIR_SETTING_KEY = "claude_projects_dir"
 OPENCODE_DB_PATH_SETTING_KEY = "opencode_db_path"
+CODEX_HOME_SETTING_KEY = "codex_home"
 SHOW_TOOLS_SETTING_KEY = "show_tool_calls"
 SHOW_THINKING_SETTING_KEY = "show_thinking"
 RENDER_MARKDOWN_SETTING_KEY = "render_markdown"

@@ -78,7 +78,7 @@ class ProjectsPage(wx.Panel):
         self._filter.SetDescriptiveText("Filter projects")
         self._filter.ShowCancelButton(True)
         rescan = wx.Button(panel, label="Rescan")
-        rescan.SetToolTip("Re-read Claude Code / OpenCode data now (F5)")
+        rescan.SetToolTip("Re-read Claude Code / OpenCode / Codex data now (F5)")
 
         self._projects = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         for i, (label, width, numeric) in enumerate(PROJECT_COLUMNS):

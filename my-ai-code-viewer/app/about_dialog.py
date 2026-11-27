@@ -24,7 +24,7 @@ class AboutDialog(wx.Dialog):
             self,
             label=(
                 "Browse every project and conversation you've had with AI coding\n"
-                "CLIs - currently Claude Code and OpenCode.\n\n"
+                "CLIs - currently Claude Code, OpenCode and Codex.\n\n"
                 "  - Pick a project folder, then a conversation, to read it\n"
                 "    (tool calls and thinking collapsed by default).\n"
                 "  - Conversations are archived into a local SQLite database, so\n"
