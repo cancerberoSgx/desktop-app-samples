@@ -21,9 +21,9 @@ is escaped; markdown goes through markdown_html's sanitising converter.
 """
 import html
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Iterable, List, Optional, Sequence, Set, Tuple
 
 from app.conversation_html import ROLE_LABELS, TOOL_KINDS, header_rows, tool_summary
 from app.conversation_turns import first_line, split_turns
@@ -116,7 +116,7 @@ def _render_blocks(blocks: List[MessageBlock], prefix: str, options: ExportOptio
         answer_no = answer_of.get(b.seq)
         ident = ""
         if turn_no is not None:
-            ident = f' id="{prefix}turn-{turn_no}"'
+            ident = f' id="{prefix}turn-{turn_no}" data-turn="{turn_no}"'
         elif answer_no is not None:
             ident = f' id="{prefix}answer-{answer_no}"'
         parts.append(f'<div class="{" ".join(classes)}"{ident}>')
@@ -166,20 +166,22 @@ def _meta_table(conv: Conversation, project_path: str, provider_label: str) -> s
     return f'<table class="meta">{rows}</table>'
 
 
-def _outline(turns) -> str:
+def _outline_list(turns, prefix: str, conv_no: int, active: bool) -> str:
+    """One conversation's outline; the page shows the active one's."""
     items = []
     for t in turns:
         prompt = _esc(first_line(t.label_text)) or "<i>(empty prompt)</i>"
         if t.answer_seq is not None:
-            answer = (f'<a class="o-answer" href="#answer-{t.number}">&#8627; '
+            answer = (f'<a class="o-answer" href="#{prefix}answer-{t.number}">&#8627; '
                       f'{_esc(first_line(t.answer_text, 120)) or "answer"}</a>')
         else:
             answer = '<span class="o-answer none">&#8627; no answer</span>'
-        items.append(f'<li data-turn="{t.number}"><a class="o-prompt" href="#turn-{t.number}">'
+        items.append(f'<li data-turn="{t.number}"><a class="o-prompt" href="#{prefix}turn-{t.number}">'
                      f'<span class="o-no">#{t.number}</span> {prompt}</a>{answer}</li>')
     if not items:
         items.append('<li class="muted">No prompts.</li>')
-    return f'<nav id="outline" aria-label="Outline"><ol>{"".join(items)}</ol></nav>'
+    cls = ' class="active"' if active else ""
+    return f'<ol data-conv="{conv_no}"{cls}>{"".join(items)}</ol>'
 
 
 _TOGGLES = (
@@ -195,17 +197,44 @@ def _page_theme(app_theme: str) -> str:
     return app_theme if app_theme in ("light", "dark") else "auto"
 
 
-def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, project_path: str,
-                       provider_label: str, options: ExportOptions, expanded: Optional[Set[int]] = None,
-                       subagents: Sequence[Tuple[Conversation, List[MessageBlock]]] = (),
-                       app_version: str = "", exported_at: Optional[datetime] = None) -> str:
-    """The whole page. `expanded` = seqs the user flipped in the app (so the
-    export opens exactly as it looked); `subagents` are appended as
-    collapsible sections."""
-    md_ok = markdown_available()
-    body_html, turns = _render_blocks(list(blocks), "", options, set(expanded or ()), md_ok)
+@dataclass
+class ProjectExportItem:
+    """One conversation of a project export (subagents ride along)."""
+    conv: Conversation
+    blocks: List[MessageBlock]
+    provider_label: str
+    subagents: Sequence[Tuple[Conversation, List[MessageBlock]]] = ()
+    expanded: Set[int] = field(default_factory=set)
 
-    body_cls = []
+
+def _conversation_section(conv: Conversation, blocks: Sequence[MessageBlock], *, prefix: str, conv_no: int,
+                          project_path: str, provider_label: str, options: ExportOptions, expanded: Set[int],
+                          subagents: Sequence[Tuple[Conversation, List[MessageBlock]]], md_ok: bool,
+                          hidden: bool) -> Tuple[str, list]:
+    """A conversation as a `<section class="conv">`: title, details, blocks
+    and its subagents. `prefix` keeps element ids unique in the page."""
+    body_html, turns = _render_blocks(list(blocks), prefix, options, set(expanded), md_ok)
+    subs = []
+    for i, (sub, sub_blocks) in enumerate(subagents, start=1):
+        sub_html, _ = _render_blocks(list(sub_blocks), f"{prefix}s{i}-", options, set(), md_ok)
+        stats = f"{sub.user_message_count} prompts &middot; {sub.tool_call_count} tool calls"
+        subs.append(f'<details class="subagent" id="{prefix}sub-{i}"><summary><b>{_esc(sub.display_title)}</b>'
+                    f'<span class="preview">{stats}</span></summary><div class="sub-body">'
+                    f"{_meta_table(sub, project_path, provider_label)}{sub_html}</div></details>")
+    subs_html = (f'<section class="subagents"><h2>Subagents ({len(subs)})</h2>{"".join(subs)}</section>'
+                 if subs else "")
+    archived = '<span class="tag">archived</span>' if conv.missing_from_source else ""
+    section_id = f' id="{prefix.rstrip("-")}"' if prefix else ""
+    return (f'<section class="conv"{section_id} data-conv="{conv_no}"{" hidden" if hidden else ""}>'
+            f"<h1>{_esc(conv.display_title)}{archived}</h1>"
+            f'<details class="meta-box"><summary>Details &middot; {_esc(provider_label)} &middot; '
+            f"{_esc(project_path)}</summary>\n{_meta_table(conv, project_path, provider_label)}</details>"
+            f'<div class="conv-main">{body_html}</div>{subs_html}</section>'), turns
+
+
+def _page(*, title: str, options: ExportOptions, md_ok: bool, sidebar: str, sections: str, outline: str,
+          app_version: str, exported_at: Optional[datetime], project: bool) -> str:
+    body_cls = ["project"] if project else []
     if options.show_outline:
         body_cls.append("show-outline")
     if options.qa_only:
@@ -219,21 +248,12 @@ def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, pr
         disabled = " disabled" if key == "markdown" and not md_ok else ""
         toggles.append(f'<label title="{_esc(tip)}"><input type="checkbox" data-opt="{key}"{checked}{disabled}>'
                        f" {_esc(label)}</label>")
-
-    subs = []
-    for i, (sub, sub_blocks) in enumerate(subagents, start=1):
-        sub_html, _ = _render_blocks(list(sub_blocks), f"s{i}-", options, set(), md_ok)
-        stats = f"{sub.user_message_count} prompts &middot; {sub.tool_call_count} tool calls"
-        subs.append(f'<details class="subagent" id="sub-{i}"><summary><b>{_esc(sub.display_title)}</b>'
-                    f'<span class="preview">{stats}</span></summary><div class="sub-body">'
-                    f"{_meta_table(sub, project_path, provider_label)}{sub_html}</div></details>")
-    subs_html = (f'<section id="subagents"><h2>Subagents ({len(subs)})</h2>{"".join(subs)}</section>'
-                 if subs else "")
+    convs_btn = ('<button type="button" id="convs-btn" title="Show / hide the conversation list" '
+                 'aria-label="Conversations">&#9776;</button>' if project else "")
 
     when = (exported_at or datetime.now()).strftime("%Y-%m-%d %H:%M")
     version = f" {_esc(app_version)}" if app_version else ""
-    title = _esc(conv.display_title)
-    archived = '<span class="tag">archived</span>' if conv.missing_from_source else ""
+    title = _esc(title)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -245,7 +265,7 @@ def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, pr
 </head>
 <body class="{" ".join(body_cls)}" data-default-theme="{_esc(_page_theme(options.theme))}">
 <header id="bar">
-  <div class="bar-title" title="{title}">{title}</div>
+  {convs_btn}<div class="bar-title" title="{title}">{title}</div>
   <div class="bar-opts">{"".join(toggles)}</div>
   <div class="bar-tools">
     <div class="search"><input type="search" id="q" placeholder="Search  ( / )" aria-label="Search">
@@ -256,13 +276,9 @@ def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, pr
   </div>
 </header>
 <div id="layout">
-{_outline(turns)}
+{sidebar}<nav id="outline" aria-label="Outline">{outline}</nav>
 <main id="content">
-<h1>{title}{archived}</h1>
-<details class="meta-box"><summary>Details &middot; {_esc(provider_label)} &middot; {_esc(project_path)}</summary>
-{_meta_table(conv, project_path, provider_label)}</details>
-<div id="conv-main">{body_html}</div>
-{subs_html}
+{sections}
 <footer>Exported from My AI Code Viewer{version} on {_esc(when)}</footer>
 </main>
 </div>
@@ -270,6 +286,68 @@ def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, pr
 </body>
 </html>
 """
+
+
+def render_export_html(conv: Conversation, blocks: Iterable[MessageBlock], *, project_path: str,
+                       provider_label: str, options: ExportOptions, expanded: Optional[Set[int]] = None,
+                       subagents: Sequence[Tuple[Conversation, List[MessageBlock]]] = (),
+                       app_version: str = "", exported_at: Optional[datetime] = None) -> str:
+    """One conversation's page. `expanded` = seqs the user flipped in the app
+    (so the export opens exactly as it looked); `subagents` are appended as
+    collapsible sections."""
+    md_ok = markdown_available()
+    section, turns = _conversation_section(
+        conv, list(blocks), prefix="", conv_no=1, project_path=project_path, provider_label=provider_label,
+        options=options, expanded=set(expanded or ()), subagents=subagents, md_ok=md_ok, hidden=False)
+    return _page(title=conv.display_title, options=options, md_ok=md_ok, sidebar="", sections=section,
+                 outline=_outline_list(turns, "", 1, True), app_version=app_version,
+                 exported_at=exported_at, project=False)
+
+
+def _sidebar_item(n: int, item: ProjectExportItem, active: bool) -> str:
+    c = item.conv
+    meta = [format_datetime(c.updated_at or c.started_at), item.provider_label,
+            f"{c.user_message_count} prompt{'s' if c.user_message_count != 1 else ''}"]
+    if item.subagents:
+        meta.append(f"{len(item.subagents)} subagent{'s' if len(item.subagents) != 1 else ''}")
+    if c.missing_from_source:
+        meta.append("archived")
+    cls = ' class="active"' if active else ""
+    return (f'<li><a href="#c{n}" data-conv="{n}"{cls}>'
+            f'<span class="c-title">{_esc(c.display_title)}</span>'
+            f'<span class="c-meta">{_esc(" · ".join(m for m in meta if m))}</span>'
+            f'<span class="c-hits"></span></a></li>')
+
+
+def render_project_export_html(project_name: str, project_path: str, items: Sequence[ProjectExportItem], *,
+                               options: ExportOptions, app_version: str = "",
+                               exported_at: Optional[datetime] = None,
+                               progress: Optional[Callable[[int], None]] = None) -> str:
+    """Several conversations of one project in one page: a conversation list
+    on the left picks the one shown (all are in the page, the others hidden),
+    the outline moves to the right and search covers every conversation.
+    `progress(i)` is called after each conversation is rendered."""
+    md_ok = markdown_available()
+    sections, outlines, entries = [], [], []
+    for n, item in enumerate(items, start=1):
+        section, turns = _conversation_section(
+            item.conv, item.blocks, prefix=f"c{n}-", conv_no=n, project_path=project_path,
+            provider_label=item.provider_label, options=options, expanded=set(item.expanded),
+            subagents=item.subagents, md_ok=md_ok, hidden=n != 1)
+        sections.append(section)
+        outlines.append(_outline_list(turns, f"c{n}-", n, n == 1))
+        entries.append(_sidebar_item(n, item, n == 1))
+        if progress:
+            progress(n)
+    if not items:
+        sections.append('<p class="muted">No conversations.</p>')
+    sidebar = (f'<nav id="convs" aria-label="Conversations"><div class="convs-head">'
+               f'<span title="{_esc(project_path)}">Conversations ({len(items)})</span>'
+               f'<button type="button" id="convs-close" title="Hide the conversation list" '
+               f'aria-label="Hide the conversation list">&#171;</button></div>'
+               f'<ol>{"".join(entries)}</ol></nav>\n')
+    return _page(title=project_name, options=options, md_ok=md_ok, sidebar=sidebar, sections="".join(sections),
+                 outline="".join(outlines), app_version=app_version, exported_at=exported_at, project=True)
 
 
 _CSS = r"""
@@ -310,7 +388,8 @@ button:hover{border-color:var(--border);background:var(--assistant)}
 #outline{display:none;position:sticky;top:var(--bar-h);height:calc(100vh - var(--bar-h));overflow:auto;
 width:310px;flex:none;border-right:1px solid var(--border);padding:8px 0;font-size:13.5px}
 body.show-outline #outline{display:block}
-#outline ol{list-style:none;margin:0;padding:0}
+#outline ol{list-style:none;margin:0;padding:0;display:none}
+#outline ol.active{display:block}
 #outline li{padding:6px 12px;border-left:3px solid transparent}
 #outline li.active{background:var(--active);border-left-color:var(--link)}
 #outline a{display:block;text-decoration:none;color:var(--fg);overflow:hidden;text-overflow:ellipsis;
@@ -319,6 +398,25 @@ display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 #outline .o-answer{color:var(--muted);font-size:12.5px;-webkit-line-clamp:1}
 #outline .o-answer:hover{color:var(--link)}
 .o-no{color:var(--muted);font-weight:400}
+#convs{position:sticky;top:var(--bar-h);height:calc(100vh - var(--bar-h));overflow:auto;width:290px;flex:none;
+border-right:1px solid var(--border);font-size:13.5px}
+body.hide-convs #convs{display:none}
+.convs-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;
+padding:8px 6px 6px 12px;background:var(--bg);color:var(--muted);font-size:12px;font-weight:600;
+text-transform:uppercase;letter-spacing:.03em}
+#convs ol{list-style:none;margin:0;padding:0 0 12px}
+#convs a{display:flex;flex-direction:column;gap:1px;padding:6px 12px;border-left:3px solid transparent;
+text-decoration:none;color:var(--fg)}
+#convs a:hover{background:var(--assistant)}
+#convs a.active{background:var(--active);border-left-color:var(--link)}
+.c-title{font-weight:600;overflow:hidden;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;
+-webkit-box-orient:vertical}
+.c-meta{color:var(--muted);font-size:12px}
+.c-hits{align-self:flex-start;margin-top:2px;font-size:11.5px;border-radius:10px;padding:0 7px;background:var(--hit)}
+.c-hits:empty{display:none}
+body.searching #convs a.nohit{opacity:.45}
+#convs-btn{font-size:17px;line-height:1;padding:3px 8px}
+body.project #outline{order:3;border-right:0;border-left:1px solid var(--border);width:280px}
 #content{flex:1;min-width:0;max-width:1000px;margin:0 auto;padding:12px 28px 80px}
 h1{font-size:22px;margin:12px 0 6px;line-height:1.3;overflow-wrap:anywhere}
 .tag{font-size:12px;font-weight:500;color:var(--muted);border:1px solid var(--border);border-radius:10px;
@@ -377,8 +475,8 @@ details.fold>summary b{flex:none;font-weight:600;font-size:13.5px}
 details[open]>summary .hide-open{display:none}
 .fold-body{padding:6px 0 4px}
 .fold-body pre{background:var(--bg);margin:2px 0}
-#subagents{margin-top:36px;border-top:1px solid var(--border);padding-top:8px}
-#subagents h2{font-size:17px}
+.subagents{margin-top:36px;border-top:1px solid var(--border);padding-top:8px}
+.subagents h2{font-size:17px}
 details.subagent{border:1px solid var(--border);border-radius:10px;padding:8px 14px;margin:0 0 10px}
 .sub-body{margin-top:6px}
 mark.hit{background:var(--hit);color:inherit;border-radius:2px}
@@ -388,17 +486,24 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;text-align:center}
 @media (max-width:820px){
 #outline{position:fixed;left:0;top:var(--bar-h);z-index:15;background:var(--bg);width:min(86vw,320px);
 box-shadow:4px 0 18px rgba(0,0,0,.18)}
+#convs{position:fixed;left:0;top:var(--bar-h);z-index:16;background:var(--bg);width:min(86vw,320px);
+box-shadow:4px 0 18px rgba(0,0,0,.18)}
+body.project #outline{left:auto;right:0;box-shadow:-4px 0 18px rgba(0,0,0,.18)}
 #content{padding:10px 16px 60px}
 .search input{width:110px}
 }
-@media print{#bar,#outline,.copy{display:none!important}details.fold{break-inside:avoid}}
+@media print{#bar,#outline,#convs,.copy{display:none!important}details.fold{break-inside:avoid}}
 """
 
 _JS = r"""
 (function () {
   var body = document.body, root = document.documentElement;
   var bar = document.getElementById('bar'), outline = document.getElementById('outline');
-  var main = document.getElementById('conv-main');
+  var content = document.getElementById('content'), convList = document.getElementById('convs');
+  var sections = Array.prototype.slice.call(content.querySelectorAll('section.conv'));
+  var phone = window.matchMedia('(max-width: 820px)');
+  // The shown conversation (a project export has several, one visible).
+  var active = sections[0] || null, turnEls = [], outlineList = null;
 
   function setBarHeight() { root.style.setProperty('--bar-h', bar.offsetHeight + 'px'); }
   setBarHeight();
@@ -429,7 +534,11 @@ _JS = r"""
   });
 
   /* ---------- turns + outline scroll-spy ---------- */
-  var turnEls = Array.prototype.slice.call(main.querySelectorAll('.blk[id^="turn-"]'));
+  function loadTurns() {
+    turnEls = active ? Array.prototype.slice.call(active.querySelectorAll('.conv-main > .blk[data-turn]')) : [];
+    outlineList = active ? outline.querySelector('ol[data-conv="' + active.dataset.conv + '"]') : null;
+  }
+  loadTurns();
   function currentTurn() {
     var limit = bar.offsetHeight + 40, cur = null;
     for (var i = 0; i < turnEls.length; i++) {
@@ -441,7 +550,7 @@ _JS = r"""
   function spy() {
     if (!body.classList.contains('show-outline')) return;
     var t = currentTurn();
-    var li = t ? outline.querySelector('li[data-turn="' + t.id.slice(5) + '"]') : null;
+    var li = t && outlineList ? outlineList.querySelector('li[data-turn="' + t.dataset.turn + '"]') : null;
     if (li === activeLi) return;
     if (activeLi) activeLi.classList.remove('active');
     activeLi = li;
@@ -459,18 +568,85 @@ _JS = r"""
     requestAnimationFrame(function () { spyQueued = false; spy(); });
   }, {passive: true});
   outline.addEventListener('click', function (e) {
-    if (e.target.closest('a') && window.matchMedia('(max-width: 820px)').matches) {
+    if (e.target.closest('a') && phone.matches) {
       body.classList.remove('show-outline');
       var cb = document.querySelector('input[data-opt="outline"]');
       if (cb) cb.checked = false;
     }
   });
 
-  // On a phone the outline is an overlay - don't open the page covered by it.
-  if (window.matchMedia('(max-width: 820px)').matches && body.classList.contains('show-outline')) {
+  // On a phone the sidebars are overlays - don't open the page covered by them.
+  if (phone.matches && body.classList.contains('show-outline')) {
     body.classList.remove('show-outline');
     var ocb = document.querySelector('input[data-opt="outline"]');
     if (ocb) ocb.checked = false;
+  }
+
+  /* ---------- conversation list (project export) ---------- */
+  function showConversation(section, fromSearch) {
+    if (!section || section === active) return;
+    if (active) active.hidden = true;
+    active = section;
+    active.hidden = false;
+    if (convList) {
+      convList.querySelectorAll('a.active').forEach(function (a) { a.classList.remove('active'); });
+      var link = convList.querySelector('a[data-conv="' + active.dataset.conv + '"]');
+      if (link) {
+        link.classList.add('active');
+        var top = link.offsetTop - convList.scrollTop;
+        if (top < 0 || top + link.offsetHeight > convList.clientHeight)
+          convList.scrollTop = link.offsetTop - convList.clientHeight / 3;
+      }
+    }
+    outline.querySelectorAll('ol.active').forEach(function (ol) { ol.classList.remove('active'); });
+    loadTurns();
+    if (outlineList) outlineList.classList.add('active');
+    activeLi = null;
+    // Picked by hand while searching: Enter continues from this conversation.
+    if (!fromSearch && marks.length) {
+      if (cur >= 0 && marks[cur]) marks[cur].classList.remove('cur');
+      cur = -1;
+      for (var i = 0; i < marks.length; i++) {
+        if (active.contains(marks[i])) { cur = i - 1; break; }
+        if (active.compareDocumentPosition(marks[i]) & Node.DOCUMENT_POSITION_PRECEDING) cur = i;
+      }
+      showCount();
+    }
+  }
+  function followHash() {
+    var id = decodeURIComponent(location.hash.slice(1));
+    var el = id && document.getElementById(id);
+    if (!el || !content.contains(el)) return;
+    var section = el.closest('section.conv');
+    if (section && section !== active) {
+      showConversation(section, false);
+      if (el === section) window.scrollTo(0, 0); else el.scrollIntoView();
+    }
+    spy();
+  }
+  window.addEventListener('hashchange', followHash);
+  if (convList) {
+    var convsBtn = document.getElementById('convs-btn');
+    var hideConvs = phone.matches;
+    try { if (!phone.matches && localStorage.getItem('aicv-convs') === 'hidden') hideConvs = true; } catch (e) {}
+    function setConvs(hidden) {
+      body.classList.toggle('hide-convs', hidden);
+      if (!phone.matches) try { localStorage.setItem('aicv-convs', hidden ? 'hidden' : 'shown'); } catch (e) {}
+    }
+    body.classList.toggle('hide-convs', hideConvs);
+    convsBtn.addEventListener('click', function () { setConvs(!body.classList.contains('hide-convs')); });
+    document.getElementById('convs-close').addEventListener('click', function () { setConvs(true); });
+    convList.addEventListener('click', function (e) {
+      var a = e.target.closest('a[data-conv]');
+      if (!a) return;
+      e.preventDefault();
+      var section = sections[+a.dataset.conv - 1];
+      if (history.replaceState) history.replaceState(null, '', '#' + section.id);
+      showConversation(section, false);
+      window.scrollTo(0, 0);
+      spy();
+      if (phone.matches) body.classList.add('hide-convs');
+    });
   }
 
   /* ---------- option toggles ---------- */
@@ -480,8 +656,8 @@ _JS = r"""
       if (opt === 'outline') body.classList.toggle('show-outline', on);
       else if (opt === 'qa') body.classList.toggle('qa-only', on);
       else if (opt === 'markdown') body.classList.toggle('md-off', !on);
-      else if (opt === 'tools') main.parentNode.querySelectorAll('details.tool').forEach(function (d) { d.open = on; });
-      else if (opt === 'thinking') main.parentNode.querySelectorAll('details.thinking').forEach(function (d) { d.open = on; });
+      else if (opt === 'tools') content.querySelectorAll('details.tool').forEach(function (d) { d.open = on; });
+      else if (opt === 'thinking') content.querySelectorAll('details.thinking').forEach(function (d) { d.open = on; });
       // Keep the reader on the same turn when the page reflows a lot.
       if ((opt === 'qa' || opt === 'markdown') && anchor) anchor.scrollIntoView();
       setBarHeight();
@@ -527,7 +703,6 @@ _JS = r"""
 
   /* ---------- search ---------- */
   var input = document.getElementById('q'), countEl = document.getElementById('qcount');
-  var content = document.getElementById('content');
   var query = '', allMarks = [], marks = [], cur = -1, MAX_HITS = 5000;
 
   function hiddenByMode(el) {
@@ -570,6 +745,20 @@ _JS = r"""
       node.parentNode.replaceChild(frag, node);
     }
   }
+  function showHitsPerConversation() {
+    if (!convList) return;
+    var counts = {};
+    marks.forEach(function (m) {
+      var s = m.closest('section.conv');
+      if (s) counts[s.dataset.conv] = (counts[s.dataset.conv] || 0) + 1;
+    });
+    body.classList.toggle('searching', !!query);
+    convList.querySelectorAll('a[data-conv]').forEach(function (a) {
+      var n = counts[a.dataset.conv] || 0;
+      a.querySelector('.c-hits').textContent = query && n ? n + (n === 1 ? ' match' : ' matches') : '';
+      a.classList.toggle('nohit', !!query && !n);
+    });
+  }
   function showCount() {
     countEl.textContent = !query ? '' : marks.length ? (cur + 1) + '/' + marks.length
       + (allMarks.length >= MAX_HITS ? '+' : '') : 'none';
@@ -580,6 +769,7 @@ _JS = r"""
     cur = (i + marks.length) % marks.length;
     var m = marks[cur];
     m.classList.add('cur');
+    showConversation(m.closest('section.conv'), true);
     for (var d = m.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
     m.scrollIntoView({block: 'center'});
     showCount();
@@ -594,7 +784,16 @@ _JS = r"""
     marks = allMarks.filter(function (m) { return !hiddenByMode(m); });
     allMarks.forEach(function (m) { m.classList.remove('cur'); });
     cur = -1;
-    if (!keepPlace) goTo(0); else showCount();
+    showHitsPerConversation();
+    if (!keepPlace) goTo(firstMarkFromActive()); else showCount();
+  }
+  // A new search starts in the shown conversation, then wraps through the rest.
+  function firstMarkFromActive() {
+    for (var i = 0; i < marks.length; i++) {
+      if (active && (active.contains(marks[i])
+          || (active.compareDocumentPosition(marks[i]) & Node.DOCUMENT_POSITION_FOLLOWING))) return i;
+    }
+    return 0;
   }
   var timer = null;
   input.addEventListener('input', function () {
@@ -619,6 +818,6 @@ _JS = r"""
     }
   });
 
-  spy();
+  if (location.hash) followHash(); else spy();
 })();
 """

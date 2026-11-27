@@ -440,6 +440,21 @@ class ConversationView(wx.Panel):
             self._copy(self._conversation.external_id)
 
     # ------------------------------------------------------------- export
+    def export_options(self) -> ExportOptions:
+        """An export opens with the viewer's current toggles and theme."""
+        return ExportOptions(
+            show_outline=self._show_outline.GetValue(), qa_only=self._qa_only.GetValue(),
+            expand_tools=self._expand_tools.GetValue(), expand_thinking=self._expand_thinking.GetValue(),
+            render_markdown=self._render_markdown.GetValue(),
+            theme=theme.normalize(self._settings.get(theme.THEME_SETTING_KEY)),
+        )
+
+    def expanded_blocks(self, conversation_id: int) -> Set[int]:
+        """Blocks the user flipped in the open conversation (empty for others)."""
+        if self._conversation is not None and self._conversation.id == conversation_id:
+            return set(self._expanded)
+        return set()
+
     def export_html(self) -> None:
         """Save the open conversation (plus its subagents) as a standalone
         HTML page that starts with the viewer's current toggles."""
@@ -461,12 +476,7 @@ class ConversationView(wx.Panel):
                             key=lambda c: c.started_at or "")
             if c.parent_external_id == conv.external_id and c.provider == conv.provider
         ]
-        options = ExportOptions(
-            show_outline=self._show_outline.GetValue(), qa_only=self._qa_only.GetValue(),
-            expand_tools=self._expand_tools.GetValue(), expand_thinking=self._expand_thinking.GetValue(),
-            render_markdown=self._render_markdown.GetValue(),
-            theme=theme.normalize(self._settings.get(theme.THEME_SETTING_KEY)),
-        )
+        options = self.export_options()
         try:
             with wx.BusyCursor():
                 page = render_export_html(

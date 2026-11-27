@@ -76,6 +76,9 @@ class Project:
     name: str
     last_activity: Optional[str]
     conversation_count: int = 0
+    total_tokens: int = 0
+    cost_usd: Optional[float] = None  # sum of known costs; None if none is known
+    cost_unknown: int = 0  # top-level conversations without a recorded cost
 
 
 @dataclass
@@ -89,6 +92,9 @@ class ProjectGroup:
     project_ids: List[int]
     conversation_count: int
     last_activity: Optional[str]
+    total_tokens: int = 0
+    cost_usd: Optional[float] = None
+    cost_unknown: int = 0
 
 
 @dataclass

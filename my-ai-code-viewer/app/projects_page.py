@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import wx
@@ -5,19 +7,23 @@ import wx.dataview as dv
 
 from app.conversation_list import (CONVERSATION_COLUMNS, LAST_ACTIVITY_COLUMN, arrange, default_ascending,
                                    header_label, total_tokens)
-from app.conversation_view import ConversationView
+from app.conversation_export import ProjectExportItem, render_project_export_html
+from app.conversation_view import ConversationView, export_filename
 from app.formatting import format_cost, format_datetime, format_tokens
 from app.models import Conversation, ProjectGroup
-from app.project_list import (PROJECT_COLUMNS, PROJECT_LAST_ACTIVITY_COLUMN, project_default_ascending,
-                              project_header_label, sort_projects)
+from app.project_list import (PROJECT_COLUMNS, PROJECT_LAST_ACTIVITY_COLUMN, format_project_cost,
+                              project_default_ascending, project_header_label, sort_projects)
+from app.project_export_dialog import ProjectExportDialog
 from app.providers import PROVIDER_LABELS
 from app.repositories import (
+    EXPORT_DIR_SETTING_KEY,
     LAST_CONVERSATION_SETTING_KEY,
     LAST_PROJECT_SETTING_KEY,
     PROVIDER_FILTER_SETTING_KEY,
     IndexRepository,
     SettingsRepository,
 )
+from app.version import get_version
 
 PROJECT_SASH_SETTING_KEY = "projects_sash"
 CONVERSATION_SASH_SETTING_KEY = "conversations_sash"
@@ -173,7 +179,9 @@ class ProjectsPage(wx.Panel):
                 self._projects.InsertItem(i, g.name)
                 self._projects.SetItem(i, 1, str(g.conversation_count))
                 self._projects.SetItem(i, 2, format_datetime(g.last_activity))
-                self._projects.SetItem(i, 3, ", ".join(PROVIDER_LABELS.get(p, p) for p in g.providers))
+                self._projects.SetItem(i, 3, format_tokens(g.total_tokens))
+                self._projects.SetItem(i, 4, format_project_cost(g))
+                self._projects.SetItem(i, 5, ", ".join(PROVIDER_LABELS.get(p, p) for p in g.providers))
                 if g.path == selected_path:
                     self._projects.SetItemState(i, wx.LIST_STATE_SELECTED, wx.LIST_STATE_SELECTED)
         finally:
@@ -197,6 +205,78 @@ class ProjectsPage(wx.Panel):
             self._populate_tree()
         if conversation_id in self._conversations:
             self._select_conversation(conversation_id)
+
+    # ----------------------------------------------------------------- export
+    def can_export_project(self) -> bool:
+        return self._current_group is not None and bool(self._conversations)
+
+    def export_project_html(self) -> None:
+        """Projects > Export conversations as HTML: pick conversations of the
+        selected project, then write them as one page with a conversation list."""
+        g = self._current_group
+        if g is None:
+            return
+        convs = self._index.list_conversations(g.project_ids)
+        tops = sorted((c for c in convs if not c.parent_external_id),
+                      key=lambda c: c.updated_at or c.started_at or "", reverse=True)
+        if not tops:
+            return
+        with ProjectExportDialog(self, g.name, tops) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            chosen = dialog.selected()
+        start_dir = self._settings.get(EXPORT_DIR_SETTING_KEY) or ""
+        with wx.FileDialog(self, "Export conversations as HTML", defaultDir=start_dir,
+                           defaultFile=export_filename(f"{g.name} conversations"),
+                           wildcard="HTML files (*.html)|*.html",
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = dialog.GetPath()
+        if not path.lower().endswith((".html", ".htm")):
+            path += ".html"
+
+        # Loading + rendering can take a while for big projects.
+        steps = 2 * len(chosen)
+        progress = wx.ProgressDialog("Export", f"Exporting {len(chosen)} conversations...", maximum=steps,
+                                     parent=self.GetTopLevelParent(),
+                                     style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE | wx.PD_CAN_ABORT)
+        try:
+            items = []
+            for i, c in enumerate(chosen, start=1):
+                subagents = [(s, self._index.list_messages(s.id))
+                             for s in sorted(convs, key=lambda s: s.started_at or "")
+                             if s.parent_external_id == c.external_id and s.provider == c.provider]
+                items.append(ProjectExportItem(
+                    conv=c, blocks=self._index.list_messages(c.id),
+                    provider_label=PROVIDER_LABELS.get(c.provider, c.provider), subagents=subagents,
+                    expanded=self.view.expanded_blocks(c.id)))
+                if not progress.Update(i)[0]:
+                    return
+
+            cancelled = False
+
+            def rendered(n: int) -> None:
+                nonlocal cancelled
+                if not cancelled and not progress.Update(len(chosen) + n)[0]:
+                    cancelled = True
+
+            page = render_project_export_html(g.name, g.path, items, options=self.view.export_options(),
+                                              app_version=get_version(), progress=rendered)
+            if cancelled:
+                return
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(page)
+        except OSError as exc:
+            wx.MessageBox(f"Couldn't write {path}:\n{exc}", "Export", wx.OK | wx.ICON_ERROR, self)
+            return
+        finally:
+            progress.Destroy()
+        self._settings.set(EXPORT_DIR_SETTING_KEY, os.path.dirname(path))
+        self._on_status(f"Exported {len(chosen)} conversations to {path}")
+        if wx.MessageBox(f"Exported {len(chosen)} conversations to\n{path}\n\nOpen it in the browser?", "Export",
+                         wx.YES_NO | wx.ICON_INFORMATION, self) == wx.YES:
+            wx.LaunchDefaultBrowser(Path(path).resolve().as_uri())
 
     # ---------------------------------------------------------------- helpers
     def _select_group_containing(self, project_id: int, show: bool = True) -> None:

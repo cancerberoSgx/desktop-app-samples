@@ -109,8 +109,17 @@ class IndexRepository:
 
     def list_projects(self, provider: Optional[str] = None, text_filter: str = "") -> List[Project]:
         sql = (
-            "SELECT p.*, (SELECT COUNT(*) FROM conversations c WHERE c.project_id = p.id "
-            "AND c.parent_external_id IS NULL) AS conversation_count FROM projects p WHERE 1=1"
+            "SELECT p.*, COALESCE(t.conversation_count, 0) AS conversation_count, "
+            "COALESCE(t.total_tokens, 0) AS total_tokens, t.cost_usd, COALESCE(t.cost_unknown, 0) AS cost_unknown "
+            "FROM projects p LEFT JOIN ("
+            # Subagents count toward tokens/cost (real spend) but not the
+            # conversation count; a missing cost is only flagged for top-level
+            # conversations (Claude subagents never carry one) - as in stats.
+            "SELECT project_id, SUM(parent_external_id IS NULL) AS conversation_count, "
+            "SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS total_tokens, "
+            "SUM(cost_usd) AS cost_usd, "
+            "SUM(parent_external_id IS NULL AND cost_usd IS NULL) AS cost_unknown "
+            "FROM conversations GROUP BY project_id) t ON t.project_id = p.id WHERE 1=1"
         )
         params: list = []
         if provider:
@@ -123,7 +132,8 @@ class IndexRepository:
         return [
             Project(id=r["id"], provider=r["provider"], project_key=r["project_key"], path=r["path"],
                     name=r["name"], last_activity=r["last_activity"],
-                    conversation_count=r["conversation_count"])
+                    conversation_count=r["conversation_count"], total_tokens=r["total_tokens"],
+                    cost_usd=r["cost_usd"], cost_unknown=r["cost_unknown"])
             for r in self._conn.execute(sql, params)
         ]
 
@@ -134,11 +144,16 @@ class IndexRepository:
             if g is None:
                 groups[p.path] = ProjectGroup(path=p.path, name=p.name, providers=[p.provider],
                                               project_ids=[p.id], conversation_count=p.conversation_count,
-                                              last_activity=p.last_activity)
+                                              last_activity=p.last_activity, total_tokens=p.total_tokens,
+                                              cost_usd=p.cost_usd, cost_unknown=p.cost_unknown)
                 continue
             g.providers.append(p.provider)
             g.project_ids.append(p.id)
             g.conversation_count += p.conversation_count
+            g.total_tokens += p.total_tokens
+            g.cost_unknown += p.cost_unknown
+            if p.cost_usd is not None:
+                g.cost_usd = (g.cost_usd or 0.0) + p.cost_usd
             if (p.last_activity or "") > (g.last_activity or ""):
                 g.last_activity = p.last_activity
         return sorted(groups.values(), key=lambda g: (g.last_activity or ""), reverse=True)

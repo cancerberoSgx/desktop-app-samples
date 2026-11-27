@@ -117,3 +117,20 @@ def test_qa_histogram_buckets(index_repo, conn):
     hist = dict(load_stats(conn).qa_histogram)
     assert list(hist) == [label for label, _ in QA_BUCKETS]
     assert (hist["1"], hist["2-3"], hist["4-7"], hist["32+"]) == (1, 1, 1, 1)
+
+
+def test_project_groups_sum_tokens_and_cost(index_repo):
+    blocks = _blocks(("user", "text", "go", None, "2026-03-01T10:00:00Z", False))
+    _save(index_repo, "a", blocks, cost=1.5, input_tokens=10, output_tokens=5)
+    _save(index_repo, "a:agent-1", blocks, parent="a", input_tokens=100, cache_read_tokens=1)
+    _save(index_repo, "b", blocks, input_tokens=4)  # no cost-state line
+    _save(index_repo, "o", blocks, provider="opencode", cost=0.25, output_tokens=7)
+    _save(index_repo, "x", blocks, path="/p/other", output_tokens=3)
+
+    groups = {g.path: g for g in index_repo.list_project_groups()}
+    g = groups["/p/a"]
+    assert g.conversation_count == 3
+    assert g.total_tokens == 10 + 5 + 100 + 1 + 4 + 7
+    assert g.cost_usd == 1.75 and g.cost_unknown == 1
+    other = groups["/p/other"]
+    assert (other.total_tokens, other.cost_usd, other.cost_unknown) == (3, None, 1)

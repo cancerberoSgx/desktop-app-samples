@@ -81,7 +81,8 @@ providers that share a path into one `ProjectGroup` for the UI.
 
 - `frame.py` - composition root; hosts `ProjectsPage` directly (no sidebar -
   removed on purpose, unlike the sibling apps), menus (File > Rescan F5 /
-  Preferences Ctrl+, / Exit; Conversation > the view's actions; Help > About),
+  Preferences Ctrl+, / Exit; Projects > Export conversations as HTML
+  Ctrl+Shift+S; Conversation > the view's actions; Help > About),
   sync scheduling. The menu bar is built after `ProjectsPage` because the
   Conversation menu is generated from `ConversationView.actions`.
 - Conversation actions (copy resume command, copy id, open project folder,
@@ -92,7 +93,9 @@ providers that share a path into one `ProjectGroup` for the UI.
 - `projects_page.py` - splitters: projects `ListCtrl` | conversations
   `TreeListCtrl` (subagents as children) | `ConversationView`. Projects
   columns sort on header click (wx-free `project_list.sort_projects`, arrow
-  in the label; default Last activity, newest first). Restores last
+  in the label; default Last activity, newest first). Tokens/Cost columns are
+  SQL sums in `list_projects` over every conversation incl. subagents; cost
+  gets `*` when a top-level conversation has none recorded (as in Stats). Restores last
   project/conversation and sash positions from settings; `refresh_after_sync()`
   keeps selection and only re-renders the open conversation if it changed.
   Title filter + sorting live in wx-free `conversation_list.py` (`arrange`):
@@ -141,7 +144,16 @@ providers that share a path into one `ProjectGroup` for the UI.
   collapsible sections with `s<N>-` id prefixes. Outline scroll-spy, search
   (`<mark>` highlighting, which opens collapsed ancestors), a theme switch
   (auto/light/dark, localStorage) and copy buttons are JS-only. The last export folder is
-  saved as setting `export_dir`.
+  saved as setting `export_dir`. Each conversation is a `<section class="conv">`
+  and the outline holds one `<ol data-conv>` per conversation, so the same
+  page shell/JS serves Projects > Export conversations as HTML
+  (`render_project_export_html`, driven by `ProjectsPage.export_project_html`
+  + `project_export_dialog.ProjectExportDialog`, a checkable list of the
+  project's top-level conversations, all checked): ids get a `c<N>-` prefix,
+  only the active section is shown, a collapsible conversation list sits on
+  the left (`body.project`, outline moves right), search covers every
+  conversation (per-conversation match counts, Enter jumps across them) and
+  `#c<N>-...` hashes switch conversation.
 - `preferences_dialog.py` - modal File > Preferences, three notebook tabs.
   Sources: Claude projects dir + OpenCode DB path (stored in `settings`,
   defaults from each provider's `default_*()`); Save rescans only if a path

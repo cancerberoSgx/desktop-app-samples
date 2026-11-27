@@ -210,16 +210,25 @@ class MainFrame(wx.Frame):
             self.Bind(wx.EVT_MENU, lambda evt, a=action: a.run(), item)
             self.Bind(wx.EVT_UPDATE_UI, lambda evt, a=action: evt.Enable(a.enabled()), item)
 
+        projects_menu = wx.Menu()
+        export_project_id = wx.NewIdRef()
+        projects_menu.Append(export_project_id, "Export conversations as HTML...\tCtrl+Shift+S",
+                             "Export some or all conversations of the selected project as one HTML page")
+
         help_menu = wx.Menu()
         help_menu.Append(wx.ID_ABOUT, "About...")
 
         menu_bar.Append(file_menu, "&File")
+        menu_bar.Append(projects_menu, "&Projects")
         menu_bar.Append(conversation_menu, "&Conversation")
         menu_bar.Append(help_menu, "&Help")
         self.SetMenuBar(menu_bar)
 
         self.Bind(wx.EVT_MENU, lambda evt: self.start_sync(), id=rescan_id)
         self.Bind(wx.EVT_MENU, self._on_stats, id=stats_id)
+        self.Bind(wx.EVT_MENU, lambda evt: self.projects_page.export_project_html(), id=export_project_id)
+        self.Bind(wx.EVT_UPDATE_UI, lambda evt: evt.Enable(self.projects_page.can_export_project()),
+                  id=export_project_id)
         self.Bind(wx.EVT_MENU, lambda evt: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_about, id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, self._on_preferences, id=wx.ID_PREFERENCES)

@@ -29,8 +29,6 @@ context: both claude and open code chat response / answer texts is markdown but 
 task: add a setting response-as-markdown toggle
 do you have any questions before start ?
 
----
-# future
 
 # conversations sorting and filtering
 in the conversatoins list:
@@ -38,6 +36,9 @@ in the conversatoins list:
     I can sort conversatoins by prompt, tool call, tokens and cost
 When the conversation details screen is open, if I press ESC key it't closed so I can see the conversation list table with full width.
 do you have any questions before start?
+
+
+
 
 # conversation details TOC
 in the conversation details, there are many questions, each question with a sub-assistant and answer. Currently there's no way of see a sumary of all the conversatoin. I would like to see something like a table of contents with an item for each question and its answer. When clicking the table of contents items it shuold take me to the scrolling position of that question or answer
@@ -102,6 +103,13 @@ look how the outline view (toc) looks like now (very ugly). Please correct the c
 
 in the projects list, user can sort by projects, conversation and last activity 
 
+
+# projects cosst and tokens
+in the projects list, add columns for cost and tokens (sum of each conversation). these two columns are also sortable
+
+# export project
+
+Currently users are able to export one conversation. We want to implement them to be able to export all or some conversations of a project. By clicking menu Projects->Export conversations as HTML... a dialog is shown where user can select 1 or more conversations of that project (by default all are selected). The html export format is the same as single conversation HTMl export, but with a left side bar to select the conversation to see.  Any questions?
 
 ---
 

@@ -87,3 +87,40 @@ def test_markdown_rendered_and_plain_alternative(index_repo, claude_root):
 def test_export_filename():
     assert export_filename("Fix: the / bug?") == "Fix-the-bug.html"
     assert export_filename("   ") == "conversation.html"
+
+
+def _project_page(index_repo, claude_root, **kwargs):
+    from app.conversation_export import ProjectExportItem, render_project_export_html
+    group, conv, blocks, subs = _load(index_repo, claude_root)
+    other = MessageBlock("user", "text", "second <conversation>", seq=0)
+    items = [ProjectExportItem(conv, blocks, "Claude Code", subagents=subs),
+             ProjectExportItem(conv, [other, MessageBlock("assistant", "text", "ok", seq=1)], "OpenCode")]
+    return render_project_export_html("my-app", group.path, items, options=ExportOptions(), **kwargs)
+
+
+def test_project_export_has_one_section_per_conversation(index_repo, claude_root):
+    seen = []
+    page = _project_page(index_repo, claude_root, progress=seen.append)
+    assert seen == [1, 2]
+    assert "<title>my-app</title>" in page and 'class="project' in page
+    assert re.search(r'<section class="conv" id="c1" data-conv="1">', page)
+    assert re.search(r'<section class="conv" id="c2" data-conv="2" hidden>', page)
+    # ids are prefixed per conversation (and per subagent) so they never clash
+    assert 'id="c1-turn-1"' in page and 'id="c2-turn-1"' in page and 'id="c1-s1-turn-1"' in page
+    assert "second &lt;conversation&gt;" in page and "Looks fine." in page
+
+
+def test_project_export_sidebar_and_outlines(index_repo, claude_root):
+    page = _project_page(index_repo, claude_root)
+    assert 'Conversations (2)' in page and 'id="convs-btn"' in page
+    assert re.search(r'<a href="#c1" data-conv="1" class="active">', page)
+    assert '<a href="#c2" data-conv="2">' in page and "OpenCode" in page
+    # one outline per conversation, only the first shown
+    assert '<ol data-conv="1" class="active">' in page and '<ol data-conv="2">' in page
+    assert 'href="#c2-turn-1"' in page
+
+
+def test_single_export_has_no_conversation_list(index_repo, claude_root):
+    page = _export(index_repo, claude_root)
+    assert 'id="convs"' not in page and 'id="convs-btn"' not in page
+    assert '<section class="conv" data-conv="1">' in page and '<ol data-conv="1" class="active">' in page
