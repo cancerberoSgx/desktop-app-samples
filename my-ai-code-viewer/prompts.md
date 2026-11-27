@@ -115,9 +115,9 @@ Currently users are able to export one conversation. We want to implement them t
 
 # future
 
-codex
+# codex & gemini-cli
 can we also implement codex to see projects and conversations that it use ? do you know how to do it ? do you need me to create some codex threads to test before ? 
-
+can you also add support for gemini-cli ? it's installed and I've made a sample prompt on this project
 
 # tags
 being able to tag a conversatoin or a particular question or answer in a conversation. Objective: after reading, I can tag something as important or "performance" and quickly locate it in the future.

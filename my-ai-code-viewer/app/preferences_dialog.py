@@ -9,8 +9,10 @@ from app.conversation_view import CONVERSATION_OPTIONS
 from app.db.paths import db_path
 from app.providers.claude_code import default_root
 from app.providers.codex import CodexProvider, default_home as default_codex_home
+from app.providers.gemini import GeminiProvider, default_home as default_gemini_home
 from app.providers.opencode import default_db_path
-from app.repositories import (CLAUDE_PROJECTS_DIR_SETTING_KEY, CODEX_HOME_SETTING_KEY, OPENCODE_DB_PATH_SETTING_KEY,
+from app.repositories import (CLAUDE_PROJECTS_DIR_SETTING_KEY, CODEX_HOME_SETTING_KEY, GEMINI_HOME_SETTING_KEY,
+                              OPENCODE_DB_PATH_SETTING_KEY,
                               SettingsRepository)
 
 
@@ -24,6 +26,10 @@ def opencode_db_path(settings: SettingsRepository) -> Path:
 
 def codex_home(settings: SettingsRepository) -> Path:
     return Path(settings.get(CODEX_HOME_SETTING_KEY) or default_codex_home())
+
+
+def gemini_home(settings: SettingsRepository) -> Path:
+    return Path(settings.get(GEMINI_HOME_SETTING_KEY) or default_gemini_home())
 
 
 class PreferencesDialog(wx.Dialog):
@@ -68,6 +74,7 @@ class PreferencesDialog(wx.Dialog):
         self._claude_dir.Bind(wx.EVT_DIRPICKER_CHANGED, lambda e: self._update_status())
         self._opencode_db.Bind(wx.EVT_FILEPICKER_CHANGED, lambda e: self._update_status())
         self._codex_dir.Bind(wx.EVT_DIRPICKER_CHANGED, lambda e: self._update_status())
+        self._gemini_dir.Bind(wx.EVT_DIRPICKER_CHANGED, lambda e: self._update_status())
         self.load()
 
     def _build_sources_page(self, parent: wx.Window) -> wx.Panel:
@@ -83,6 +90,9 @@ class PreferencesDialog(wx.Dialog):
         self._codex_dir = wx.DirPickerCtrl(page, message="Codex home folder",
                                            style=wx.DIRP_USE_TEXTCTRL | wx.DIRP_DIR_MUST_EXIST)
         self._codex_status = wx.StaticText(page)
+        self._gemini_dir = wx.DirPickerCtrl(page, message="Gemini CLI home folder",
+                                            style=wx.DIRP_USE_TEXTCTRL | wx.DIRP_DIR_MUST_EXIST)
+        self._gemini_status = wx.StaticText(page)
 
         grid = wx.FlexGridSizer(cols=2, vgap=6, hgap=12)
         grid.AddGrowableCol(1)
@@ -98,6 +108,10 @@ class PreferencesDialog(wx.Dialog):
         grid.Add(self._codex_dir, 1, wx.EXPAND)
         grid.AddSpacer(0)
         grid.Add(self._codex_status)
+        grid.Add(wx.StaticText(page, label="Gemini CLI home folder"), 0, wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(self._gemini_dir, 1, wx.EXPAND)
+        grid.AddSpacer(0)
+        grid.Add(self._gemini_status)
 
         grey = wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
         archive_path = wx.StaticText(page, label=f"Conversation archive: {db_path()}",
@@ -178,6 +192,7 @@ class PreferencesDialog(wx.Dialog):
         self._claude_dir.SetPath(str(claude_projects_dir(self._settings)))
         self._opencode_db.SetPath(str(opencode_db_path(self._settings)))
         self._codex_dir.SetPath(str(codex_home(self._settings)))
+        self._gemini_dir.SetPath(str(gemini_home(self._settings)))
         for key, _label, default, _tooltip in CONVERSATION_OPTIONS:
             self._option_boxes[key].SetValue(self._settings.get_bool(key, default=default))
         self._select_theme(self._settings.get(theme.THEME_SETTING_KEY))
@@ -190,6 +205,8 @@ class PreferencesDialog(wx.Dialog):
         self._opencode_status.SetLabel("found" if opencode_ok else "not found - OpenCode will be skipped")
         codex_ok = CodexProvider(Path(self._codex_dir.GetPath())).is_available()
         self._codex_status.SetLabel("found" if codex_ok else "no sessions folder - Codex will be skipped")
+        gemini_ok = GeminiProvider(Path(self._gemini_dir.GetPath())).is_available()
+        self._gemini_status.SetLabel("found" if gemini_ok else "no tmp folder - Gemini CLI will be skipped")
         self._sources_page.Layout()
 
     def _on_save(self, event: wx.CommandEvent) -> None:
@@ -197,6 +214,7 @@ class PreferencesDialog(wx.Dialog):
         self._settings.set(CLAUDE_PROJECTS_DIR_SETTING_KEY, self._claude_dir.GetPath().strip() or None)
         self._settings.set(OPENCODE_DB_PATH_SETTING_KEY, self._opencode_db.GetPath().strip() or None)
         self._settings.set(CODEX_HOME_SETTING_KEY, self._codex_dir.GetPath().strip() or None)
+        self._settings.set(GEMINI_HOME_SETTING_KEY, self._gemini_dir.GetPath().strip() or None)
         for key, box in self._option_boxes.items():
             self._settings.set_bool(key, box.GetValue())
         self._settings.set(theme.THEME_SETTING_KEY, self._theme_key())
@@ -205,12 +223,14 @@ class PreferencesDialog(wx.Dialog):
         self._on_saved(before != after)
 
     def _source_paths(self):
-        return (claude_projects_dir(self._settings), opencode_db_path(self._settings), codex_home(self._settings))
+        return (claude_projects_dir(self._settings), opencode_db_path(self._settings), codex_home(self._settings),
+                gemini_home(self._settings))
 
     def _on_reset(self, event: wx.CommandEvent) -> None:
         self._claude_dir.SetPath(str(default_root()))
         self._opencode_db.SetPath(str(default_db_path()))
         self._codex_dir.SetPath(str(default_codex_home()))
+        self._gemini_dir.SetPath(str(default_gemini_home()))
         for key, _label, default, _tooltip in CONVERSATION_OPTIONS:
             self._option_boxes[key].SetValue(default)
         self._select_theme(theme.DEFAULT_THEME)

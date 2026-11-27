@@ -53,6 +53,7 @@ RESUME_COMMANDS = {
     "claude-code": "claude --resume {id}",
     "opencode": "opencode --session {id}",
     "codex": "codex resume {id}",
+    "gemini": "gemini --resume {id}",
 }
 
 

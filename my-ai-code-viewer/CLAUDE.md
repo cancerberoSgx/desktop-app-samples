@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A wxPython desktop app that lists every project (folder) the user has run an AI
-coding CLI in - currently **Claude Code**, **OpenCode** and **Codex** - and lets them read
+coding CLI in - currently **Claude Code**, **OpenCode**, **Codex** and **Gemini CLI** - and lets them read
 each conversation. Click a project -> its conversations; click a conversation ->
 its content (prompts, replies, tool calls/results, thinking).
 
@@ -69,6 +69,19 @@ schema or UI is provider-specific.
   (folded into the fingerprint) and subagent links (`thread_spawn_edges`, or
   `session_meta.source.subagent.thread_spawn`). Legacy 2025 `rollout-*.json`
   files (TypeScript CLI) have no cwd and are skipped.
+- **gemini.py** - `~/.gemini` (setting `gemini_home`):
+  `tmp/<project>/chats/session-*.jsonl`; `<project>` is a short name (older
+  CLIs: sha256 of the path), resolved via `<project>/.project_root`, then
+  `projects.json` / `history/*/.project_root` (names and sha256 of known
+  paths); unresolvable folders are skipped. First line = header (sessionId,
+  startTime, ...); records are re-appended under the same `id` as they grow
+  (last version wins, first position kept); `{"$set": ...}` updates header
+  fields (`summary` -> title); `$rewindTo` handling is a guess, unverified.
+  Older CLIs' single `.json` doc (`messages` array) is also read. Tool results
+  are inline in `toolCalls[].result`, so user records holding
+  `functionResponse` parts are skipped, as are the injected
+  `<session_context>` message and `info` notices. Tokens summed per record
+  (`input` includes `cached`; output = output + thoughts); no cost.
 
 ### Archive (`app/indexer.py`, `app/repositories.py`, migrations)
 
@@ -169,7 +182,7 @@ providers that share a path into one `ProjectGroup` for the UI.
   conversation (per-conversation match counts, Enter jumps across them) and
   `#c<N>-...` hashes switch conversation.
 - `preferences_dialog.py` - modal File > Preferences, three notebook tabs.
-  Sources: Claude projects dir + OpenCode DB path + Codex home (stored in `settings`,
+  Sources: Claude projects dir + OpenCode DB path + Codex home + Gemini home (stored in `settings`,
   defaults from each provider's `default_*()`); Save rescans only if a path
   changed. Conversation: the viewer toggles, driven by
   `conversation_view.CONVERSATION_OPTIONS` (same keys as the toolbar
