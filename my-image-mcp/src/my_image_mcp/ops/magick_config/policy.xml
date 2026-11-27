@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ImageMagick security policy used for every call my-image-mcp makes
+  (MAGICK_CONFIGURE_PATH points here). Allowlist: everything is denied
+  except the formats below. Never add URL/HTTP(S)/FTP, MSL, MVG, TEXT,
+  EPHEMERAL, SHOW/WIN/X, PS/EPS/XPS: they can read or write arbitrary
+  files, reach the network or run external programs.
+-->
+<policymap>
+  <policy domain="resource" name="memory" value="1GiB"/>
+  <policy domain="resource" name="map" value="2GiB"/>
+  <policy domain="resource" name="disk" value="4GiB"/>
+  <policy domain="resource" name="width" value="32KP"/>
+  <policy domain="resource" name="height" value="32KP"/>
+  <policy domain="resource" name="area" value="256MP"/>
+  <policy domain="resource" name="time" value="120"/>
+  <policy domain="resource" name="list-length" value="64"/>
+  <!-- no "@file" indirection (e.g. label:@/etc/passwd) -->
+  <policy domain="path" rights="none" pattern="@*"/>
+  <policy domain="coder" rights="none" pattern="*"/>
+  <!-- exchange with my-image-mcp -->
+  <policy domain="coder" rights="read|write" pattern="{PNG,PNG8,PNG24,PNG32,PNG48,PNG64,TIFF,TIF}"/>
+  <!-- generators used by the curated ops -->
+  <policy domain="coder" rights="read" pattern="{XC,CANVAS,GRADIENT,RADIAL-GRADIENT,PLASMA,FRACTAL,PATTERN,HALD,CUBE,NULL}"/>
+  <!-- in-memory scratch images inside a single command (quantize palette) -->
+  <policy domain="coder" rights="read|write" pattern="MPR"/>
+  <!-- extra formats for load_image / save_image -->
+  <policy domain="coder" rights="read|write" pattern="{HEIC,HEIF,AVIF,AVCI,JXL,JPEG,JPG,WEBP,GIF,BMP,PSD,PSB,JP2,J2K,EXR,TGA,ICO,PNM,PPM,PGM,PBM,QOI,DDS,PDF}"/>
+  <policy domain="coder" rights="read" pattern="{SVG,MSVG,RSVG,DNG,CR2,CR3,NEF,ARW,ORF,RW2,RAF,PEF,SRW,DCR,KDC,MRW,ERF,3FR}"/>
+  <!-- PDF rendering goes through Ghostscript; allow only that delegate -->
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="delegate" rights="execute" pattern="{gs,pdf}"/>
+</policymap>

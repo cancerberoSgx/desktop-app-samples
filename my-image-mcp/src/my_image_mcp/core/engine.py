@@ -111,7 +111,7 @@ class Engine:
                     call_args[p.name] = self.store.get(real)
                     canonical[p.name] = real
                     inputs.append(real)
-            elif p.path_role is not None:
+            elif p.path_role is not None and value is not None:
                 resolved = str(self.settings.resolve_path(value, write=p.path_role.write))
                 call_args[p.name] = canonical[p.name] = resolved
             else:
@@ -123,6 +123,10 @@ class Engine:
             raise OpError(f"{spec.name}: OpenCV error: {str(e).strip().splitlines()[-1]}") from e
         except (ValueError, TypeError) as e:
             raise OpError(f"{spec.name}: {e}") from e
+        except Exception as e:
+            if type(e).__module__.startswith("pyvips"):  # libvips errors carry useful text
+                raise OpError(f"{spec.name}: libvips error: {str(e).strip().splitlines()[0]}") from e
+            raise
 
         outputs = []
         handles = []

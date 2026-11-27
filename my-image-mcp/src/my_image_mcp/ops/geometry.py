@@ -196,3 +196,24 @@ def stitch_images(images: list[Img], mode: Literal["panorama", "scans"] = "panor
         if len(xs):
             pano = pano[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1].copy()
     return Result([pano], {"width": int(pano.shape[1]), "height": int(pano.shape[0])})
+
+
+@op("geometry")
+def trim(image: Img, fuzz: float = 5.0, background: str | None = None) -> Result:
+    """Cut away uniform margins (scanned pages, screenshots, renders on a plain background).
+    The background is the top-left pixel's color unless given; fuzz (% of full range) is the
+    tolerance. Returns the crop box [x, y, w, h] in input coordinates."""
+    ch = channels(image)
+    maxval = 65535.0 if image.dtype == np.uint16 else (1.0 if image.dtype.kind == "f" else 255.0)
+    if background is None:
+        bg = image[0, 0].astype(np.float32)
+    else:
+        bg = np.array(parse_color(background, ch), np.float32) * (maxval / 255.0)
+    diff = np.abs(image.astype(np.float32) - bg)
+    if diff.ndim == 3:
+        diff = diff.max(axis=2)
+    ys, xs = np.nonzero(diff > fuzz / 100.0 * maxval)
+    if not len(xs):
+        return Result([image.copy()], {"box": [0, 0, image.shape[1], image.shape[0]], "note": "image is uniform"})
+    x0, x1, y0, y1 = int(xs.min()), int(xs.max()) + 1, int(ys.min()), int(ys.max()) + 1
+    return Result([image[y0:y1, x0:x1].copy()], {"box": [x0, y0, x1 - x0, y1 - y0]})

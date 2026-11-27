@@ -69,6 +69,11 @@ def _handle_kind(tp: Any) -> tuple[str | None, bool, bool]:
 
 
 def _path_role(tp: Any) -> _PathRole | None:
+    # unwrap Optional[...] (InPath | None) so optional paths are sandboxed too
+    if get_origin(tp) in (typing.Union, types.UnionType):
+        args = [a for a in get_args(tp) if a is not type(None)]
+        if len(args) == 1:
+            tp = args[0]
     if get_origin(tp) is Annotated:
         for extra in tp.__metadata__:
             if isinstance(extra, _PathRole):
@@ -83,6 +88,9 @@ def op(module: str, name: str | None = None) -> Callable[[Callable], Callable]:
         for p in inspect.signature(func).parameters.values():
             ann = hints.get(p.name, Any)
             kind, is_list, optional = _handle_kind(ann)
+            role = _path_role(ann)
+            if role is not None:
+                optional = type(None) in get_args(ann)
             params.append(
                 Param(
                     name=p.name,
@@ -91,7 +99,7 @@ def op(module: str, name: str | None = None) -> Callable[[Callable], Callable]:
                     handle_kind=kind,
                     handle_list=is_list,
                     optional=optional,
-                    path_role=_path_role(ann),
+                    path_role=role,
                 )
             )
         op_name = name or func.__name__

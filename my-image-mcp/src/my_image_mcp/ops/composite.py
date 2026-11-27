@@ -9,7 +9,7 @@ import numpy as np
 
 from ..core.registry import op
 from ..core.types import Img, Result
-from ._util import channels, match_to, parse_color, to_bgr, to_gray
+from ._util import channels, match_to, parse_color, to_bgr, to_gray, to_uint8
 
 
 @op("composite")
@@ -101,3 +101,46 @@ def overlay(base: Img, top: Img, x: int = 0, y: int = 0, opacity: float = 1.0) -
         blended[:, :, 3] = region[:, :, 3]
     out[y0:y1, x0:x1] = blended.astype(base.dtype)
     return Result([out])
+
+
+def _ssim(a: np.ndarray, b: np.ndarray, peak: float) -> float:
+    """Mean SSIM (Wang et al. 2004; 11x11 Gaussian, sigma 1.5), averaged over channels."""
+    c1, c2 = (0.01 * peak) ** 2, (0.03 * peak) ** 2
+    a, b = a.astype(np.float64), b.astype(np.float64)
+
+    def g(x):
+        return cv2.GaussianBlur(x, (11, 11), 1.5)
+
+    mu_a, mu_b = g(a), g(b)
+    var_a, var_b, cov = g(a * a) - mu_a**2, g(b * b) - mu_b**2, g(a * b) - mu_a * mu_b
+    ssim = ((2 * mu_a * mu_b + c1) * (2 * cov + c2)) / ((mu_a**2 + mu_b**2 + c1) * (var_a + var_b + c2))
+    return float(ssim.mean())
+
+
+@op("composite")
+def compare_images(image1: Img, image2: Img, tolerance: float = 2.0, highlight: str = "red") -> Result:
+    """Measure how similar two images are (image2 is resized/converted to match image1) and get a
+    visual diff: changed pixels in highlight color over a faded image1. Metrics: ssim (perceptual,
+    1 = identical, >0.95 near-identical), psnr (dB, higher = closer; inf if identical), rmse (0-1),
+    changed_ratio (fraction of pixels differing by more than tolerance % in any channel), and
+    phash_distance (perceptual hash, 0-64; < 10 usually means same picture despite resizing,
+    compression or small edits)."""
+    b = match_to(image2, image1)
+    peak = 65535.0 if image1.dtype == np.uint16 else (1.0 if image1.dtype.kind == "f" else 255.0)
+    diff = np.abs(image1.astype(np.float64) - b.astype(np.float64))
+    mse = float((diff**2).mean())
+    per_px = diff.max(axis=2) if diff.ndim == 3 else diff
+    changed = per_px > tolerance / 100.0 * peak
+    a8, b8 = to_bgr(to_uint8(image1)), to_bgr(to_uint8(b))
+    hasher = cv2.img_hash.PHash_create()
+    phash = int(hasher.compare(hasher.compute(a8), hasher.compute(b8)))
+    vis = (to_bgr(to_uint8(to_gray(image1))).astype(np.float32) * 0.35 + 255 * 0.65).astype(np.uint8)
+    vis[changed] = parse_color(highlight, 3)
+    data = {
+        "ssim": round(_ssim(image1, b, peak), 5),
+        "psnr": round(10 * np.log10(peak**2 / mse), 3) if mse > 0 else "inf",
+        "rmse": round(float(np.sqrt(mse)) / peak, 6),
+        "changed_ratio": round(float(changed.mean()), 6),
+        "phash_distance": phash,
+    }
+    return Result([vis], data)

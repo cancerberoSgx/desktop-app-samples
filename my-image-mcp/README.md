@@ -89,8 +89,10 @@ localhost unless you put it behind something that adds auth.
 ## Building locally (Linux)
 
 This is a pure-Python package, so "building" means producing a wheel. You
-don't need a compiler, system OpenCV or a display: OpenCV and numpy come as
-prebuilt wheels from PyPI.
+don't need a compiler, system OpenCV, libvips or a display: OpenCV, numpy and
+libvips (`pyvips[binary]`) come as prebuilt wheels from PyPI. ImageMagick is
+the only optional system dependency (see
+[Image formats and ImageMagick](#image-formats-and-imagemagick)).
 
 1. **Install uv** (it also fetches the right Python for you, so no system
    Python setup is needed):
@@ -140,11 +142,18 @@ prebuilt wheels from PyPI.
 For development you don't need steps 4–5: `uv run my-image-mcp ...` always
 runs the current source.
 
+Optionally install ImageMagick 7 (`sudo pacman -S imagemagick` on
+Arch/Manjaro) to enable the `magick` tools and their tests. Without it, those
+tests are skipped.
+
 ## Tools
 
 At most 10 curated tools per module, plus session/pipeline helpers and a
 generic bridge to the rest of OpenCV. Run `my-image-mcp tools` for the full
-list with descriptions.
+list with descriptions, or open **[docs/tools.html](docs/tools.html)**: a
+searchable catalog for end users, with a plain-language summary, tags
+(effects, drawing, layout, metadata, ...), backend and parameters for every
+tool.
 
 | Module | Tools |
 |---|---|
@@ -154,12 +163,14 @@ list with descriptions.
 | threshold | `threshold`, `adaptive_threshold` |
 | morphology | `morphology`, `distance_transform`, `connected_components`, `skeletonize`, `fill_holes` |
 | contours | `find_contours`, `contour_properties`, `filter_contours`, `approximate_contours`, `convex_hulls`, `contour_mask` |
-| geometry | `resize`, `crop`, `rotate`, `flip`, `pad`, `warp_affine`, `warp_perspective`, `stitch_images` |
+| geometry | `resize`, `crop`, `rotate`, `flip`, `pad`, `warp_affine`, `warp_perspective`, `stitch_images`, `trim` |
 | drawing | `draw_line`, `draw_rectangle`, `draw_circle`, `draw_ellipse`, `draw_polygon`, `draw_text`, `draw_contours`, `draw_boxes`, `draw_markers` |
-| composite | `blend`, `bitwise`, `apply_mask`, `difference`, `overlay` |
+| composite | `blend`, `bitwise`, `apply_mask`, `difference`, `overlay`, `compare_images` |
 | features | `detect_corners`, `detect_keypoints`, `match_features`, `align_images`, `match_template` |
 | detection | `hough_lines`, `hough_circles`, `detect_haar`, `detect_people`, `detect_codes`, `detect_markers`, `create_marker` |
 | segmentation | `kmeans_colors`, `flood_fill`, `watershed`, `grabcut`, `superpixels`, `mean_shift` |
+| media (libvips) | `render_text`, `blend_mode`, `smart_crop`, `image_metadata` |
+| magick (ImageMagick, optional) | `color_grade`, `apply_lut`, `quantize`, `distort`, `liquid_rescale`, `artistic_effect`, `montage`, `frame`, `generate_image` |
 | session | `list_images`, `image_info`, `preview`, `delete_images`, `opencv_info` |
 | pipeline | `history`, `export_pipeline`, `run_pipeline` |
 | generic | `cv_call`, `cv_search`, `cv_doc` |
@@ -229,6 +240,45 @@ img = ops.load_image("in.png").image
 edges = ops.canny(ops.blur(img, ksize=5).image, auto=True).image
 ```
 
+## Image formats and ImageMagick
+
+Three backends work together, and the model doesn't have to choose between
+them:
+
+| Backend | Comes from | Adds |
+|---|---|---|
+| OpenCV | wheel | png, jpg, tiff, webp, bmp, jp2, avif writing; all the vision ops |
+| libvips | `pyvips[binary]` wheel (Linux, macOS, Windows) | AVIF, SVG, animated GIF/TIFF pages, ICC color management, real-font text, blend modes, smart crop, metadata |
+| ImageMagick 7 | **optional system install** | HEIC (iPhone photos), JPEG XL, PDF (needs Ghostscript), PSD, camera RAW; the `magick` tools |
+
+`load_image` tries OpenCV, then libvips, then ImageMagick. Whichever one
+loads the file, EXIF orientation is applied and embedded color profiles
+(Display P3, Adobe RGB, ...) are converted to sRGB. The result says which
+`loader` was used. `save_image` picks the writer from the extension.
+
+ImageMagick isn't bundled because there's no pip wheel for it and shipping a
+build per OS is costly. Install it if you want the extra formats and the
+`magick` tools:
+
+| OS | Install |
+|---|---|
+| macOS | `brew install imagemagick` (add `ghostscript` for PDF) |
+| Arch / Manjaro | `sudo pacman -S imagemagick` |
+| Windows | `winget install ImageMagick.ImageMagick` |
+| Debian / Ubuntu | apt ships ImageMagick 6, which isn't supported; use the official AppImage or build 7 |
+
+The server looks for `magick` on `PATH`. Set `MY_IMAGE_MCP_MAGICK` to a path
+to use a specific binary, or to `off` to disable it. `opencv_info` reports the
+libvips and ImageMagick versions it found (`null` = not available). Without
+ImageMagick, the `magick` tools are simply not listed.
+
+**Security.** ImageMagick can read files and URLs by itself (`@file`, `url:`,
+`msl:`, `text:`), which would bypass the path sandbox. So every call runs
+with a bundled allowlist policy (`ops/magick_config/policy.xml`) that only
+permits known image formats, blocks `@` indirection, network and script
+formats, and caps memory and time. The tools only build arguments from
+validated parameters; there is no raw "run magick" tool.
+
 ## Configuration
 
 | CLI | Env var | Default |
@@ -237,6 +287,7 @@ edges = ops.canny(ops.blur(img, ksize=5).image, auto=True).image
 | `--allow-any-path` | `MY_IMAGE_MCP_ALLOW_ANY_PATH=1` | off |
 | `--max-mb N` | `MY_IMAGE_MCP_MAX_MB` | 2048 (LRU eviction beyond) |
 | `--transport stdio\|streamable-http\|sse`, `--host`, `--port` | | stdio, 127.0.0.1, 8000 |
+| | `MY_IMAGE_MCP_MAGICK` (path to `magick`, or `off`) | `magick` on `PATH` |
 
 All file reads and writes (`load_image`, `save_image`, `export_pipeline`,
 `run_pipeline(path=...)`) are confined to the roots. Relative paths resolve
@@ -289,6 +340,9 @@ src/my_image_mcp/
     store.py        handle store with LRU eviction
     cvbridge.py     generic cv2 access: arg decoding, result encoding, denylist
   ops/              one module per category; plain functions, no MCP code
+    _vips.py        libvips bridge (numpy <-> pyvips, loader with ICC handling)
+    _magick.py      ImageMagick bridge (subprocess + temp PNGs, policy, detection)
+    magick_config/  policy.xml applied to every ImageMagick call
 tests/
 ```
 

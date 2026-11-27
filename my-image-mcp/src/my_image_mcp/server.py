@@ -24,6 +24,7 @@ from .config import Settings
 from .core import cvbridge
 from .core.engine import Engine, dumps
 from .core.registry import REGISTRY, OpSpec, Param
+from .ops import _magick, _vips
 from .ops._util import COLOR_HELP, to_bgr, to_uint8
 
 log = logging.getLogger("my_image_mcp")
@@ -64,7 +65,8 @@ def _tool_param(p: Param) -> inspect.Parameter:
             base = base | None
         ann = Annotated[base, Field(description=f"{what.capitalize()} (e.g. '{example}')")]
     elif p.path_role is not None:
-        ann = Annotated[str, Field(description="File path; relative paths resolve against the server root")]
+        desc = "File path; relative paths resolve against the server root"
+        ann = Annotated[str | None if p.optional else str, Field(description=desc)]
     elif p.name in ("color", "background", "border_color"):
         base = p.annotation
         ann = Annotated[base, Field(description=COLOR_HELP)]
@@ -250,12 +252,15 @@ def build_server(settings: Settings | None = None, engine: Engine | None = None)
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
     @_guard
     def opencv_info(include_build_info: bool = False) -> dict[str, Any]:
-        """OpenCV version, available contrib modules, server roots and limits."""
+        """OpenCV version, available contrib modules, optional backends (libvips, ImageMagick),
+        server roots and limits."""
         modules = sorted(n for n in dir(cv2) if isinstance(getattr(cv2, n), type(cv2)) and not n.startswith("_"))
         info = {
             "server_version": __version__,
             "opencv_version": cv2.__version__,
             "numpy_version": np.__version__,
+            "libvips_version": _vips.VERSION,
+            "imagemagick_version": _magick.version(),
             "modules": modules,
             "threads": cv2.getNumThreads(),
             "roots": [str(r) for r in settings.roots],

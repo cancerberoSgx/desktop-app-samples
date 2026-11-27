@@ -37,6 +37,9 @@ REQUIRED = {
     "text": "hello",
     "boxes": [[10, 10, 50, 40]],
     "operation": "and",
+    "effect": "charcoal",
+    "method": "barrel",
+    "args": [0.0, 0.0, -0.05],
 }
 
 
@@ -72,6 +75,9 @@ def test_every_op_runs(engine, img, name):
         res = engine.execute(name, {"image": img, "scale": 0.5})
     elif name == "create_marker":
         res = engine.execute(name, {"text": "hello"})
+    elif name == "apply_lut":
+        hald = engine.execute("generate_image", {"kind": "hald_identity", "level": 4})["outputs"][0]["handle"]
+        res = engine.execute(name, {"image": img, "lut": hald})
     elif name == "stitch_images":
         res = engine.execute(name, {"images": [img, img]})
     else:
@@ -125,3 +131,23 @@ def test_ops_usable_as_library(root):
     img = ops.load_image(str(root / "shapes.png")).image
     edges = ops.canny(ops.blur(img, ksize=5).image, auto=True).image
     assert edges.shape == img.shape[:2] and edges.dtype == np.uint8
+
+
+def test_optional_path_params_are_sandboxed():
+    """InPath | None must be treated as a path (resolved + sandboxed), not a plain string."""
+    optional_paths = [
+        (spec.name, p.name)
+        for spec in REGISTRY.values()
+        for p in spec.params
+        if p.default is None and "Path" in str(p.annotation)
+    ]
+    for name, pname in optional_paths:
+        param = next(p for p in REGISTRY[name].params if p.name == pname)
+        assert param.path_role is not None and param.optional, (name, pname)
+
+
+def test_optional_path_escape_is_blocked(engine, img):
+    if "render_text" not in REGISTRY:
+        pytest.skip("libvips not available")
+    with pytest.raises(PathNotAllowed):
+        engine.execute("render_text", {"image": img, "text": "x", "font_file": "/etc/passwd"})

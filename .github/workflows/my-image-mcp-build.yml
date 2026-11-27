@@ -69,6 +69,13 @@ jobs:
           enable-cache: true
           cache-dependency-glob: my-image-mcp/uv.lock
 
+      # ImageMagick is optional (the `magick` tools register only when it's
+      # installed). Homebrew ships ImageMagick 7, so macOS runs those tests;
+      # Ubuntu's apt only has ImageMagick 6, so they are skipped there.
+      - name: Install ImageMagick (macOS)
+        if: runner.os == 'macOS'
+        run: brew install imagemagick
+
       # --locked: fail if uv.lock is out of date with pyproject.toml, so CI
       # always tests exactly the pinned OpenCV/numpy/mcp versions.
       - name: Install
@@ -130,6 +137,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.13'
+      - name: Install ImageMagick (macOS)
+        if: runner.os == 'macOS'
+        run: brew install imagemagick
       - uses: actions/download-artifact@v4
         with:
           name: my-image-mcp-dist
@@ -143,6 +153,9 @@ jobs:
           uvx --from "$wheel" my-image-mcp tools | tee tools.txt
           grep -q '^load_image' tools.txt
           grep -q '^cv_call' tools.txt
+          # libvips comes from the pyvips-binary wheel on every OS
+          grep -q '^render_text' tools.txt
+          if [ "$RUNNER_OS" = "macOS" ]; then grep -q '^color_grade' tools.txt; fi
 
   # On a my-image-mcp-v* tag: publish a GitHub Release with the wheel and
   # sdist. (To also publish on PyPI, add a job using

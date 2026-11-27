@@ -21,6 +21,7 @@ uv run my-image-mcp tools                # list tools
 uv run my-image-mcp --root DIR           # stdio server (default)
 uv run my-image-mcp serve --transport streamable-http --port 8000
 uv run my-image-mcp run pipeline.json    # replay an exported pipeline
+uv run python scripts/gen_tools_doc.py   # regenerate docs/tools.html (needs ImageMagick 7)
 ```
 
 ## Architecture
@@ -44,17 +45,37 @@ uv run my-image-mcp run pipeline.json    # replay an exported pipeline
 - `core/cvbridge.py` holds the argument/return encoding for `cv_call` and
   the denylist (file/GUI/video I/O, and any name starting with
   read/write/save/load/open).
+- Backends besides OpenCV: libvips via `pyvips[binary]` (a regular
+  dependency with wheels for every OS; `ops/_vips.py`, used by `ops/media.py`
+  and the `load_image`/`save_image` fallbacks) and ImageMagick 7 (optional
+  system install, never bundled; `ops/_magick.py`, used by `ops/magick.py`).
+  Both modules register their tools only if the backend is available
+  (`_op = ... if AVAILABLE else no-op`), and tests use skip markers.
+- ImageMagick runs as a subprocess on temp PNGs with
+  `MAGICK_CONFIGURE_PATH` pointing at `ops/magick_config/policy.xml` (a
+  coder allowlist, `@` indirection blocked, resource limits). Only build
+  `magick` arguments from validated parameters, pass user text through
+  `_magick.escape_text`, and never add a raw-arguments tool or allow
+  URL/MSL/MVG/TEXT/PS coders.
 
 ## Rules
 
 - **At most 10 curated tools per module** (user decision); a test enforces
   it via tool titles. Things beyond that go through `cv_call`.
+- Every new or renamed tool needs a `CATALOG` entry (tags + plain-language
+  summary for humans) in `scripts/gen_tools_doc.py`, then regenerate
+  `docs/tools.html`; `tests/test_tools_doc.py` enforces the entry.
 - Ops must never mutate their inputs: return copies. Stored handles are
   immutable, and `cv_call` copies arrays before passing them in.
 - Color params are RGB strings parsed by `ops/_util.parse_color`, which
   returns BGR(A) scalars.
 - Image inputs are local files only for now (no URLs, webcam or video). CPU
   only.
+- Ops may only raise `ValueError`/`TypeError` (or cv2/pyvips errors) for
+  user-facing problems: the engine converts those into readable tool errors,
+  and anything else reaches the model as a generic error.
+- Path params must use `InPath`/`OutPath` (also when optional,
+  `InPath | None`) so they're resolved and sandboxed.
 - Versioning follows the repo convention: `VERSION` is the source of truth,
   `pyproject.toml` must match (CI checks; `scripts/bump-app-version.py`
   updates both), and tags are `my-image-mcp-v*`.

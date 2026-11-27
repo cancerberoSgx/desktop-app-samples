@@ -22,6 +22,8 @@ MODULE_NAMES = [
     "features",
     "detection",
     "segmentation",
+    "media",  # libvips (bundled wheel); tools skipped if unavailable
+    "magick",  # ImageMagick 7 (optional system install); tools skipped if absent
 ]
 for _m in MODULE_NAMES:
     import_module(f"{__name__}.{_m}")
